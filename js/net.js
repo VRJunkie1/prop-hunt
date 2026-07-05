@@ -22,12 +22,24 @@
 // host's own inputs take the same round-trip-free path a guest's would over the
 // network. See memory/notes/netcode.md.
 //
-// PeerJS is pulled as ESM from jsDelivr's `/+esm` endpoint (a CDN-cached static
-// bundle). We moved off esm.sh because its on-the-fly transpile can cold-start /
-// redirect slowly enough to fail a headless page load (net::ERR_FAILED); jsDelivr
-// serves a prebuilt file and loads reliably. Same "CDN import, no build step".
-import { Peer } from 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm';
+// PeerJS is pulled as ESM from jsDelivr's `/+esm` endpoint (a CDN-cached bundle).
+// It is loaded LAZILY (dynamic import, not a top-level one) the first time a
+// player actually creates or joins a room — never at page load. A bare landing
+// page therefore makes ZERO external requests, so the headless load check can't
+// trip on a CDN fetch (net::ERR_FAILED) in a sandbox with no outbound network.
+// Same "CDN import, no build step"; the download just happens on demand.
 import { Referee } from '/shared/referee.js';
+
+// Cached PeerJS `Peer` constructor. `loadPeer()` fetches the CDN bundle once on
+// the first create()/join() and reuses it thereafter.
+let _PeerCtor = null;
+async function loadPeer() {
+  if (!_PeerCtor) {
+    const mod = await import('https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm');
+    _PeerCtor = mod.Peer;
+  }
+  return _PeerCtor;
+}
 
 // ICE servers for NAT traversal, injected into every PeerJS connection via the
 // Peer `config` option.
@@ -152,9 +164,16 @@ export class Session {
   }
 
   // ---- host mode ----------------------------------------------------------
-  _startHost() {
+  async _startHost() {
     this.isHost = true;
     this.onStatus('connecting');
+    let Peer;
+    try {
+      Peer = await loadPeer();
+    } catch {
+      this.onStatus('error', "Couldn't load the networking library — check your connection and try again.");
+      return;
+    }
     const code = makeCode();
     // The broker assigns us the id we ask for; if it's taken we get an
     // 'unavailable-id' error and retry with a fresh code (see the error handler).
@@ -245,10 +264,17 @@ export class Session {
   }
 
   // ---- guest mode ---------------------------------------------------------
-  _startGuest(room) {
+  async _startGuest(room) {
     this.isHost = false;
     this.room = room;
     this.onStatus('connecting');
+    let Peer;
+    try {
+      Peer = await loadPeer();
+    } catch {
+      this.onStatus('error', "Couldn't load the networking library — check your connection and try again.");
+      return;
+    }
     const peer = new Peer({ config: { iceServers: ICE_SERVERS } });
     this.peer = peer;
 

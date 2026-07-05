@@ -114,10 +114,20 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   through the `Peer` `config` option. `detectRelayed()`/`_reportLink()` read
   `conn.peerConnection.getStats()` to tell the UI direct vs relayed. ~10s connect
   give-up timer preserved.
-- `js/input.js` — WASD + pointer-lock mouse look; emits action events.
+- `js/input.js` — WASD + pointer-lock mouse look; emits action events. **Owns
+  the whole pointer-lock handshake**: it requests capture (on click of the
+  `lockTrigger` element passed in — the "Click to play" overlay, since that
+  overlay covers the canvas and swallows its clicks) and listens for the
+  browser's `pointerlockchange`/`pointerlockerror` signals, broadcasting them as
+  `onLockChange(locked)` / `onLockError(reason)`. The overlay's visibility is
+  driven off these real signals — never off a click or a guess.
 - `js/scene.js` — all Three.js. Builds world from config, reconciles player meshes
   to snapshots, interpolates others, first-person camera for self.
-- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. Paints a
+- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
+  "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
+  msg?)`, called from `main.js` in response to `input.js` pointer-lock events
+  (overlay up while uncaptured, down once the browser confirms lock, back on
+  release; `msg` explains a refusal). Also paints a
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
   connection-type is *detected* in `net.js`, never here.
 - `js/config.js` — fetches `shared/config`; the host passes it into the `Referee`.

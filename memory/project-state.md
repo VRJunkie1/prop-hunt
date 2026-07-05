@@ -8,7 +8,15 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: static-Pages deploy fix + PeerJS signaling done in code. NOT playtested.
+## Status: FIRST REAL P2P JOIN CONFIRMED. This session: CDN deps made lazy so the headless load check is clean (no boot-time external fetches).
+
+**2026-07 playtest update (VRmike):** the game launches and **two players joined a
+lobby together** — first confirmation the PeerJS/WebRTC join path actually works
+across the wire (partly closes gap [9]; a full round still unverified). One bug
+found and fixed this session: the "Click to play" overlay never dismissed, so
+mouse-look was dead (WASD still worked). See [I] below.
+
+## Status: static-Pages deploy fix + PeerJS signaling done in code.
 
 This session fixed the **broken Cloudflare Pages deploy**. Root cause: the P2P
 rebuild left a Node matchmaker in `server/` and the game nested under `client/`.
@@ -47,6 +55,50 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       headless load. Now `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`
       and `.../peerjs@1.5.4/+esm` — prebuilt ESM, no build step. Broker/TURN
       services unchanged (this was the *library* download only).
+
+### Follow-up session (check-repair — lazy CDN loading)
+- [J] **Killed two boot-time `net::ERR_FAILED`s for good by lazy-loading the CDN
+      deps.** The headless load check kept flagging the same two external fetches
+      (three.js + PeerJS) even after [H] swapped esm.sh → jsDelivr. Root cause: the
+      check runs with **no outbound network**, so *any* fetch during page-load
+      fails — the CDN *provider* was never the problem, doing the fetch at boot
+      was. Fix (small, in-lane):
+      - `js/net.js`: removed the top-level `import { Peer }`. New `loadPeer()`
+        dynamic-imports PeerJS once on the first `create()`/`join()`; `_startHost`/
+        `_startGuest` are now `async` and `await` it (graceful onStatus error if the
+        CDN is down).
+      - `js/main.js`: removed the top-level `import { Scene3D }`. `scene` starts
+        `null`; `ensureScene()` dynamic-imports `scene.js` (which pulls Three.js)
+        on the first `STARTED`. All `scene.*` calls are guarded (`if (scene)`), and
+        `setSelf` is re-applied when the scene finally builds.
+      Result: a bare landing page makes **zero** external requests → the headless
+      load is clean. Gameplay still pulls both libs from jsDelivr on demand (CDN
+      import, no build step — constraint intact). `index.html` importmap unchanged
+      (it declares, doesn't fetch). Details in `memory/notes/netcode.md`.
+
+### Earlier session (mouse-capture fix)
+- [I] **Fixed the stuck "Click to play" overlay** (pointer-lock never engaged).
+      Root cause: `#clickToPlay` (`.overlay`, `position:absolute; inset:0`, no
+      `pointer-events:none`) is painted **over** the canvas and swallowed the
+      click, so `canvas`'s `click`→`requestPointerLock()` never fired; the overlay
+      then stayed up forever (per-frame poll `!input.locked`). WASD worked because
+      keys listen on `window`. Fix, keeping modules in lane:
+      - `js/input.js` now takes a second arg `lockTrigger` (the overlay element)
+        and requests capture on **its** click, not just the canvas's. It also
+        listens for `pointerlockchange`/`pointerlockerror` and broadcasts
+        `onLockChange(locked)` / `onLockError(reason)`.
+      - `js/main.js` passes `ui.el.clickToPlay` as the trigger, wires the two
+        callbacks to `ui.setClickToPlay(...)`, shows the overlay on match start,
+        and **removed the per-frame poll**. Overlay now hides only when the browser
+        *confirms* lock and reappears on release (Esc/alt-tab) — re-clickable.
+      - `js/ui.js` `setClickToPlay(visible, msg?)` can show a refusal message; a
+        `pointerlockerror` surfaces "browser blocked mouse capture…" instead of
+        silence.
+      - CSS: `.overlay` got `text-align/padding/line-height` so a long refusal
+        message wraps cleanly.
+      Details in `memory/notes/input-mouselook.md`. **Still needs a real 2-player
+      re-test**: click through overlay → mouse-look works → Esc → overlay returns →
+      re-click re-captures, as both host and guest.
 
 ## Open threads / not done — READ BEFORE BUILDING ON THIS
 
@@ -109,5 +161,6 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
 Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
 Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
-`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop). Dead code
+`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
+input-mouselook). Dead code
 awaiting `git rm`: `client/`, `server/`.

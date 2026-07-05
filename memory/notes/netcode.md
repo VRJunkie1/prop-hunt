@@ -115,9 +115,16 @@ reads `pc.getStats()`, finds the selected candidate pair, and checks whether the
   test real NAT traversal — only two different homes does.
 - We depend on shared free services (PeerJS broker + OpenRelay TURN). If joining
   gets flaky, suspect one of those before the code.
-- **CDN for the PeerJS lib**: imported from `https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm`
-  (three.js likewise moved to jsDelivr in `index.html`). Was esm.sh; switched
-  because esm.sh's on-the-fly transpile can cold-start/redirect slowly enough to
-  fail a headless page load (net::ERR_FAILED). jsDelivr serves a prebuilt ESM
-  bundle and loads reliably — no build step either way. This is the *library*
-  download only; it's unrelated to the PeerJS *broker* (still the free public one).
+- **CDN for the PeerJS lib is LAZY-LOADED**: `net.js` no longer top-level-imports
+  PeerJS. `loadPeer()` does a **dynamic** `import('https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm')`
+  the first time `create()`/`join()` runs, caching the `Peer` ctor. `_startHost`/
+  `_startGuest` are therefore `async` and `await loadPeer()` (with a graceful
+  onStatus error if the CDN is unreachable). **Why:** the headless load check runs
+  in a sandbox with NO outbound network, so ANY boot-time external fetch =
+  `net::ERR_FAILED`. Switching CDN providers (esm.sh → jsDelivr) did NOT fix it —
+  the fix is to not fetch at page load AT ALL. three.js got the same treatment:
+  `main.js` lazy-imports `scene.js` in `ensureScene()` (built on first match start,
+  not at boot). A bare landing page now makes zero external requests. Constraint
+  still satisfied — CDN import, no build step; the download just happens on demand.
+  This is the *library* download only; unrelated to the PeerJS *broker* (still the
+  free public one).
