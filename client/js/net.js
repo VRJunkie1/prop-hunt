@@ -20,14 +20,61 @@
 import { SIG } from '/shared/protocol.js';
 import { Referee } from '/shared/referee.js';
 
-// ICE servers for NAT traversal. Public STUN covers the easy/moderate cases for
-// free. A TURN relay would be needed for strict/symmetric NATs where a direct
-// peer link can't form — that's a paid, ongoing cost and is currently a NO-GO
-// (see plan step 6 / project-state). To enable one later, add a turn: entry:
-//   { urls: 'turn:host:3478', username: 'user', credential: 'pass' }
+// ICE servers for NAT traversal.
+//
+// STUN (free, no account) discovers a peer's public address and gets a direct
+// link through most home NATs. STRICT/SYMMETRIC NATs can't form a direct link at
+// all — those players need a TURN *relay* that forwards the traffic. Without one
+// they simply can't join; that was the long-standing "TURN: NO-GO" gap.
+//
+// TURN is now configured with OpenRelay's free public relay so strict-NAT
+// friends can connect. It's a shared community relay (a few GB/month) — fine for
+// a 2–8 person friend group. For your own dedicated quota, sign up for a free
+// Metered/OpenRelay account and replace the three `turn:` entries below with the
+// credentials it gives you (same shape). NOTE: for a backend-less browser game
+// the relay password is necessarily visible in this client code — acceptable
+// here; the only risk is a stranger draining the free quota (see project-state).
+//
+// iceTransportPolicy is deliberately left at its default ('all'), NOT 'relay':
+// the browser's ICE agent gathers host/STUN/TURN candidates together and always
+// prefers a cheaper direct pair, only falling back to the relay when direct
+// fails. So adding TURN does NOT route everyone through the relay — direct stays
+// the first choice for free. See _reportLink() for how we confirm this per peer.
 const ICE_SERVERS = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
+
+// How long a connecting player waits before giving up. WebRTC's own 'failed'
+// state can take much longer (or stall in 'checking'), leaving a guest on an
+// infinite "Connecting…" spinner — this bounds it (plan step 5).
+const CONNECT_TIMEOUT_MS = 10000;
+
+// Inspect a completed RTCPeerConnection's selected candidate pair and report
+// whether the link ended up DIRECT or RELAYED (through TURN). Purely diagnostic:
+// it lets a playtest see whether the free relay quota is actually being leaned
+// on. Detection lives here (not the UI) on purpose — the UI just paints the
+// label the network layer hands it (plan step 4).
+async function detectRelayed(pc) {
+  const stats = await pc.getStats();
+  let pair = null;
+  // Preferred path: the transport names its selected pair directly.
+  stats.forEach((r) => {
+    if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId);
+  });
+  // Fallback for browsers that don't expose it on the transport report.
+  if (!pair) {
+    stats.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && (r.state === 'succeeded' || r.selected)) pair = r;
+    });
+  }
+  if (!pair) return false;
+  const local = stats.get(pair.localCandidateId);
+  // A 'relay' local candidate means our side is going through the TURN server.
+  return !!local && local.candidateType === 'relay';
+}
 
 export class Session {
   // config: the content-as-data bundle main.js already fetched ({maps,props,rules}),
@@ -35,7 +82,7 @@ export class Session {
   constructor(config) {
     this.config = config;
     this.onMessage = () => {}; // referee -> client game messages (S2C)
-    this.onStatus = () => {}; // ('connecting'|'error'|'closed', detail?) for UI
+    this.onStatus = () => {}; // ('connecting'|'error'|'closed'|'link', detail?) for UI
 
     this.sig = null; // signaling WebSocket
     this.isHost = false;
@@ -157,8 +204,14 @@ export class Session {
     // WebRTC channels are neither by default; the match-start message ordering
     // depends on this, so it's set explicitly (plan step 4).
     const channel = pc.createDataChannel('game', { ordered: true });
-    const peer = { pc, channel, name, remoteReady: false, pendingIce: [] };
+    const peer = { pc, channel, name, remoteReady: false, pendingIce: [], timer: null };
     this.peers.set(guestId, peer);
+
+    // Give up on a guest that never finishes connecting so it doesn't linger as
+    // a ghost peer (its own tab shows the failure via the guest-side timer).
+    peer.timer = setTimeout(() => {
+      if (channel.readyState !== 'open') this._hostDropPeer(guestId);
+    }, CONNECT_TIMEOUT_MS);
 
     pc.onicecandidate = (e) => {
       if (e.candidate) this._sig({ t: SIG.RELAY, to: guestId, payload: { ice: e.candidate } });
@@ -168,6 +221,9 @@ export class Session {
     };
 
     channel.onopen = () => {
+      clearTimeout(peer.timer);
+      // Diagnostic: report how this guest reached us (direct vs relayed).
+      this._reportLink(pc, guestId);
       // Bridge this channel into the referee as a normal player. The referee
       // talks back to it exactly like any other player.
       this.referee.addPlayer({
@@ -198,6 +254,7 @@ export class Session {
     const peer = this.peers.get(guestId);
     if (!peer) return;
     this.peers.delete(guestId);
+    clearTimeout(peer.timer);
     try {
       peer.pc.close();
     } catch {
@@ -215,12 +272,28 @@ export class Session {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     this.pc = pc;
 
+    // Bounded give-up: if the link isn't open in ~10s, stop spinning and tell the
+    // player plainly instead of waiting on WebRTC's own (much slower) 'failed'.
+    this._connectTimer = setTimeout(() => {
+      if (!this.ready) {
+        this.onStatus('error', "Couldn't connect — check the room code, or ask the host to make sure the room's still open.");
+        this._teardown();
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     pc.onicecandidate = (e) => {
       if (e.candidate) this._sig({ t: SIG.RELAY, to: hostId, payload: { ice: e.candidate } });
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') {
-        this.onStatus('error', "Couldn't connect to the host. The network may be too strict (a relay is needed).");
+        // With TURN configured a 'failed' means even the relay couldn't carry it
+        // (network fully blocked, or the relay was unreachable) — give up now
+        // rather than let the timer run out.
+        clearTimeout(this._connectTimer);
+        if (!this.ready) {
+          this.onStatus('error', "Couldn't connect — tell the host. Double-check the room code and try again.");
+          this._teardown();
+        }
       } else if (pc.connectionState === 'closed' && !this.ready) {
         this.onStatus('closed', 'Connection to the host was lost.');
       }
@@ -231,6 +304,11 @@ export class Session {
 
   _bindGuestChannel(channel) {
     this.channel = channel;
+    channel.onopen = () => {
+      clearTimeout(this._connectTimer);
+      // Diagnostic: report how we reached the host (direct vs relayed).
+      this._reportLink(this.pc, this.selfId);
+    };
     channel.onmessage = (ev) => {
       let m;
       try {
@@ -284,8 +362,20 @@ export class Session {
     }
   }
 
+  // Report how a peer link resolved (direct vs relayed) up to the UI. Best
+  // effort — if getStats() is unavailable we just skip the label.
+  async _reportLink(pc, id) {
+    try {
+      const relayed = await detectRelayed(pc);
+      this.onStatus('link', { id, relayed });
+    } catch {
+      /* stats unavailable — diagnostic label is optional */
+    }
+  }
+
   // ---- teardown -----------------------------------------------------------
   _teardown() {
+    clearTimeout(this._connectTimer);
     if (this.referee) {
       this.referee.destroy();
       this.referee = null;

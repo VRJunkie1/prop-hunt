@@ -117,6 +117,9 @@ function handleStatus(kind, detail) {
   } else if (kind === 'error') {
     if (ui.el.menu.classList.contains('hidden')) ui.feed(detail || 'Connection error.');
     else ui.menuError(detail || 'Connection error.');
+  } else if (kind === 'link') {
+    // Diagnostic label: how a peer connected (direct vs relayed through TURN).
+    ui.setLink(detail.id, detail.relayed);
   } else if (kind === 'closed') {
     backToMenu(detail || 'Disconnected.');
   }

@@ -34,10 +34,14 @@ WebRTC ("no server"). Authority now lives on the **host client**. What that
 bought and cost, stated plainly so nobody re-discovers it the hard way:
 
 - **Cost — port forwarding is back (partially).** WebRTC + public STUN traverses
-  most home NATs, but strict/symmetric NATs need a **TURN relay** to connect —
-  a paid, always-on server carrying live game traffic. Currently **NO-GO / not
-  configured**, so some networks can't join. This is the single biggest risk and
-  the thing to playtest (see project-state).
+  most home NATs; strict/symmetric NATs need a **TURN relay** to connect. This is
+  now **CONFIGURED** — `ICE_SERVERS` in `net.js` carries TURN entries (OpenRelay
+  free public relay) so those players relay through TURN. Direct links stay the
+  first choice (`iceTransportPolicy` left at default `'all'`), so the relay is
+  fallback-only. Trade-offs: it's a *shared* community relay with a modest free
+  quota (swap for your own account creds for a dedicated one), and the relay
+  password necessarily ships in the public client code (accepted — only risk is
+  quota drain). Still the biggest thing to playtest (see project-state [9]).
 - **Cost — "no server" is not literally true.** Browsers can't find each other
   unaided; the matchmaker is a small always-on service. It's just tiny now.
 - **Cost — anti-cheat given up.** The host's browser holds the full unfiltered
@@ -85,11 +89,15 @@ No build step. Three.js loaded from CDN via `<script type="importmap">`.
   to the matchmaker, plus either (host) an in-tab `Referee` + loopback link + a
   bridge from each guest's `RTCDataChannel` into the referee, or (guest) one
   `RTCDataChannel` to the host. Data channels are configured **reliable +
-  ordered** explicitly. ICE servers (STUN; TURN placeholder) live here.
+  ordered** explicitly. ICE servers (STUN **+ TURN relay**) live here, plus a
+  ~10s connect give-up timer and `detectRelayed()`/`_reportLink()`, which read
+  `getStats()` to tell the UI whether each link is direct or relayed.
 - `input.js` — WASD + pointer-lock mouse look; emits action events.
 - `scene.js` — all Three.js. Builds world from config, reconciles player meshes
   to snapshots, interpolates others, first-person camera for self.
-- `ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic.
+- `ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. Paints a
+  `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
+  connection-type is *detected* in `net.js`, never here.
 - `config.js` — fetches `shared/config`; the host passes it into the `Referee`.
 
 ## Shared (`shared/`)

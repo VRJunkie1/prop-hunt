@@ -7,7 +7,12 @@ networking model is **peer-to-peer over WebRTC** — players connect directly to
 each other; the room creator's browser hosts the referee. A tiny Node
 **matchmaker** only mints room codes and relays the WebRTC handshake.
 
-## Status: P2P rebuild implemented in code (plan steps 1–8). NOT playtested.
+## Status: P2P rebuild + TURN relay implemented in code. NOT playtested.
+
+TURN relay hookup done this session (strict-NAT fallback, direct-first preserved,
+per-peer direct/relayed lobby badge, ~10s give-up timer). The P2P rebuild itself
+was the prior session (steps 1–8 below). Neither is verified across real
+networks — see the playtest gap [9].
 
 The networking core was rewritten this session. All game rules/content are
 unchanged — only where the referee runs and how messages travel changed.
@@ -28,8 +33,10 @@ Implemented:
 - [5] **Host self-referee loop** resolved: host inputs go through the loopback
       like everyone else; the reconcile-toward-authoritative nudge is a near-no-op
       for the host (no round trip). Movement math kept identical for guests.
-- [6] **Connection fallback**: free public **STUN** in `ICE_SERVERS`. TURN relay
-      for strict NATs is an explicit **NO-GO / not configured** (see below).
+- [6] **Connection fallback**: free public **STUN** + **TURN** in `ICE_SERVERS`.
+      TURN is now **CONFIGURED** (OpenRelay free public relay) so strict/symmetric
+      NATs can connect via relay. Direct stays first choice (policy left at
+      'all'). See TURN section below.
 - [7] **Host lifecycle**: creator is the referee; host leaving ends the match and
       returns everyone to the menu. Host migration deferred.
 - [8] Architecture notes updated (authority reversal recorded; see
@@ -41,11 +48,30 @@ Implemented:
       rests on "P2P connections actually form across real home networks." Not
       verified here (no browsers/network in this env). **Do this next:** two
       *different* homes, deliberately including one strict-NAT setup. Two tabs on
-      one machine is NOT a valid test (it uses loopback).
-- [TURN go/no-go] Without a paid TURN relay, strict/symmetric-NAT players simply
-      can't join. Currently NO-GO. If playtest [9] shows failures, the decision is
-      whether to run/pay for a TURN server (add a `turn:` entry to `ICE_SERVERS`
-      in `net.js`). This is an ongoing operational cost, not just build time.
+      one machine is NOT a valid test (it uses loopback). With TURN now
+      configured, the strict-NAT player should now *succeed* (via relay) — confirm
+      the lobby badge reads `relayed` for them, not that they got in by luck.
+- [TURN — now CONFIGURED] `ICE_SERVERS` in `net.js` now carries TURN relay entries
+      (OpenRelay free public relay: `openrelay.metered.ca` :80/:443/:443?tcp,
+      username/credential `openrelayproject`) alongside STUN, so strict-NAT
+      players relay through TURN when a direct link can't form. Still open:
+      - **Shared public relay.** OpenRelay is a community relay with a modest
+        free quota (a few GB/mo). Fine for 2–8 friends. For a dedicated quota,
+        make a free Metered/OpenRelay account and swap the three `turn:` entries
+        for its credentials (same shape). Password is visible in client code —
+        unavoidable for a backend-less game; only risk is a stranger draining the
+        quota. Not worth engineering around now.
+      - **Relay password ships in public client code** (accepted, see above).
+      - Direct is still first choice: `iceTransportPolicy` deliberately left at
+        default 'all' (NOT 'relay'), so TURN is fallback-only and doesn't burn
+        quota when a direct link works.
+      - **Diagnostic:** the lobby now paints a `direct`/`relayed` badge per peer
+        so a playtest can see whether the relay is actually being leaned on
+        (detection in `net.js` `_reportLink`/`detectRelayed`, painted by `ui.js`
+        `setLink`). Fine to strip later.
+      - **Give-up timer:** connecting players give up after ~10s
+        (`CONNECT_TIMEOUT_MS` in `net.js`) with a "couldn't connect — tell the
+        host" message instead of an infinite spinner.
 - **Tombstoned files to physically delete when a shell is available:**
       `server/Room.js` and `server/config.js` are now obsolete stubs (logic moved
       to `shared/referee.js`; matchmaker needs no config). They export nothing and

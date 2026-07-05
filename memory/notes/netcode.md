@@ -68,12 +68,38 @@ Others interpolate toward latest snapshot at 0.25/frame. No rollback/input buffe
 (hardcoded in `main.js` startInputLoop).
 
 ## NAT traversal / connection reality (the migration's big risk)
-`ICE_SERVERS` in `net.js` = free public STUN only. That covers most home NATs.
-Strict/symmetric NATs need a **TURN relay** (paid, always-on, carries live
-traffic) — currently **NO-GO / not configured**, so some players can't connect.
-This is the claim the whole rebuild rests on and is **not yet playtested across
-real networks** (see project-state). Add a `turn:` entry to `ICE_SERVERS` to
-enable a relay.
+`ICE_SERVERS` in `net.js` = free public **STUN + TURN**. STUN covers most home
+NATs directly. Strict/symmetric NATs (where no direct link can form) now fall
+back to a **TURN relay** — configured with OpenRelay's free public relay
+(`openrelay.metered.ca`, user/cred `openrelayproject`). Swap those three `turn:`
+entries for your own Metered/OpenRelay account creds for a dedicated quota. Still
+**not yet playtested across real networks** (see project-state [9]).
+
+**Direct-first is preserved.** `RTCPeerConnection` is created with only
+`iceServers` — `iceTransportPolicy` is left at its default `'all'` (NOT
+`'relay'`). The ICE agent gathers host/STUN/TURN candidates together and prefers
+the cheapest working pair, so TURN is fallback-only and doesn't burn the free
+quota when a direct link exists. Never set the policy to `'relay'` — it would
+force every player through the relay.
+
+**Connection-type diagnostic (direct vs relayed).** When a link opens, `net.js`
+calls `_reportLink(pc, id)` → `detectRelayed(pc)`, which reads `pc.getStats()`,
+finds the selected candidate pair, and checks whether the *local* candidate is a
+`relay` candidate. It emits `onStatus('link', {id, relayed})`; `main.js` forwards
+to `ui.setLink(id, relayed)`, which paints a small `direct`/`relayed` badge on
+that peer's lobby row. Each player labels only its OWN connection (guest labels
+selfId; host labels each guestId — the host has no pc to itself). Detection is
+deliberately in the net layer; the UI just paints. Purely for playtest telemetry
+(is the relay being leaned on?) — safe to strip later.
+
+**Give-up timer.** `CONNECT_TIMEOUT_MS` (~10s) in `net.js`. Guest: a timer set in
+`_becomeGuest`, cleared on `channel.onopen`; on expiry (if not `ready`) it shows
+"couldn't connect — tell the host" and tears down — bounds WebRTC's own much
+slower `'failed'`. Host: a per-peer timer in `_hostInvite` drops a guest that
+never finishes connecting so it doesn't linger as a ghost peer. The guest's
+`'failed'` handler now also clears the timer + tears down (message no longer says
+"a relay is needed" — a relay IS configured, so a failure means even it couldn't
+carry the traffic).
 
 ## Gotchas for future sessions
 - Movement formula is duplicated referee + client and MUST match (see
