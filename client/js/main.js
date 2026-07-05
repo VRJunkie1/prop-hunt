@@ -1,16 +1,21 @@
 // Entry point. Wires DOM -> network -> scene, runs the render loop with light
 // client-side prediction for the local player, and sends movement intent to the
-// server at a fixed rate. The server stays authoritative; prediction only makes
-// the local camera feel responsive.
+// referee at a fixed rate. The referee stays authoritative; prediction only
+// makes the local camera feel responsive.
+//
+// Since the P2P rebuild the "network" is a Session that hides whether we're the
+// host (referee runs in this tab, replies are instant loopback) or a guest
+// (referee is another player's tab, reached over an RTCDataChannel). This file
+// is identical for both — it just calls session.send()/reads session.onMessage.
 import { loadConfig } from './config.js';
-import { Net } from './net.js';
+import { Session } from './net.js';
 import { Input } from './input.js';
 import { Scene3D } from './scene.js';
 import { UI } from './ui.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 
 const ui = new UI();
-const net = new Net();
+let session = null; // created in boot() once config is loaded
 const canvas = document.getElementById('view');
 const scene = new Scene3D(canvas);
 const input = new Input(canvas);
@@ -34,7 +39,7 @@ input.onAction = (name) => {
   if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
   if (name === 'primary') name = state.role === ROLE.HUNTER ? 'tag' : 'disguise';
   if (name === 'disguise') tryDisguise();
-  if (name === 'tag') net.send({ t: C2S.TAG });
+  if (name === 'tag') session.send({ t: C2S.TAG });
 };
 
 function tryDisguise() {
@@ -49,12 +54,14 @@ function tryDisguise() {
       best = p;
     }
   }
-  if (best) net.send({ t: C2S.DISGUISE, propId: best.id });
+  if (best) session.send({ t: C2S.DISGUISE, propId: best.id });
   else ui.feed('No prop close enough to disguise as.');
 }
 
 // ---- network handling -----------------------------------------------------
-net.onMessage = (msg) => {
+// Game messages (S2C) from the referee — same whether it's our own in-tab
+// referee (host) or the host's over the data channel (guest).
+function handleGameMessage(msg) {
   switch (msg.t) {
     case S2C.JOINED:
       state.selfId = msg.id;
@@ -101,7 +108,36 @@ net.onMessage = (msg) => {
       else ui.menuError(msg.msg);
       break;
   }
-};
+}
+
+// Connection status (not gameplay) — surfaced to the UI.
+function handleStatus(kind, detail) {
+  if (kind === 'connecting') {
+    ui.menuError('Connecting…');
+  } else if (kind === 'error') {
+    if (ui.el.menu.classList.contains('hidden')) ui.feed(detail || 'Connection error.');
+    else ui.menuError(detail || 'Connection error.');
+  } else if (kind === 'link') {
+    // Diagnostic label: how a peer connected (direct vs relayed through TURN).
+    ui.setLink(detail.id, detail.relayed);
+  } else if (kind === 'closed') {
+    backToMenu(detail || 'Disconnected.');
+  }
+}
+
+// Return to the landing screen and arm a fresh Session so the player can start
+// or join another match (a Session is single-use — it tears down its peer links
+// and signaling socket when a match ends).
+function backToMenu(msg) {
+  state.selfId = null;
+  state.role = null;
+  state.phase = PHASE.LOBBY;
+  state.movable = false;
+  state.spawned = false;
+  ui.show('menu');
+  if (msg) ui.menuError(msg);
+  newSession();
+}
 
 function onSnapshot(msg) {
   state.phase = msg.phase;
@@ -188,47 +224,52 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// Send movement intent to the server at a fixed rate.
+// Send movement intent to the referee at a fixed rate.
 function startInputLoop() {
   setInterval(() => {
-    if (net.socket?.readyState !== WebSocket.OPEN) return;
+    if (!session || !session.ready) return;
     if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
     const { mx, mz } = input.moveVector();
-    net.send({ t: C2S.INPUT, mx, mz, yaw: input.yaw, pitch: input.pitch });
+    session.send({ t: C2S.INPUT, mx, mz, yaw: input.yaw, pitch: input.pitch });
   }, 1000 / 20);
 }
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 // ---- menu wiring ----------------------------------------------------------
+// Create/join go through the matchmaker (signaling); everything after (ready,
+// start, and all gameplay) rides the peer link via session.send().
 function wireMenu() {
   const nameEl = ui.el.name;
   document.getElementById('createBtn').addEventListener('click', () => {
-    net.send({ t: C2S.CREATE, name: nameEl.value });
+    session.create(nameEl.value);
   });
   document.getElementById('joinBtn').addEventListener('click', () => {
     const room = ui.el.roomCode.value.toUpperCase().trim();
     if (!room) return ui.menuError('Enter a room code.');
-    net.send({ t: C2S.JOIN, name: nameEl.value, room });
+    session.join(nameEl.value, room);
   });
   ui.el.readyBtn.addEventListener('click', () => {
     ui.el.readyBtn._ready = !ui.el.readyBtn._ready;
-    net.send({ t: C2S.READY, ready: ui.el.readyBtn._ready });
+    session.send({ t: C2S.READY, ready: ui.el.readyBtn._ready });
     ui.el.readyBtn.textContent = ui.el.readyBtn._ready ? 'Not ready' : 'Ready';
   });
-  ui.el.startBtn.addEventListener('click', () => net.send({ t: C2S.START }));
+  ui.el.startBtn.addEventListener('click', () => session.send({ t: C2S.START }));
+}
+
+// Build a fresh Session and wire its callbacks. Sessions are single-use, so this
+// runs at boot and again each time we return to the menu after a match ends.
+function newSession() {
+  session = new Session(state.cfg);
+  session.onMessage = handleGameMessage;
+  session.onStatus = handleStatus;
 }
 
 // ---- boot -----------------------------------------------------------------
 (async function boot() {
   state.cfg = await loadConfig();
+  newSession();
   wireMenu();
-  net.onOpen = () => ui.menuError('');
-  net.onClose = () => {
-    if (!ui.el.menu.classList.contains('hidden')) ui.menuError('Disconnected from server.');
-    else ui.feed('Disconnected from server.');
-  };
-  net.connect();
   startInputLoop();
   requestAnimationFrame(frame);
 })();

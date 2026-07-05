@@ -25,6 +25,10 @@ export class UI {
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
     };
+    // Diagnostic: peerId -> true(relayed)/false(direct). Painted in the lobby so
+    // a playtest can see whether the free TURN relay is being leaned on. Purely
+    // informational; the network layer fills it via setLink().
+    this.links = new Map();
   }
 
   show(screen) {
@@ -32,6 +36,8 @@ export class UI {
     const inGame = screen === 'game';
     this.el.hud.classList.toggle('hidden', !inGame);
     this.el.crosshair.classList.toggle('hidden', !inGame);
+    // Leaving to the menu means the old peer links are gone — drop stale labels.
+    if (screen === 'menu') this.links.clear();
   }
 
   menuError(msg) {
@@ -43,13 +49,17 @@ export class UI {
     this.el.playerList.innerHTML = '';
     for (const p of players) {
       const li = document.createElement('li');
+      li.dataset.id = p.id;
       const name = document.createElement('span');
       name.textContent = p.name + (p.id === selfId ? ' (you)' : '');
       if (p.id === hostId) name.classList.add('host');
       const status = document.createElement('span');
       status.textContent = p.ready ? 'ready' : '';
       status.classList.add('ready');
-      li.append(name, status);
+      const link = document.createElement('span');
+      link.classList.add('link');
+      this._paintLink(link, this.links.get(p.id));
+      li.append(name, link, status);
       this.el.playerList.appendChild(li);
     }
     const isHost = hostId === selfId;
@@ -57,6 +67,25 @@ export class UI {
     this.el.lobbyHint.textContent = isHost
       ? `You are host. Start when everyone has joined (min ${players.length >= 2 ? '' : '2 '}players).`
       : 'Waiting for the host to start…';
+  }
+
+  // Record and paint how a peer connected. Called by the network layer once a
+  // link resolves; may arrive just after renderLobby, so it updates the live row
+  // too (renderLobby re-reads this.links on the next lobby update).
+  setLink(id, relayed) {
+    this.links.set(id, relayed);
+    const row = this.el.playerList.querySelector(`li[data-id="${id}"] .link`);
+    if (row) this._paintLink(row, relayed);
+  }
+
+  _paintLink(el, relayed) {
+    if (relayed === undefined) {
+      el.textContent = '';
+      el.className = 'link';
+      return;
+    }
+    el.textContent = relayed ? 'relayed' : 'direct';
+    el.className = 'link ' + (relayed ? 'relayed' : 'direct');
   }
 
   setRole(role) {

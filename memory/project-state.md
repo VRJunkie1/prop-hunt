@@ -2,60 +2,110 @@
 
 ## Goal
 
-Skeleton multiplayer Prop Hunt: basic but extendable, and **no player needs to
-port forward**. Approved plan solves that by making everyone connect outward to
-one authoritative referee server.
+Skeleton multiplayer Prop Hunt: basic but extendable. As of the P2P rebuild the
+networking model is **peer-to-peer over WebRTC** — players connect directly to
+each other; the room creator's browser hosts the referee. A tiny Node
+**matchmaker** only mints room codes and relays the WebRTC handshake.
 
-## Status: skeleton complete (plan steps 1–9 implemented in code)
+## Status: P2P rebuild + TURN relay implemented in code. NOT playtested.
 
-A full walkable multiplayer sandbox + the core prop-hunt loop exist end to end.
-Not yet run/playtested in this environment (no shell available this session).
+TURN relay hookup done this session (strict-NAT fallback, direct-first preserved,
+per-peer direct/relayed lobby badge, ~10s give-up timer). The P2P rebuild itself
+was the prior session (steps 1–8 below). Neither is verified across real
+networks — see the playtest gap [9].
+
+The networking core was rewritten this session. All game rules/content are
+unchanged — only where the referee runs and how messages travel changed.
 
 Implemented:
-- [1] Browser game, no installs. Three.js via CDN importmap (no build step).
-- [2] Central referee server: Node `http` + `ws`, authoritative state, same-port
-      static + WebSocket. Honours `PORT` for deploy.
-- [3] Lobby: create room → 4-char code; join by code; host starts. One room = one
-      match, managed by the server.
-- [4] Minimal 3D scene: flat map, boundary walls, ~14 scattered props.
-- [5] Movement under referee model: client sends intent, server integrates &
-      broadcasts; local prediction for feel.
-- [6] Roles assigned by server (random split). Props press E to disguise;
-      hunters frozen during a server-timed hiding period.
-- [7] Tag judged by server (aim-cone raycast vs disguised props only).
-- [8] Win conditions + round loop enforced by server; return to lobby.
-- [9] Content as data: rules/maps/props JSON, loaded by both sides.
+- [1] **Matchmaker** (`server/index.js`): HTTP static + WebRTC signaling relay
+      (room codes, create/join, `SIG.RELAY` handshake, host/peer disconnect
+      notices). No game logic/state.
+- [2] **Referee ported to the browser** (`shared/referee.js`): the old
+      `server/Room.js` logic (phases, movement, tags, disguises, wins), with
+      config injected, per-player `send` callbacks, and a `setInterval` tick.
+- [3] **Dual-mode network layer** (`client/js/net.js` `Session`): signaling
+      WebSocket + WebRTC; host runs the referee + a local loopback for its own
+      client + a bridge from each guest's data channel; guest opens one channel
+      to the host. `main.js` is identical for host and guest.
+- [4] **Reliable + ordered channels** by explicit config
+      (`createDataChannel('game', {ordered:true})`); ICE buffered until SDP set.
+- [5] **Host self-referee loop** resolved: host inputs go through the loopback
+      like everyone else; the reconcile-toward-authoritative nudge is a near-no-op
+      for the host (no round trip). Movement math kept identical for guests.
+- [6] **Connection fallback**: free public **STUN** + **TURN** in `ICE_SERVERS`.
+      TURN is now **CONFIGURED** (OpenRelay free public relay) so strict/symmetric
+      NATs can connect via relay. Direct stays first choice (policy left at
+      'all'). See TURN section below.
+- [7] **Host lifecycle**: creator is the referee; host leaving ends the match and
+      returns everyone to the menu. Host migration deferred.
+- [8] Architecture notes updated (authority reversal recorded; see
+      architecture.md).
 
-## Open threads / not done
+## Open threads / not done — READ BEFORE BUILDING ON THIS
 
-- [10] **Deploy + real multi-home playtest** to prove the no-port-forward goal in
-      practice. Not done — needs a cloud host. README has deploy steps.
-- **Never run here.** Next session: `npm install` then `npm start`, open two tabs
-  on :3000, verify create/join/start/move/disguise/tag/win. Watch for movement
-  formula drift and the STARTED→ROLE→SNAPSHOT ordering.
+- [9] **NEVER PLAYTESTED — this is the load-bearing gap.** The whole rebuild
+      rests on "P2P connections actually form across real home networks." Not
+      verified here (no browsers/network in this env). **Do this next:** two
+      *different* homes, deliberately including one strict-NAT setup. Two tabs on
+      one machine is NOT a valid test (it uses loopback). With TURN now
+      configured, the strict-NAT player should now *succeed* (via relay) — confirm
+      the lobby badge reads `relayed` for them, not that they got in by luck.
+- [TURN — now CONFIGURED] `ICE_SERVERS` in `net.js` now carries TURN relay entries
+      (OpenRelay free public relay: `openrelay.metered.ca` :80/:443/:443?tcp,
+      username/credential `openrelayproject`) alongside STUN, so strict-NAT
+      players relay through TURN when a direct link can't form. Still open:
+      - **Shared public relay.** OpenRelay is a community relay with a modest
+        free quota (a few GB/mo). Fine for 2–8 friends. For a dedicated quota,
+        make a free Metered/OpenRelay account and swap the three `turn:` entries
+        for its credentials (same shape). Password is visible in client code —
+        unavoidable for a backend-less game; only risk is a stranger draining the
+        quota. Not worth engineering around now.
+      - **Relay password ships in public client code** (accepted, see above).
+      - Direct is still first choice: `iceTransportPolicy` deliberately left at
+        default 'all' (NOT 'relay'), so TURN is fallback-only and doesn't burn
+        quota when a direct link works.
+      - **Diagnostic:** the lobby now paints a `direct`/`relayed` badge per peer
+        so a playtest can see whether the relay is actually being leaned on
+        (detection in `net.js` `_reportLink`/`detectRelayed`, painted by `ui.js`
+        `setLink`). Fine to strip later.
+      - **Give-up timer:** connecting players give up after ~10s
+        (`CONNECT_TIMEOUT_MS` in `net.js`) with a "couldn't connect — tell the
+        host" message instead of an infinite spinner.
+- **Tombstoned files to physically delete when a shell is available:**
+      `server/Room.js` and `server/config.js` are now obsolete stubs (logic moved
+      to `shared/referee.js`; matchmaker needs no config). They export nothing and
+      nothing imports them. `git rm` both. (Couldn't delete this session — no
+      shell/Bash tool available.)
+- **Anti-cheat given up.** The host holds full unfiltered state (can see
+      undisguised props / tamper). Accepted cost of host authority; no neutral
+      referee anymore. See architecture.md.
 - **Undisguised props are visible** (render as neutral capsules and move). Fine
-  for skeleton; future: auto-disguise at hunt start, or hide/lock undisguised
-  props. See architecture "Role/identity hiding".
+      for skeleton; future: auto-disguise at hunt start, or hide/lock undisguised
+      props.
 - No client-side prediction of collisions; players can overlap props/walls
-  (walls are visual; server only clamps to map bounds).
-- `ready` flag exists in lobby but host can start regardless — intentional for
-  skeleton; wire it into a start gate later if wanted.
-- Single map (`circus_lot`). Map selection UI not built (server uses
-  `DEFAULT_MAP_ID`). Adding maps is data-only.
+      (walls are visual; the referee only clamps to map bounds).
+- `ready` flag exists in lobby but host can start regardless — intentional.
+- Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
+- **Reconnection/host migration**: none. If the host drops, the match is over.
 
 ## Key decisions
 
-- Server-authoritative + outbound connections = the whole networking model. Do
-  not give clients authority over outcomes.
-- Movement math is duplicated (server + client prediction) **on purpose** and
-  must stay identical — see architecture.md.
-- Roles hidden via snapshot shape (`hunter`/`disguise` only), not by trusting the
-  client.
-- Theme: colorful circus (art in `assets/`, used on the menu screen). Mascot
-  image `assets/attached_2.webp` on the landing card.
+- **P2P WebRTC, host-authoritative** — this REVERSED the earlier
+      server-authoritative / "do not move authority to clients" directive, on
+      Manny's instruction. Full rationale + trade-offs in architecture.md. It was
+      a product decision, not a technical necessity; a future session may revisit.
+- Matchmaker is the only always-on piece and holds no game state. "No server"
+      isn't literally achievable (browsers need a rendezvous), but it's now tiny.
+- Movement math is duplicated (referee + client prediction) **on purpose** and
+      must stay identical — see architecture.md.
+- Roles hidden via snapshot shape (`hunter`/`disguise` only) — but the host tab
+      still holds everything (see anti-cheat note).
+- Theme: colorful circus (art in `assets/`, used on the menu screen).
 
 ## Where things live
 
-Server referee: `server/Room.js`. Protocol: `shared/protocol.js`. Tunables:
-`shared/config/rules.json`. Client entry: `client/js/main.js`. Notes:
+Referee (host browser): `shared/referee.js`. Matchmaker: `server/index.js`.
+Protocol: `shared/protocol.js` (SIG + C2S/S2C). Network layer: `client/js/net.js`.
+Tunables: `shared/config/rules.json`. Client entry: `client/js/main.js`. Notes:
 `memory/notes/` (netcode, game-loop).

@@ -92,6 +92,10 @@ button.primary:hover { background: #ff6fb5; }
 }
 .player-list .ready { color: #7be38b; }
 .player-list .host::after { content: " ★"; color: gold; }
+/* Diagnostic connection-type badge (direct vs relayed). See ui.js setLink(). */
+.player-list .link { font-size: 11px; letter-spacing: .04em; opacity: .8; align-self: center; }
+.player-list .link.direct { color: #7be38b; }
+.player-list .link.relayed { color: #ffc04d; }
 
 /* ---- in game ---- */
 #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

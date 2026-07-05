@@ -1,7 +1,10 @@
 # game loop & rules
 
-Everything here is server-owned in `server/Room.js`. Tunables are in
-`shared/config/rules.json` — change data, not code.
+Everything here is referee-owned in `shared/referee.js`, which since the P2P
+rebuild runs in the **host's browser** (it was ported from the old
+`server/Room.js`, now deleted). The rules below are unchanged by that move —
+only where the code runs changed. Tunables are in `shared/config/rules.json` —
+change data, not code.
 
 ## Phases (state machine)
 `LOBBY → HIDING → HUNTING → ENDING → LOBBY`, driven by `phaseEndsAt` timestamps
@@ -49,5 +52,5 @@ to show the lobby screen again).
 - New map: add to `maps.json`. New prop type: add to `props.json` + reference it
   in a map. No engine edits.
 - New abilities/rules: add fields to `rules.json`, read them in `Room`.
-- Map selection: server currently uses `DEFAULT_MAP_ID`; add a lobby setting +
-  `Room.mapId` setter to choose.
+- Map selection: the referee currently defaults `this.mapId` to the first map in
+  `maps.json`; add a lobby setting + a `Referee.mapId` setter to choose.
