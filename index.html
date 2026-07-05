@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prop Hunt</title>
+    <link rel="stylesheet" href="/css/style.css" />
+    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <!-- Landing / lobby screen -->
+    <div id="menu" class="screen">
+      <div class="menu-art">
+        <img src="/assets/attached_2.webp" alt="prop mascot" class="mascot" />
+      </div>
+      <div class="menu-card">
+        <h1>PROP HUNT</h1>
+        <p class="tag">Hide as a prop. Or hunt them all down.</p>
+
+        <label>Name<input id="name" maxlength="16" placeholder="Player" /></label>
+
+        <div class="row">
+          <button id="createBtn" class="primary">Create room</button>
+        </div>
+        <div class="row join-row">
+          <input id="roomCode" maxlength="4" placeholder="CODE" class="code-input" />
+          <button id="joinBtn">Join</button>
+        </div>
+        <p id="menuError" class="error"></p>
+        <p class="hint">Players connect peer-to-peer &mdash; the room creator hosts the match.</p>
+      </div>
+    </div>
+
+    <!-- Lobby (in a room, before match starts) -->
+    <div id="lobby" class="screen hidden">
+      <div class="menu-card">
+        <h1>LOBBY</h1>
+        <p class="roomcode">Room code: <span id="lobbyCode">----</span></p>
+        <div class="row">
+          <button id="copyLinkBtn" class="ghost">Copy invite link</button>
+        </div>
+        <ul id="playerList" class="player-list"></ul>
+        <div class="row">
+          <button id="readyBtn">Ready</button>
+          <button id="startBtn" class="primary hidden">Start match</button>
+        </div>
+        <p id="lobbyHint" class="hint"></p>
+      </div>
+    </div>
+
+    <!-- In-game -->
+    <div id="game" class="screen hidden">
+      <canvas id="view"></canvas>
+      <div id="crosshair" class="hidden">+</div>
+      <div id="hud" class="hidden">
+        <div class="hud-top">
+          <span id="hudRole" class="pill">&mdash;</span>
+          <span id="hudTimer" class="pill">0:00</span>
+          <span id="hudProps" class="pill">Props: 0/0</span>
+        </div>
+        <div id="banner" class="banner hidden"></div>
+        <div id="feed" class="feed"></div>
+      </div>
+      <div id="clickToPlay" class="overlay hidden">Click to play</div>
+    </div>
+
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>

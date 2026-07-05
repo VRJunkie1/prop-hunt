@@ -2,101 +2,93 @@
 
 ## Goal
 
-Skeleton multiplayer Prop Hunt: basic but extendable. As of the P2P rebuild the
-networking model is **peer-to-peer over WebRTC** — players connect directly to
-each other; the room creator's browser hosts the referee. A tiny Node
-**matchmaker** only mints room codes and relays the WebRTC handshake.
+Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
+(deployable to Cloudflare Pages — no server, no backend, no build step). Play is
+**peer-to-peer over WebRTC**; the room creator's browser hosts the referee.
+Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
+ours). Strict NATs relay through a free public TURN.
 
-## Status: P2P rebuild + TURN relay implemented in code. NOT playtested.
+## Status: static-Pages deploy fix + PeerJS signaling done in code. NOT playtested.
 
-TURN relay hookup done this session (strict-NAT fallback, direct-first preserved,
-per-peer direct/relayed lobby badge, ~10s give-up timer). The P2P rebuild itself
-was the prior session (steps 1–8 below). Neither is verified across real
-networks — see the playtest gap [9].
+This session fixed the **broken Cloudflare Pages deploy**. Root cause: the P2P
+rebuild left a Node matchmaker in `server/` and the game nested under `client/`.
+Pages serves static files only (can't run the matchmaker) and serves from where
+`index.html` sits, so the nested layout 404'd. Fix = flatten to the repo root +
+retire the matchmaker in favour of PeerJS's public broker. Game rules/referee are
+unchanged. **Not yet verified across real networks** — see the playtest gap [9].
 
-The networking core was rewritten this session. All game rules/content are
-unchanged — only where the referee runs and how messages travel changed.
-
-Implemented:
-- [1] **Matchmaker** (`server/index.js`): HTTP static + WebRTC signaling relay
-      (room codes, create/join, `SIG.RELAY` handshake, host/peer disconnect
-      notices). No game logic/state.
-- [2] **Referee ported to the browser** (`shared/referee.js`): the old
-      `server/Room.js` logic (phases, movement, tags, disguises, wins), with
-      config injected, per-player `send` callbacks, and a `setInterval` tick.
-- [3] **Dual-mode network layer** (`client/js/net.js` `Session`): signaling
-      WebSocket + WebRTC; host runs the referee + a local loopback for its own
-      client + a bridge from each guest's data channel; guest opens one channel
-      to the host. `main.js` is identical for host and guest.
-- [4] **Reliable + ordered channels** by explicit config
-      (`createDataChannel('game', {ordered:true})`); ICE buffered until SDP set.
-- [5] **Host self-referee loop** resolved: host inputs go through the loopback
-      like everyone else; the reconcile-toward-authoritative nudge is a near-no-op
-      for the host (no round trip). Movement math kept identical for guests.
-- [6] **Connection fallback**: free public **STUN** + **TURN** in `ICE_SERVERS`.
-      TURN is now **CONFIGURED** (OpenRelay free public relay) so strict/symmetric
-      NATs can connect via relay. Direct stays first choice (policy left at
-      'all'). See TURN section below.
-- [7] **Host lifecycle**: creator is the referee; host leaving ends the match and
-      returns everyone to the menu. Host migration deferred.
-- [8] Architecture notes updated (authority reversal recorded; see
-      architecture.md).
+### Done this session
+- [A] **Flattened to the repo root.** `index.html`, `js/`, `css/` now sit at the
+      root alongside `shared/` and `assets/`. All refs are root-absolute, so they
+      survived the move. Pages: output dir = repo root, no build.
+- [B] **Retired the Node matchmaker.** Signaling is now **PeerJS's free public
+      broker**. No server of ours anywhere.
+- [C] **Rewrote `js/net.js` onto PeerJS.** Host = `Peer('prophunt-<code>')`;
+      guest = anonymous `Peer` + `peer.connect(..., {reliable:true,
+      metadata:{name}})`. Reliable+ordered kept via `{reliable:true}`. ICE
+      servers injected via the `Peer` `config` option (STUN + TURN preserved).
+      Host bridges each guest `DataConnection` into the referee. Referee itself is
+      transport-agnostic and was NOT touched.
+- [D] **Join/leave now = PeerJS events** (`conn.on('close')`), replacing the old
+      SIG host-left/peer-left messages. Deleted the `SIG` protocol and the dead
+      `C2S.CREATE/JOIN` from `shared/protocol.js`.
+- [E] **Direct/relayed lobby badge preserved** — detection now reads
+      `conn.peerConnection.getStats()` (PeerJS exposes the RTCPeerConnection).
+- [F] **Join-by-link**: `#CODE` in the URL auto-joins on boot; lobby has a
+      "Copy invite link" button. See `main.js` `tryJoinFromHash` / `wireMenu`.
+- [G] `package.json` trimmed to a static project (dropped `ws` + node scripts).
+      README + all memory notes updated.
 
 ## Open threads / not done — READ BEFORE BUILDING ON THIS
 
-- [9] **NEVER PLAYTESTED — this is the load-bearing gap.** The whole rebuild
-      rests on "P2P connections actually form across real home networks." Not
-      verified here (no browsers/network in this env). **Do this next:** two
-      *different* homes, deliberately including one strict-NAT setup. Two tabs on
-      one machine is NOT a valid test (it uses loopback). With TURN now
-      configured, the strict-NAT player should now *succeed* (via relay) — confirm
-      the lobby badge reads `relayed` for them, not that they got in by luck.
-- [TURN — now CONFIGURED] `ICE_SERVERS` in `net.js` now carries TURN relay entries
-      (OpenRelay free public relay: `openrelay.metered.ca` :80/:443/:443?tcp,
-      username/credential `openrelayproject`) alongside STUN, so strict-NAT
-      players relay through TURN when a direct link can't form. Still open:
-      - **Shared public relay.** OpenRelay is a community relay with a modest
-        free quota (a few GB/mo). Fine for 2–8 friends. For a dedicated quota,
-        make a free Metered/OpenRelay account and swap the three `turn:` entries
-        for its credentials (same shape). Password is visible in client code —
-        unavoidable for a backend-less game; only risk is a stranger draining the
-        quota. Not worth engineering around now.
-      - **Relay password ships in public client code** (accepted, see above).
-      - Direct is still first choice: `iceTransportPolicy` deliberately left at
-        default 'all' (NOT 'relay'), so TURN is fallback-only and doesn't burn
-        quota when a direct link works.
-      - **Diagnostic:** the lobby now paints a `direct`/`relayed` badge per peer
-        so a playtest can see whether the relay is actually being leaned on
-        (detection in `net.js` `_reportLink`/`detectRelayed`, painted by `ui.js`
-        `setLink`). Fine to strip later.
-      - **Give-up timer:** connecting players give up after ~10s
-        (`CONNECT_TIMEOUT_MS` in `net.js`) with a "couldn't connect — tell the
-        host" message instead of an infinite spinner.
-- **Tombstoned files to physically delete when a shell is available:**
-      `server/Room.js` and `server/config.js` are now obsolete stubs (logic moved
-      to `shared/referee.js`; matchmaker needs no config). They export nothing and
-      nothing imports them. `git rm` both. (Couldn't delete this session — no
-      shell/Bash tool available.)
+- [TOMBSTONES — physically delete when a shell is available.] I could **not**
+      run mutating git/shell commands this session (the Monitor shell tool's
+      permission stream failed on every write; read-only commands worked). So the
+      flatten was done by **writing the canonical files at the root** and reducing
+      the old `client/` and `server/` files to one-line **tombstone stubs**. They
+      are dead (nothing loads them — the app is served from the root), but they
+      should be removed for real:
+      ```
+      git rm -r client server
+      ```
+      Do this first thing next session if you have a shell. Everything canonical
+      is at the root; `client/` and `server/` contain only stubs.
+- [9] **NEVER PLAYTESTED — still the load-bearing gap, now bigger.** Two things
+      are unverified across real networks: (a) the original P2P assumption that
+      connections form across home NATs, and (b) the NEW PeerJS wiring. **Do this
+      next:** deploy to Pages, open on two computers on *different* networks,
+      create a room, **join via the invite link**, play a full round (hide →
+      hunt → win screen → back to lobby), and check the direct/relayed badge.
+      Include a strict-NAT setup if possible — with TURN configured that player
+      should succeed via relay (badge reads `relayed`). Two tabs on one machine is
+      NOT a valid test (loopback).
+- [PeerJS/TURN are shared free services.] The broker (PeerJS cloud) and TURN
+      (OpenRelay) are community services with modest quotas. Fine for 2–8 friends;
+      if joining hiccups, suspect a service before the code. For a dedicated TURN
+      quota, swap the three `turn:` entries in `js/net.js` for your own
+      Metered/OpenRelay creds. The relay password ships in client code
+      (unavoidable, backend-less) — only risk is quota drain.
+- **Phones out of scope (deliberate).** Controls are keyboard + mouse-look, so
+      it's desktop-only regardless of the deploy. Real touch controls are a
+      separate project.
 - **Anti-cheat given up.** The host holds full unfiltered state (can see
       undisguised props / tamper). Accepted cost of host authority; no neutral
-      referee anymore. See architecture.md.
+      referee. See architecture.md.
 - **Undisguised props are visible** (render as neutral capsules and move). Fine
-      for skeleton; future: auto-disguise at hunt start, or hide/lock undisguised
-      props.
-- No client-side prediction of collisions; players can overlap props/walls
-      (walls are visual; the referee only clamps to map bounds).
+      for skeleton; future: auto-disguise at hunt start, or hide undisguised props.
+- No client-side prediction of collisions; players can overlap props/walls.
 - `ready` flag exists in lobby but host can start regardless — intentional.
 - Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 
 ## Key decisions
 
-- **P2P WebRTC, host-authoritative** — this REVERSED the earlier
-      server-authoritative / "do not move authority to clients" directive, on
-      Manny's instruction. Full rationale + trade-offs in architecture.md. It was
-      a product decision, not a technical necessity; a future session may revisit.
-- Matchmaker is the only always-on piece and holds no game state. "No server"
-      isn't literally achievable (browsers need a rendezvous), but it's now tiny.
+- **Static site + PeerJS public broker** (this session) — the way to keep P2P
+      WebRTC with no server of ours, deployable to Cloudflare Pages. Trade-off:
+      depends on shared free services (broker + TURN). See architecture.md.
+- **P2P WebRTC, host-authoritative** — REVERSED the earlier server-authoritative
+      / "do not move authority to clients" directive, on Manny's instruction. Full
+      rationale + trade-offs in architecture.md. A future session may revisit.
 - Movement math is duplicated (referee + client prediction) **on purpose** and
       must stay identical — see architecture.md.
 - Roles hidden via snapshot shape (`hunter`/`disguise` only) — but the host tab
@@ -105,7 +97,8 @@ Implemented:
 
 ## Where things live
 
-Referee (host browser): `shared/referee.js`. Matchmaker: `server/index.js`.
-Protocol: `shared/protocol.js` (SIG + C2S/S2C). Network layer: `client/js/net.js`.
-Tunables: `shared/config/rules.json`. Client entry: `client/js/main.js`. Notes:
-`memory/notes/` (netcode, game-loop).
+Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
+browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
+Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
+`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop). Dead code
+awaiting `git rm`: `client/`, `server/`.
