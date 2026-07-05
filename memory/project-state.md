@@ -39,6 +39,15 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
 - [G] `package.json` trimmed to a static project (dropped `ws` + node scripts).
       README + all memory notes updated.
 
+### Follow-up session (check-repair)
+- [H] **CDN imports moved to jsDelivr** to clear two `net::ERR_FAILED` from the
+      automated headless-load check. three.js (`index.html` importmap) and PeerJS
+      (`js/net.js`) were the only two boot-time external fetches; esm.sh's runtime
+      transpile in particular can cold-start/redirect slowly enough to fail a
+      headless load. Now `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`
+      and `.../peerjs@1.5.4/+esm` — prebuilt ESM, no build step. Broker/TURN
+      services unchanged (this was the *library* download only).
+
 ## Open threads / not done — READ BEFORE BUILDING ON THIS
 
 - [TOMBSTONES — physically delete when a shell is available.] I could **not**

@@ -115,3 +115,9 @@ reads `pc.getStats()`, finds the selected candidate pair, and checks whether the
   test real NAT traversal — only two different homes does.
 - We depend on shared free services (PeerJS broker + OpenRelay TURN). If joining
   gets flaky, suspect one of those before the code.
+- **CDN for the PeerJS lib**: imported from `https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm`
+  (three.js likewise moved to jsDelivr in `index.html`). Was esm.sh; switched
+  because esm.sh's on-the-fly transpile can cold-start/redirect slowly enough to
+  fail a headless page load (net::ERR_FAILED). jsDelivr serves a prebuilt ESM
+  bundle and loads reliably — no build step either way. This is the *library*
+  download only; it's unrelated to the PeerJS *broker* (still the free public one).

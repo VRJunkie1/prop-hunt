@@ -95,9 +95,11 @@ signaling to **PeerJS's free public broker**.
 ## Client (repo root: `index.html`, `js/`, `css/`)
 
 No build step. Served from the repo **root** (flattened 2026-07 so static Pages
-finds `index.html`). Three.js **and PeerJS** load from CDN — Three via the HTML
-importmap, PeerJS via a direct `esm.sh` import in `js/net.js`. All internal refs
-are root-absolute (`/js/…`, `/css/…`, `/shared/…`, `/assets/…`).
+finds `index.html`). Three.js **and PeerJS** load from CDN (jsDelivr) — Three via
+the HTML importmap, PeerJS via a direct `/+esm` import in `js/net.js`. (Both were
+on unpkg/esm.sh; moved to jsDelivr's prebuilt ESM after esm.sh's runtime transpile
+failed a headless page load — see netcode.md.) All internal refs are root-absolute
+(`/js/…`, `/css/…`, `/shared/…`, `/assets/…`).
 
 - `js/main.js` — glue + render loop + light client-side prediction for the local
   player (integrates own movement each frame, reconciles toward the authoritative

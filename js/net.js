@@ -21,7 +21,12 @@
 // onStatus. It is identical code whether we turn out to be host or guest — the
 // host's own inputs take the same round-trip-free path a guest's would over the
 // network. See memory/notes/netcode.md.
-import { Peer } from 'https://esm.sh/peerjs@1.5.4';
+//
+// PeerJS is pulled as ESM from jsDelivr's `/+esm` endpoint (a CDN-cached static
+// bundle). We moved off esm.sh because its on-the-fly transpile can cold-start /
+// redirect slowly enough to fail a headless page load (net::ERR_FAILED); jsDelivr
+// serves a prebuilt file and loads reliably. Same "CDN import, no build step".
+import { Peer } from 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm';
 import { Referee } from '/shared/referee.js';
 
 // ICE servers for NAT traversal, injected into every PeerJS connection via the
