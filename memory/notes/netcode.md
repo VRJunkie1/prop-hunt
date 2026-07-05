@@ -1,113 +1,123 @@
 # netcode
 
-## Two layers since the P2P rebuild
-1. **Signaling** — a WebSocket from each client to the matchmaker
-   (`server/index.js`). Used ONLY to mint/join a room and relay the WebRTC
-   handshake. No gameplay ever crosses it.
-2. **Game transport** — an `RTCDataChannel` from each guest to the host, OR (for
-   the host's own client) a local loopback. The referee (`shared/referee.js`)
-   runs in the host's tab and speaks the unchanged C2S/S2C protocol over whichever
-   transport a given player has.
+## Two layers (since the static-Pages fix, on PeerJS)
+1. **Signaling** — a **PeerJS `Peer`** talks to PeerJS's **free public broker**
+   only to find the other browser and pass the WebRTC handshake. No gameplay ever
+   crosses it. (This replaced a Node matchmaker + hand-rolled RTCPeerConnection
+   code — Cloudflare Pages can't run a Node server, so the deploy 404'd. See
+   project-state.)
+2. **Game transport** — a PeerJS **`DataConnection`** from each guest to the host,
+   OR (for the host's own client) a local loopback. The referee
+   (`shared/referee.js`) runs in the host's tab and speaks the unchanged C2S/S2C
+   protocol over whichever transport a given player has.
 
-All of this lives behind `client/js/net.js` (`Session`). `main.js` only calls
+All of this lives behind `js/net.js` (`Session`). `main.js` only calls
 `session.create/join/send`, reads `session.ready`, and sets `session.onMessage`
-/ `session.onStatus`. It cannot tell host from guest — by design (plan step 3).
+/ `session.onStatus`. It cannot tell host from guest — by design.
 
-## Signaling protocol (`SIG` in `shared/protocol.js`)
-Client → matchmaker: `sig-create{name}`, `sig-join{name,room}`,
-`sig-relay{to,payload}`.
-Matchmaker → client: `sig-created{room,id}` (you're host), `sig-joined{room,id,
-hostId}` (you're a guest), `sig-peer-join{id,name}` (to host: new guest inbound),
-`sig-relay{from,payload}`, `sig-peer-left{id}`, `sig-host-left{}`, `sig-error{msg}`.
-`payload` is an opaque WebRTC blob: `{sdp}` (offer/answer) or `{ice}` (candidate).
-`id` doubles as the game player id, so ids thread through both layers.
+## Room codes & peer ids
+Host mints a 4-char code client-side (unambiguous alphabet, was the matchmaker's
+job). PeerJS ids are one global namespace on the shared broker, so the actual id
+is **`prophunt-<CODE>`** (`PEER_PREFIX` in `net.js`) to avoid colliding with
+other PeerJS apps. Users only ever see/type the 4-char code.
 
-## WebRTC handshake (who does what)
-- Guest joins → matchmaker replies `sig-joined` to the guest AND `sig-peer-join`
-  to the host.
-- **Host is the offerer.** On `sig-peer-join` it creates the `RTCPeerConnection`,
-  creates the data channel (`createDataChannel('game', {ordered:true})`), makes an
-  offer, and relays it. Guest answers. ICE candidates relay both ways.
-- Data channels are **reliable + ordered by explicit config** (`{ordered:true}`,
-  no `maxRetransmits`/`maxPacketLifeTime`). WebRTC defaults to neither; the
-  match-start ordering (STARTED/ROLE/first SNAPSHOT) depends on this (plan step 4).
-- ICE candidates are **buffered until the remote description is set**, then
-  flushed — candidates can outrun the SDP.
-- The host bridges a guest into the referee on `channel.onopen`
-  (`referee.addPlayer`) and out on `channel.onclose`/pc `failed`
-  (`referee.removePlayer`). Channel close — not the signaling socket — is the
-  authoritative "player left" signal.
+## Signaling / handshake (who does what) — all via PeerJS
+- **Host**: `new Peer('prophunt-'+code, {config:{iceServers}})`. On `'open'` it
+  builds the `Referee` and adds itself via the loopback. `peer.on('connection',
+  conn)` fires per guest → bridge `conn` into the referee on `conn.on('open')`.
+  If the id is taken, PeerJS errors `unavailable-id` → retry with a fresh code
+  (up to 5×).
+- **Guest**: `new Peer({config:{iceServers}})` (anonymous id). On `'open'`,
+  `peer.connect('prophunt-'+code, {reliable:true, metadata:{name}})`. Error
+  `peer-unavailable` == no host under that code ("room not found").
+- **PeerJS owns the offer/answer/ICE dance** — we no longer touch SDP or ICE
+  candidates directly. We just inject `iceServers` via the `Peer` `config` option
+  and read the result.
+- Guest name travels in `conn.metadata.name` (replaces the old matchmaker
+  `PEER_JOIN` name). Host reads it in `_hostAccept` to label the lobby row.
 
-## Game protocol (`C2S`/`S2C`) — UNCHANGED by the rebuild
-Same message shapes as the old server model; only the pipe changed. See the
-protocol file for the full list (create/join are gone from C2S — they're SIG now).
-Snapshot player entry: `{id,name,x,z,yaw,alive,hunter,disguise}`, positions
-rounded. `hunter`/`disguise` are the only role leakage to guests.
+## Reliable + ordered
+`peer.connect(..., {reliable: true})`. **PeerJS defaults to UNRELIABLE**, which
+can drop/reorder — the match-start ordering (STARTED/ROLE/first SNAPSHOT) depends
+on reliable+ordered, so the flag is mandatory. (Host doesn't pass options on its
+side; the guest side's `reliable` governs the channel.) Handlers stay
+order-tolerant anyway.
+
+## Data format
+We send **plain JS objects** via `conn.send(obj)` and receive objects in
+`conn.on('data', obj)` — PeerJS serializes (BinaryPack) for us, so there's no
+`JSON.stringify`/`parse` at this layer anymore. The referee's per-player `send`
+callback is just `conn.send(obj)` (guest) or a direct call (host loopback).
+
+## Join/leave = PeerJS events (no more SIG messages)
+- Host: `conn.on('close')`/`'error'` → `referee.removePlayer(guestId)`. This is
+  the authoritative "player left" signal.
+- Guest: `conn.on('close')` → "Host left — the match ended." → teardown.
+- There is a ~10s **give-up timer** each side (`CONNECT_TIMEOUT_MS`): guest timer
+  set in `_startGuest`, cleared on `conn.on('open')`; host per-peer timer in
+  `_hostAccept`. Bounds WebRTC's own much slower failure.
+
+## Game protocol (`C2S`/`S2C`) — UNCHANGED
+Same message shapes as ever; only the pipe changed. `SIG` and the dead
+`C2S.CREATE/JOIN` were removed from `shared/protocol.js`. Snapshot player entry:
+`{id,name,x,z,yaw,alive,hunter,disguise}`, positions rounded. `hunter`/`disguise`
+are the only role leakage to guests.
 
 ## Host authority & the loopback
 The host's own client sends C2S straight into the referee
-(`referee.handleMessage(selfId, msg)`) and the referee replies via a callback
-that calls `session.onMessage` — a zero-latency loopback that behaves exactly
-like the wire. **Verify when touching this:** the host's reconcile-toward-
-authoritative nudge in `main.js` (0.08/frame) converges to a near-no-op because
-its authoritative position tracks its prediction with no round trip. Guests still
-predict against real latency — keep the movement math identical for both.
+(`referee.handleMessage(selfId, msg)`) and the referee replies via a callback that
+calls `session.onMessage` — a zero-latency loopback that behaves exactly like the
+wire. The host's reconcile-toward-authoritative nudge in `main.js` (0.08/frame)
+converges to a near-no-op because its authoritative position tracks its prediction
+with no round trip. Guests still predict against real latency — keep the movement
+math identical for both.
 
 Trust: the host clamps every guest's `mx/mz`/`pitch` and judges all tags/disguises
-from host-held positions. Guests are still untrusted for outcomes. But the HOST
-itself is now authority — no neutral referee anymore (see architecture.md).
+from host-held positions. Guests are untrusted for outcomes. But the HOST itself
+is authority — no neutral referee (see architecture.md).
 
 ## Client-side prediction
-`main.js` predicts only the *local* player: integrate own movement each frame
-using the same formula as the referee, then reconcile toward `serverSelf` at
-0.08/frame. First snapshot of a match snaps the camera to spawn (`state.spawned`).
-Others interpolate toward latest snapshot at 0.25/frame. No rollback/input buffer.
+`main.js` predicts only the *local* player: integrate own movement each frame with
+the same formula as the referee, then reconcile toward `serverSelf` at 0.08/frame.
+First snapshot of a match snaps the camera to spawn (`state.spawned`). Others
+interpolate toward latest snapshot at 0.25/frame. No rollback/input buffer.
 
 ## Rates
 `tickRate` 30 Hz (sim), `snapshotRate` 15 Hz (broadcast), client INPUT send 20 Hz
 (hardcoded in `main.js` startInputLoop).
 
-## NAT traversal / connection reality (the migration's big risk)
-`ICE_SERVERS` in `net.js` = free public **STUN + TURN**. STUN covers most home
-NATs directly. Strict/symmetric NATs (where no direct link can form) now fall
-back to a **TURN relay** — configured with OpenRelay's free public relay
-(`openrelay.metered.ca`, user/cred `openrelayproject`). Swap those three `turn:`
-entries for your own Metered/OpenRelay account creds for a dedicated quota. Still
-**not yet playtested across real networks** (see project-state [9]).
+## NAT traversal / connection reality (still the migration's big risk)
+`ICE_SERVERS` in `js/net.js` = free public **STUN + TURN**, injected via the
+PeerJS `Peer` `config` option. STUN covers most home NATs directly.
+Strict/symmetric NATs fall back to a **TURN relay** (OpenRelay free public relay,
+user/cred `openrelayproject`). Swap those three `turn:` entries for your own
+Metered/OpenRelay account creds for a dedicated quota. **Direct-first is
+preserved** — PeerJS leaves `iceTransportPolicy` at default `'all'`, so the ICE
+agent prefers the cheapest working pair and TURN is fallback-only.
 
-**Direct-first is preserved.** `RTCPeerConnection` is created with only
-`iceServers` — `iceTransportPolicy` is left at its default `'all'` (NOT
-`'relay'`). The ICE agent gathers host/STUN/TURN candidates together and prefers
-the cheapest working pair, so TURN is fallback-only and doesn't burn the free
-quota when a direct link exists. Never set the policy to `'relay'` — it would
-force every player through the relay.
-
-**Connection-type diagnostic (direct vs relayed).** When a link opens, `net.js`
-calls `_reportLink(pc, id)` → `detectRelayed(pc)`, which reads `pc.getStats()`,
-finds the selected candidate pair, and checks whether the *local* candidate is a
-`relay` candidate. It emits `onStatus('link', {id, relayed})`; `main.js` forwards
-to `ui.setLink(id, relayed)`, which paints a small `direct`/`relayed` badge on
-that peer's lobby row. Each player labels only its OWN connection (guest labels
-selfId; host labels each guestId — the host has no pc to itself). Detection is
-deliberately in the net layer; the UI just paints. Purely for playtest telemetry
-(is the relay being leaned on?) — safe to strip later.
-
-**Give-up timer.** `CONNECT_TIMEOUT_MS` (~10s) in `net.js`. Guest: a timer set in
-`_becomeGuest`, cleared on `channel.onopen`; on expiry (if not `ready`) it shows
-"couldn't connect — tell the host" and tears down — bounds WebRTC's own much
-slower `'failed'`. Host: a per-peer timer in `_hostInvite` drops a guest that
-never finishes connecting so it doesn't linger as a ghost peer. The guest's
-`'failed'` handler now also clears the timer + tears down (message no longer says
-"a relay is needed" — a relay IS configured, so a failure means even it couldn't
-carry the traffic).
+**Connection-type diagnostic (direct vs relayed).** On `conn.on('open')`,
+`net.js` calls `_reportLink(conn.peerConnection, id)` → `detectRelayed(pc)`, which
+reads `pc.getStats()`, finds the selected candidate pair, and checks whether the
+*local* candidate is a `relay` candidate. **Key PeerJS detail:** the underlying
+`RTCPeerConnection` is exposed as `conn.peerConnection` — that's how we still reach
+`getStats()`. It emits `onStatus('link', {id, relayed})`; `main.js` forwards to
+`ui.setLink`, which paints the badge. Each player labels only its OWN connection.
 
 ## Gotchas for future sessions
-- Movement formula is duplicated referee + client and MUST match (see
-  architecture.md "Movement convention").
-- STARTED, ROLE, and the first SNAPSHOT can arrive close together; ROLE is sent
-  per-player *before* the STARTED broadcast in `startMatch`. The ordered channel
-  now guarantees delivery order, but handlers stay order-tolerant anyway.
-- A `Session` is single-use: it tears down peers + signaling when a match ends.
+- **PeerJS default is unreliable** — the guest MUST pass `{reliable:true}`.
+- Movement formula is duplicated referee + client and MUST match (architecture.md
+  "Movement convention").
+- `conn.peerConnection` is PeerJS-specific — if you swap transports, re-find the
+  RTCPeerConnection for the direct/relayed badge.
+- A `Session` is single-use: `_teardown()` closes conns + `peer.destroy()`.
   `main.js` builds a fresh one via `newSession()` on return to menu.
-- Two browser tabs on one machine connect fine via loopback/localhost STUN, but
-  that does NOT test real NAT traversal — only two different homes does.
+- Two browser tabs on one machine connect fine via loopback, but that does NOT
+  test real NAT traversal — only two different homes does.
+- We depend on shared free services (PeerJS broker + OpenRelay TURN). If joining
+  gets flaky, suspect one of those before the code.
+- **CDN for the PeerJS lib**: imported from `https://cdn.jsdelivr.net/npm/peerjs@1.5.4/+esm`
+  (three.js likewise moved to jsDelivr in `index.html`). Was esm.sh; switched
+  because esm.sh's on-the-fly transpile can cold-start/redirect slowly enough to
+  fail a headless page load (net::ERR_FAILED). jsDelivr serves a prebuilt ESM
+  bundle and loads reliably — no build step either way. This is the *library*
+  download only; it's unrelated to the PeerJS *broker* (still the free public one).
