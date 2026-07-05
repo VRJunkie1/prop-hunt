@@ -1,0 +1,8 @@
+{
+  "crate": { "shape": "box", "w": 1.2, "h": 1.2, "d": 1.2, "color": "#b5793a" },
+  "barrel": { "shape": "cylinder", "r": 0.6, "h": 1.4, "color": "#3f7d3f" },
+  "chair": { "shape": "box", "w": 0.9, "h": 1.6, "d": 0.9, "color": "#c94f4f" },
+  "crystal": { "shape": "cone", "r": 0.75, "h": 1.8, "color": "#59c6ff" },
+  "ball": { "shape": "sphere", "r": 0.8, "color": "#ffd23f" },
+  "cactus": { "shape": "cylinder", "r": 0.4, "h": 2.0, "color": "#2f9e57" }
+}
