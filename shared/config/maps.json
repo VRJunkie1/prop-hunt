@@ -1,0 +1,35 @@
+{
+  "circus_lot": {
+    "name": "Circus Lot",
+    "size": 40,
+    "ground": "#6b4b8a",
+    "sky": "#d98cff",
+    "hunterSpawn": { "x": 0, "z": 0 },
+    "spawns": [
+      { "x": -15, "z": -15 },
+      { "x": 15, "z": -15 },
+      { "x": -15, "z": 15 },
+      { "x": 15, "z": 15 },
+      { "x": 0, "z": -16 },
+      { "x": 0, "z": 16 },
+      { "x": -16, "z": 0 },
+      { "x": 16, "z": 0 }
+    ],
+    "props": [
+      { "type": "crate", "x": -6, "z": -4 },
+      { "type": "crate", "x": 8, "z": 9 },
+      { "type": "crate", "x": -12, "z": 6 },
+      { "type": "barrel", "x": 4, "z": -8 },
+      { "type": "barrel", "x": -9, "z": -11 },
+      { "type": "barrel", "x": 11, "z": -3 },
+      { "type": "chair", "x": 2, "z": 5 },
+      { "type": "chair", "x": -3, "z": 12 },
+      { "type": "crystal", "x": 13, "z": 13 },
+      { "type": "crystal", "x": -14, "z": -6 },
+      { "type": "ball", "x": 7, "z": 2 },
+      { "type": "ball", "x": -5, "z": 8 },
+      { "type": "cactus", "x": 10, "z": -12 },
+      { "type": "cactus", "x": -11, "z": 14 }
+    ]
+  }
+}

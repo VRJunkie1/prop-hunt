@@ -1,0 +1,14 @@
+{
+  "tickRate": 30,
+  "snapshotRate": 15,
+  "moveSpeed": 6,
+  "minPlayers": 2,
+  "hunterRatio": 0.34,
+  "hidingSeconds": 20,
+  "huntingSeconds": 150,
+  "endingSeconds": 8,
+  "tagRange": 4.5,
+  "tagAngleDeg": 22,
+  "disguiseRange": 4.5,
+  "mapMargin": 1.5
+}
