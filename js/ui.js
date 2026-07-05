@@ -123,7 +123,11 @@ export class UI {
     setTimeout(() => d.remove(), 6000);
   }
 
-  setClickToPlay(visible) {
+  // Overlay visibility is driven by input.js pointer-lock events, not polling:
+  // shown while the mouse is uncaptured, hidden once the browser confirms lock.
+  // An optional message replaces the default prompt to explain a refusal.
+  setClickToPlay(visible, message) {
+    this.el.clickToPlay.textContent = message || 'Click to play';
     this.el.clickToPlay.classList.toggle('hidden', !visible);
   }
 }

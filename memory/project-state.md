@@ -8,7 +8,15 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: static-Pages deploy fix + PeerJS signaling done in code. NOT playtested.
+## Status: FIRST REAL P2P JOIN CONFIRMED. Mouse-look overlay bug fixed this session.
+
+**2026-07 playtest update (VRmike):** the game launches and **two players joined a
+lobby together** — first confirmation the PeerJS/WebRTC join path actually works
+across the wire (partly closes gap [9]; a full round still unverified). One bug
+found and fixed this session: the "Click to play" overlay never dismissed, so
+mouse-look was dead (WASD still worked). See [I] below.
+
+## Status: static-Pages deploy fix + PeerJS signaling done in code.
 
 This session fixed the **broken Cloudflare Pages deploy**. Root cause: the P2P
 rebuild left a Node matchmaker in `server/` and the game nested under `client/`.
@@ -47,6 +55,30 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       headless load. Now `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`
       and `.../peerjs@1.5.4/+esm` — prebuilt ESM, no build step. Broker/TURN
       services unchanged (this was the *library* download only).
+
+### This session (mouse-capture fix)
+- [I] **Fixed the stuck "Click to play" overlay** (pointer-lock never engaged).
+      Root cause: `#clickToPlay` (`.overlay`, `position:absolute; inset:0`, no
+      `pointer-events:none`) is painted **over** the canvas and swallowed the
+      click, so `canvas`'s `click`→`requestPointerLock()` never fired; the overlay
+      then stayed up forever (per-frame poll `!input.locked`). WASD worked because
+      keys listen on `window`. Fix, keeping modules in lane:
+      - `js/input.js` now takes a second arg `lockTrigger` (the overlay element)
+        and requests capture on **its** click, not just the canvas's. It also
+        listens for `pointerlockchange`/`pointerlockerror` and broadcasts
+        `onLockChange(locked)` / `onLockError(reason)`.
+      - `js/main.js` passes `ui.el.clickToPlay` as the trigger, wires the two
+        callbacks to `ui.setClickToPlay(...)`, shows the overlay on match start,
+        and **removed the per-frame poll**. Overlay now hides only when the browser
+        *confirms* lock and reappears on release (Esc/alt-tab) — re-clickable.
+      - `js/ui.js` `setClickToPlay(visible, msg?)` can show a refusal message; a
+        `pointerlockerror` surfaces "browser blocked mouse capture…" instead of
+        silence.
+      - CSS: `.overlay` got `text-align/padding/line-height` so a long refusal
+        message wraps cleanly.
+      Details in `memory/notes/input-mouselook.md`. **Still needs a real 2-player
+      re-test**: click through overlay → mouse-look works → Esc → overlay returns →
+      re-click re-captures, as both host and guest.
 
 ## Open threads / not done — READ BEFORE BUILDING ON THIS
 
@@ -109,5 +141,6 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
 Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
 Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
-`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop). Dead code
+`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
+input-mouselook). Dead code
 awaiting `git rm`: `client/`, `server/`.

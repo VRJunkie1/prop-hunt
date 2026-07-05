@@ -18,7 +18,9 @@ const ui = new UI();
 let session = null; // created in boot() once config is loaded
 const canvas = document.getElementById('view');
 const scene = new Scene3D(canvas);
-const input = new Input(canvas);
+// The overlay covers the canvas, so it (not the canvas) is the element that
+// actually receives the "click to play" click that requests pointer lock.
+const input = new Input(canvas, ui.el.clickToPlay);
 
 const state = {
   selfId: null,
@@ -41,6 +43,18 @@ input.onAction = (name) => {
   if (name === 'primary') name = state.role === ROLE.HUNTER ? 'tag' : 'disguise';
   if (name === 'disguise') tryDisguise();
   if (name === 'tag') session.send({ t: C2S.TAG });
+};
+
+// Overlay visibility follows the browser's real pointer-lock state (input.js
+// events), so it hides only once capture is confirmed and comes back on its
+// own when the mouse is released (Esc, alt-tab) — clickable to re-capture.
+input.onLockChange = (locked) => {
+  const inGame = !ui.el.game.classList.contains('hidden');
+  ui.setClickToPlay(inGame && !locked);
+};
+input.onLockError = (reason) => {
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (inGame) ui.setClickToPlay(true, reason);
 };
 
 function tryDisguise() {
@@ -87,6 +101,8 @@ function handleGameMessage(msg) {
       state.spawned = false;
       scene.buildWorld(state.map, state.props, state.cfg.props);
       ui.show('game');
+      // Entering the game uncaptured — prompt for the click that grabs the mouse.
+      ui.setClickToPlay(!input.locked);
       ui.banner('Get ready…', 1500);
       break;
     }
@@ -221,9 +237,6 @@ function frame(now) {
   scene.setCamera(state.self, input.yaw, input.pitch);
   scene.interpolate(0.25);
   scene.render();
-
-  const inGame = !ui.el.game.classList.contains('hidden');
-  ui.setClickToPlay(inGame && !input.locked);
 
   requestAnimationFrame(frame);
 }
