@@ -1,7 +1,7 @@
 {
   "name": "prop-hunt",
   "version": "0.1.0",
-  "description": "Skeleton multiplayer prop hunt — browser client with an authoritative WebSocket referee server (no port forwarding required).",
+  "description": "Skeleton multiplayer prop hunt — P2P WebRTC between browsers; a tiny Node matchmaker only mints room codes and relays the WebRTC handshake.",
   "type": "module",
   "scripts": {
     "start": "node server/index.js",

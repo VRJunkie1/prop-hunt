@@ -1,16 +1,26 @@
-// Entry point: a single Node process that both serves the browser client over
-// HTTP and runs the authoritative game over WebSockets on the same port.
+// Entry point: a single Node process that serves the browser client over HTTP
+// and runs a tiny WebRTC *matchmaker* over WebSockets on the same port.
 //
-// Because every player connects *outward* to this server, nobody needs to port
-// forward. Deploy this one process to any cloud host (see README) and share the
-// URL. Locally, `npm start` then open http://localhost:3000.
+// Since the P2P rebuild this process holds NO game logic and NO game state. Its
+// whole job is:
+//   1. serve the static client + shared modules + assets;
+//   2. mint room codes and pair peers (create / join);
+//   3. relay WebRTC handshake blobs (SDP offers/answers + ICE) between a host
+//      and each guest so their browsers can open a direct connection.
+//
+// Once two browsers have shaken hands, all gameplay flows peer-to-peer over an
+// RTCDataChannel and never touches this server again. A browser still needs a
+// rendezvous point to find its peers — that's this. It stays cheap: it moves a
+// handful of tiny handshake messages per join and nothing during a match.
+//
+// Deploy this one process to any cloud host (see README). Locally: `npm start`
+// then open http://localhost:3000.
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
-import { Room } from './Room.js';
-import { C2S, S2C } from '../shared/protocol.js';
+import { SIG } from '../shared/protocol.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, '..');
@@ -63,8 +73,10 @@ async function serveStatic(req, res) {
 const server = http.createServer(serveStatic);
 const wss = new WebSocketServer({ server });
 
-// ---- room manager ---------------------------------------------------------
-const rooms = new Map(); // code -> Room
+// ---- matchmaker -----------------------------------------------------------
+// A room is just a rendezvous group: the host's peer id + every connected
+// signaling socket keyed by peer id (the host is in here too). No game state.
+const rooms = new Map(); // code -> { code, hostId, sockets: Map<peerId, socket> }
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 
 function makeCode() {
@@ -75,10 +87,13 @@ function makeCode() {
   return code;
 }
 
-let nextPlayerId = 1;
+let nextPeerId = 1;
 
 wss.on('connection', (socket) => {
-  const player = { id: `p${nextPlayerId++}`, name: 'Player', socket, room: null };
+  // Per-connection signaling identity. `peerId` doubles as the player's game id
+  // once the peer-to-peer link is up, so the same id threads through both layers.
+  socket.peerId = null;
+  socket.roomCode = null;
 
   socket.on('message', (raw) => {
     let msg;
@@ -88,39 +103,80 @@ wss.on('connection', (socket) => {
       return;
     }
 
-    // Lobby entry messages are handled by the manager; everything else routes
-    // to the room the player is in.
-    if (msg.t === C2S.CREATE || msg.t === C2S.JOIN) {
-      if (player.room) return; // already in a room
-      player.name = String(msg.name || 'Player').slice(0, 16).trim() || 'Player';
-
-      if (msg.t === C2S.CREATE) {
+    switch (msg.t) {
+      case SIG.CREATE: {
+        if (socket.roomCode) return; // already in a room
+        const name = cleanName(msg.name);
         const code = makeCode();
-        const room = new Room(code, (c) => rooms.delete(c));
-        rooms.set(code, room);
-        room.addPlayer(player);
-      } else {
+        socket.peerId = `p${nextPeerId++}`;
+        socket.roomCode = code;
+        socket.name = name;
+        rooms.set(code, { code, hostId: socket.peerId, sockets: new Map([[socket.peerId, socket]]) });
+        send(socket, { t: SIG.CREATED, room: code, id: socket.peerId });
+        break;
+      }
+
+      case SIG.JOIN: {
+        if (socket.roomCode) return;
         const code = String(msg.room || '').toUpperCase().trim();
         const room = rooms.get(code);
         if (!room) {
-          send(socket, { t: S2C.ERROR, msg: `Room "${code}" not found.` });
+          send(socket, { t: SIG.ERROR, msg: `Room "${code}" not found.` });
           return;
         }
-        room.addPlayer(player);
+        const name = cleanName(msg.name);
+        socket.peerId = `p${nextPeerId++}`;
+        socket.roomCode = code;
+        socket.name = name;
+        room.sockets.set(socket.peerId, socket);
+        // Tell the joiner who to hand-shake with...
+        send(socket, { t: SIG.JOINED, room: code, id: socket.peerId, hostId: room.hostId });
+        // ...and tell the host a new peer is inbound so it kicks off the offer.
+        const host = room.sockets.get(room.hostId);
+        if (host) send(host, { t: SIG.PEER_JOIN, id: socket.peerId, name });
+        break;
       }
-      return;
-    }
 
-    if (player.room) player.room.handleMessage(player, msg);
+      case SIG.RELAY: {
+        // Pass a WebRTC handshake blob straight through to the named peer in the
+        // same room. The matchmaker never inspects the payload.
+        const room = rooms.get(socket.roomCode);
+        if (!room) return;
+        const target = room.sockets.get(msg.to);
+        if (target) send(target, { t: SIG.RELAY, from: socket.peerId, payload: msg.payload });
+        break;
+      }
+
+      default:
+        break;
+    }
   });
 
   const cleanup = () => {
-    if (player.room) player.room.removePlayer(player);
-    player.room = null;
+    const room = rooms.get(socket.roomCode);
+    if (!room) return;
+    room.sockets.delete(socket.peerId);
+
+    if (room.hostId === socket.peerId) {
+      // Host is the referee. When it drops, the match is over: tell everyone and
+      // discard the room. (Host migration is deliberately out of scope.)
+      for (const s of room.sockets.values()) send(s, { t: SIG.HOST_LEFT });
+      rooms.delete(room.code);
+    } else {
+      // A guest dropped its signaling socket. Note the P2P game link may still be
+      // alive; the host treats channel close as the real "player left" signal.
+      const host = room.sockets.get(room.hostId);
+      if (host) send(host, { t: SIG.PEER_LEFT, id: socket.peerId });
+      if (room.sockets.size === 0) rooms.delete(room.code);
+    }
   };
   socket.on('close', cleanup);
   socket.on('error', cleanup);
 });
+
+function cleanName(raw) {
+  return String(raw || 'Player').slice(0, 16).trim() || 'Player';
+}
 
 function send(socket, obj) {
   try {
@@ -131,5 +187,5 @@ function send(socket, obj) {
 }
 
 server.listen(PORT, () => {
-  console.log(`Prop Hunt server listening on http://localhost:${PORT}`);
+  console.log(`Prop Hunt matchmaker listening on http://localhost:${PORT}`);
 });
