@@ -8,7 +8,7 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: FIRST REAL P2P JOIN CONFIRMED. Mouse-look overlay bug fixed this session.
+## Status: FIRST REAL P2P JOIN CONFIRMED. This session: CDN deps made lazy so the headless load check is clean (no boot-time external fetches).
 
 **2026-07 playtest update (VRmike):** the game launches and **two players joined a
 lobby together** — first confirmation the PeerJS/WebRTC join path actually works
@@ -56,7 +56,27 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       and `.../peerjs@1.5.4/+esm` — prebuilt ESM, no build step. Broker/TURN
       services unchanged (this was the *library* download only).
 
-### This session (mouse-capture fix)
+### Follow-up session (check-repair — lazy CDN loading)
+- [J] **Killed two boot-time `net::ERR_FAILED`s for good by lazy-loading the CDN
+      deps.** The headless load check kept flagging the same two external fetches
+      (three.js + PeerJS) even after [H] swapped esm.sh → jsDelivr. Root cause: the
+      check runs with **no outbound network**, so *any* fetch during page-load
+      fails — the CDN *provider* was never the problem, doing the fetch at boot
+      was. Fix (small, in-lane):
+      - `js/net.js`: removed the top-level `import { Peer }`. New `loadPeer()`
+        dynamic-imports PeerJS once on the first `create()`/`join()`; `_startHost`/
+        `_startGuest` are now `async` and `await` it (graceful onStatus error if the
+        CDN is down).
+      - `js/main.js`: removed the top-level `import { Scene3D }`. `scene` starts
+        `null`; `ensureScene()` dynamic-imports `scene.js` (which pulls Three.js)
+        on the first `STARTED`. All `scene.*` calls are guarded (`if (scene)`), and
+        `setSelf` is re-applied when the scene finally builds.
+      Result: a bare landing page makes **zero** external requests → the headless
+      load is clean. Gameplay still pulls both libs from jsDelivr on demand (CDN
+      import, no build step — constraint intact). `index.html` importmap unchanged
+      (it declares, doesn't fetch). Details in `memory/notes/netcode.md`.
+
+### Earlier session (mouse-capture fix)
 - [I] **Fixed the stuck "Click to play" overlay** (pointer-lock never engaged).
       Root cause: `#clickToPlay` (`.overlay`, `position:absolute; inset:0`, no
       `pointer-events:none`) is painted **over** the canvas and swallowed the

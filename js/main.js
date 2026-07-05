@@ -10,14 +10,25 @@
 import { loadConfig } from './config.js';
 import { Session } from './net.js';
 import { Input } from './input.js';
-import { Scene3D } from './scene.js';
 import { UI } from './ui.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 
 const ui = new UI();
 let session = null; // created in boot() once config is loaded
 const canvas = document.getElementById('view');
-const scene = new Scene3D(canvas);
+// scene.js pulls Three.js from a CDN, so it is imported LAZILY (built on the
+// first match start, not at page load). That keeps a bare landing page free of
+// external requests — the headless load check never triggers the CDN fetch. See
+// ensureScene() and the STARTED handler.
+let scene = null;
+async function ensureScene() {
+  if (!scene) {
+    const { Scene3D } = await import('./scene.js');
+    scene = new Scene3D(canvas);
+    if (state.selfId) scene.setSelf(state.selfId);
+  }
+  return scene;
+}
 // The overlay covers the canvas, so it (not the canvas) is the element that
 // actually receives the "click to play" click that requests pointer lock.
 const input = new Input(canvas, ui.el.clickToPlay);
@@ -81,7 +92,7 @@ function handleGameMessage(msg) {
     case S2C.JOINED:
       state.selfId = msg.id;
       state.room = msg.room;
-      scene.setSelf(msg.id);
+      if (scene) scene.setSelf(msg.id); // else applied when ensureScene() builds it
       ui.show('lobby');
       break;
 
@@ -99,7 +110,8 @@ function handleGameMessage(msg) {
       state.props = msg.props;
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
-      scene.buildWorld(state.map, state.props, state.cfg.props);
+      // First time we need Three.js: build the renderer now (lazy CDN load).
+      ensureScene().then((s) => s.buildWorld(state.map, state.props, state.cfg.props));
       ui.show('game');
       // Entering the game uncaptured — prompt for the click that grabs the mouse.
       ui.setClickToPlay(!input.locked);
@@ -162,7 +174,7 @@ function backToMenu(msg) {
 function onSnapshot(msg) {
   state.phase = msg.phase;
   ui.setHud(msg);
-  scene.syncPlayers(msg.players);
+  if (scene) scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
     state.serverSelf.x = me.x;
@@ -234,9 +246,11 @@ function frame(now) {
     state.self.z += (state.serverSelf.z - state.self.z) * 0.08;
   }
 
-  scene.setCamera(state.self, input.yaw, input.pitch);
-  scene.interpolate(0.25);
-  scene.render();
+  if (scene) {
+    scene.setCamera(state.self, input.yaw, input.pitch);
+    scene.interpolate(0.25);
+    scene.render();
+  }
 
   requestAnimationFrame(frame);
 }
