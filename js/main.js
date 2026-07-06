@@ -287,6 +287,11 @@ function wireMenu() {
     ui.el.readyBtn.textContent = ui.el.readyBtn._ready ? 'Not ready' : 'Ready';
   });
   ui.el.startBtn.addEventListener('click', () => session.send({ t: C2S.START }));
+  // Map picker: the UI renders the list from the shared maps catalog and, when the
+  // host taps a map, hands the choice back here to send as a C2S.PICK_MAP. The
+  // referee is the gate (host-only, LOBBY-only, real map); we just relay the tap.
+  ui.maps = state.cfg.maps;
+  ui.onPickMap = (mapId) => session.send({ t: C2S.PICK_MAP, mapId });
   // Copy a one-click invite link (room code in the URL hash) so the host can
   // paste it in chat and friends just click to join.
   ui.el.copyLinkBtn.addEventListener('click', async () => {

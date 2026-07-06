@@ -33,7 +33,10 @@ export class Referee {
   constructor(config, code) {
     this.rules = config.rules;
     this.maps = config.maps;
-    this.mapId = Object.keys(this.maps)[0]; // DEFAULT_MAP_ID
+    // DEFAULT_MAP_ID: the first map in maps.json until the host picks another via
+    // setMapId(). This is the ONLY place the map choice lives; startMatch/integrate
+    // read it without re-validating (see setMapId for why the id is trusted).
+    this.mapId = Object.keys(this.maps)[0];
 
     this.code = code;
     this.players = new Map(); // id -> player
@@ -101,6 +104,9 @@ export class Referee {
       case C2S.START:
         if (player.id === this.hostId) this.startMatch();
         break;
+      case C2S.PICK_MAP:
+        this.setMapId(msg.mapId, player.id);
+        break;
       case C2S.INPUT:
         this.applyInput(player, msg);
         break;
@@ -166,6 +172,22 @@ export class Referee {
     } else {
       send(hunter, { t: S2C.EVENT, kind: 'miss' });
     }
+  }
+
+  // ---- lobby settings -----------------------------------------------------
+  // The ONE gate for the lobby map choice. All guard rails live here so nothing
+  // downstream re-checks: only the host may pick, only during LOBBY, and only a
+  // map id that actually exists in the maps file. A tampered client can send
+  // C2S.PICK_MAP with anything — if it fails a rail, nothing changes. Once stored,
+  // this.mapId is trusted by startMatch/integrate (single source of truth, so the
+  // two can't drift). Rebroadcasts the lobby so every screen agrees on the pick.
+  setMapId(id, byId) {
+    if (byId !== this.hostId) return; // host-authority: guests can't change the map
+    if (this.phase !== PHASE.LOBBY) return; // only choosable before the match starts
+    if (!this.maps[id]) return; // must be a real map in maps.json
+    if (id === this.mapId) return; // no-op: avoid a redundant lobby rebroadcast
+    this.mapId = id;
+    this.broadcastLobby();
   }
 
   // ---- match lifecycle ----------------------------------------------------
@@ -235,6 +257,11 @@ export class Referee {
   resetToLobby() {
     this.phase = PHASE.LOBBY;
     this.props = [];
+    // DELIBERATE CARVE-OUT: this.mapId is NOT reset here. A reset-to-lobby clears
+    // per-player round state (roles/alive/disguise/ready), but the chosen map is a
+    // lobby *setting*, not per-player state — so the last-picked map stays selected
+    // for the next round. Documented exception to "fresh lobby", not a silent
+    // branch (see memory/notes/map-selection.md).
     for (const p of this.players.values()) {
       p.role = null;
       p.alive = true;
@@ -303,7 +330,9 @@ export class Referee {
 
   broadcastLobby() {
     const players = [...this.players.values()].map((p) => ({ id: p.id, name: p.name, ready: p.ready }));
-    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase });
+    // mapId rides along so every lobby screen (including a late joiner) shows the
+    // host's current pick; the picker UI highlights it and renders from maps.json.
+    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase, mapId: this.mapId });
   }
 
   broadcastSnapshot() {

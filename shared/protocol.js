@@ -13,6 +13,7 @@
 export const C2S = {
   READY: 'ready', // { ready }                     -> toggle ready in lobby
   START: 'start', // {}                            -> host starts the match
+  PICK_MAP: 'pickMap', // { mapId }                     -> host chooses the lobby map (host-only; referee is the gate)
   INPUT: 'input', // { mx, mz, yaw, pitch }        -> movement + look intent
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
   TAG: 'tag', // {}                            -> hunter attempts a tag
@@ -21,7 +22,7 @@ export const C2S = {
 // Referee -> Client message types.
 export const S2C = {
   JOINED: 'joined', // { id, room, host }
-  LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}] }
+  LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}], phase, mapId }
   STARTED: 'started', // { mapId, props:[{id,type,x,z,rot}] }
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state (see Room.buildSnapshot)

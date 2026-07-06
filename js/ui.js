@@ -15,6 +15,7 @@ export class UI {
       playerList: $('playerList'),
       readyBtn: $('readyBtn'),
       startBtn: $('startBtn'),
+      mapList: $('mapList'),
       copyLinkBtn: $('copyLinkBtn'),
       lobbyHint: $('lobbyHint'),
       hud: $('hud'),
@@ -30,6 +31,14 @@ export class UI {
     // a playtest can see whether the free TURN relay is being leaned on. Purely
     // informational; the network layer fills it via setLink().
     this.links = new Map();
+
+    // Map picker data + callback, injected by main.js at boot. `maps` is the
+    // shared maps.json catalog (the picker renders straight from it — data-driven,
+    // so new maps need zero UI code). `onPickMap(mapId)` fires when the host taps a
+    // map. The UI holds NO "am I host / is this legal" logic — the referee is the
+    // gate; the picker only disables buttons for non-hosts cosmetically.
+    this.maps = null;
+    this.onPickMap = () => {};
   }
 
   show(screen) {
@@ -49,7 +58,7 @@ export class UI {
     this.el.lobbyHint.textContent = msg || '';
   }
 
-  renderLobby({ room, hostId, players }, selfId) {
+  renderLobby({ room, hostId, players, mapId }, selfId) {
     this.el.lobbyCode.textContent = room;
     this.el.playerList.innerHTML = '';
     for (const p of players) {
@@ -69,9 +78,33 @@ export class UI {
     }
     const isHost = hostId === selfId;
     this.el.startBtn.classList.toggle('hidden', !isHost);
+    this.renderMapPicker(mapId, isHost);
     this.el.lobbyHint.textContent = isHost
       ? `You are host. Start when everyone has joined (min ${players.length >= 2 ? '' : '2 '}players).`
       : 'Waiting for the host to start…';
+  }
+
+  // Render the lobby map picker straight from the shared maps catalog. Every
+  // client shows the list and highlights the current pick (so a late joiner sees
+  // it too); only the host's buttons are live — non-hosts get them disabled, which
+  // is purely cosmetic (the referee ignores a non-host pick regardless). Tapping a
+  // map emits onPickMap(id); it does NOT change local state — the choice comes back
+  // authoritatively in the next LOBBY message. No game logic here by house rule.
+  renderMapPicker(mapId, isHost) {
+    const list = this.el.mapList;
+    if (!list) return;
+    list.innerHTML = '';
+    if (!this.maps) return;
+    for (const [id, m] of Object.entries(this.maps)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'map-btn' + (id === mapId ? ' selected' : '');
+      btn.textContent = m.name || id;
+      btn.dataset.mapId = id;
+      btn.disabled = !isHost; // cosmetic: non-hosts can look but not pick
+      if (isHost) btn.addEventListener('click', () => this.onPickMap(id));
+      list.appendChild(btn);
+    }
   }
 
   // Record and paint how a peer connected. Called by the network layer once a

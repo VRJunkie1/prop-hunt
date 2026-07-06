@@ -31,5 +31,36 @@
       { "type": "cactus", "x": 10, "z": -12 },
       { "type": "cactus", "x": -11, "z": 14 }
     ]
+  },
+  "toy_workshop": {
+    "name": "Toy Workshop",
+    "size": 32,
+    "ground": "#2f4858",
+    "sky": "#8ecae6",
+    "hunterSpawn": { "x": 0, "z": 0 },
+    "spawns": [
+      { "x": -12, "z": -12 },
+      { "x": 12, "z": -12 },
+      { "x": -12, "z": 12 },
+      { "x": 12, "z": 12 },
+      { "x": 0, "z": -13 },
+      { "x": 0, "z": 13 },
+      { "x": -13, "z": 0 },
+      { "x": 13, "z": 0 }
+    ],
+    "props": [
+      { "type": "crate", "x": -5, "z": -3 },
+      { "type": "crate", "x": 6, "z": 7 },
+      { "type": "barrel", "x": -8, "z": 5 },
+      { "type": "barrel", "x": 9, "z": -6 },
+      { "type": "chair", "x": 3, "z": 3 },
+      { "type": "chair", "x": -2, "z": 10 },
+      { "type": "chair", "x": 11, "z": 2 },
+      { "type": "ball", "x": -10, "z": -9 },
+      { "type": "ball", "x": 5, "z": -10 },
+      { "type": "crystal", "x": -12, "z": 11 },
+      { "type": "crystal", "x": 12, "z": -12 },
+      { "type": "cactus", "x": 0, "z": 8 }
+    ]
   }
 }

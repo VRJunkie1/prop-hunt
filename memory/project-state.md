@@ -8,7 +8,25 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: FIRST REAL P2P JOIN CONFIRMED. This session: CDN deps made lazy so the headless load check is clean (no boot-time external fetches).
+## Status: LOBBY MAP SELECTION BUILT (this session, on `vrmike/dev`).
+
+The host can now pick the round's map from the lobby (two maps: `circus_lot` +
+`toy_workshop`). One validation gate (`Referee.setMapId`), one new lobby message
+(`C2S.PICK_MAP`), a data-driven picker UI, and the pick survives reset-to-lobby.
+Full detail: `memory/notes/map-selection.md`. **Not yet playtested** (see the
+map-selection checklist under Open threads).
+
+**Why this was a "finish the broken build":** an earlier map-selection attempt
+lived on branch **`jie/dev`** (commits "The lobby host should be able to see a list
+of available maps to play" + "BUILD IT"). The active branch became `vrmike/dev`,
+cut from a point *before* that work, so the partial build was stranded on `jie/dev`
+and the working tree looked untouched ("someone broke it by renaming the channel"
+= the branch switch). I could not reach `jie/dev`'s file contents (no shell; git
+objects are compressed), so I reimplemented cleanly on `vrmike/dev` against the
+seam the notes already named, per VRmike's approved plan. **If `jie/dev` is ever
+pulled back, diff — do NOT blind-merge; this `vrmike/dev` version is intended.**
+
+## Status: FIRST REAL P2P JOIN CONFIRMED. Earlier session: CDN deps made lazy so the headless load check is clean (no boot-time external fetches).
 
 **2026-07 playtest update (VRmike):** the game launches and **two players joined a
 lobby together** — first confirmation the PeerJS/WebRTC join path actually works
@@ -139,7 +157,12 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       for skeleton; future: auto-disguise at hunt start, or hide undisguised props.
 - No client-side prediction of collisions; players can overlap props/walls.
 - `ready` flag exists in lobby but host can start regardless — intentional.
-- Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
+- **Map selection: BUILT this session** (host picks from the lobby; `circus_lot`
+  + `toy_workshop`). Adding more maps stays data-only. **Playtest still owed:**
+  host picks a non-default map → everyone spawns in it; a late lobby joiner sees
+  the current selection; a non-host's pick attempt is ignored; disguise + tag work
+  on the second map; after a reset-to-lobby the pick survives. See
+  `memory/notes/map-selection.md`.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 
 ## Key decisions
@@ -162,5 +185,5 @@ Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
 Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
 `shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
-input-mouselook). Dead code
+input-mouselook, map-selection). Dead code
 awaiting `git rm`: `client/`, `server/`.

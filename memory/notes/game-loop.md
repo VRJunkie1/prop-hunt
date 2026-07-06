@@ -19,9 +19,17 @@ checked each tick.
 
 `setPhase(phase, seconds)` sets the timer and broadcasts an `event{kind:'phase'}`.
 
+## Map selection (lobby)
+The host picks the map before starting via `C2S.PICK_MAP{mapId}` →
+`Referee.setMapId(id, byId)`, the single validation gate (host-only, LOBBY-only,
+must exist). Stored in `this.mapId` and echoed in every `S2C.LOBBY` (so late
+joiners see it). `startMatch`/`integrate` read `this.mapId` without re-validating.
+Full detail in `memory/notes/map-selection.md`.
+
 ## startMatch
 1. Guard: LOBBY + ≥ minPlayers.
-2. Build authoritative prop instances from `maps[mapId].props` (assign ids).
+2. Build authoritative prop instances from `maps[this.mapId].props` (assign ids) —
+   `this.mapId` is the host's lobby pick, trusted (validated at pick time).
 3. Shuffle players; `hunterCount = max(1, round(n * hunterRatio))`. First N are
    hunters (spawn at `map.hunterSpawn`), rest are props (round-robin
    `map.spawns`). Send each a private `role`.
@@ -46,11 +54,13 @@ skeleton; revisit alongside the "undisguised props are visible" gap.
 `checkRoundOver`: if props existed and none are alive → hunters win → ENDING.
 Hunt-timer expiry in `tick` → props win → ENDING. `resetToLobby` clears roles /
 alive / disguise / ready and broadcasts `lobby{phase:'lobby'}` (how clients know
-to show the lobby screen again).
+to show the lobby screen again). **It deliberately does NOT reset `this.mapId`** —
+the map is a lobby setting, not per-player state, so the pick survives a
+reset-to-lobby (documented carve-out; see map-selection.md).
 
 ## Extending (intended seams)
 - New map: add to `maps.json`. New prop type: add to `props.json` + reference it
-  in a map. No engine edits.
+  in a map. No engine edits. (The lobby map picker renders new maps automatically.)
 - New abilities/rules: add fields to `rules.json`, read them in `Room`.
-- Map selection: the referee currently defaults `this.mapId` to the first map in
-  `maps.json`; add a lobby setting + a `Referee.mapId` setter to choose.
+- Map selection: DONE — `Referee.setMapId()` + `C2S.PICK_MAP` + lobby picker. See
+  `memory/notes/map-selection.md`.
