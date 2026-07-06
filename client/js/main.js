@@ -302,8 +302,8 @@ function startInputLoop() {
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 // ---- menu wiring ----------------------------------------------------------
-// Create/join go through the matchmaker (signaling); everything after (ready,
-// start, and all gameplay) rides the peer link via session.send().
+// Create/join go through PeerJS's broker (peer introduction); everything after
+// (start and all gameplay) rides the peer link via session.send().
 function wireMenu() {
   const nameEl = ui.el.name;
   document.getElementById('createBtn').addEventListener('click', () => {

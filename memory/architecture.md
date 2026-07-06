@@ -5,9 +5,9 @@ Updated by dev sessions whenever a change alters the design.
 ## Shape
 
 Browser clients play **peer-to-peer over WebRTC**. The room creator's browser is
-the **host**: it runs the referee (authoritative game state) in-tab. A tiny Node
-**matchmaker** serves the static client and relays the WebRTC handshake; it holds
-no game state and sees no gameplay.
+the **host**: it runs the referee (authoritative game state) in-tab. The app is
+**fully static** — no backend of ours. Peer introduction (room codes + WebRTC
+handshake relay) is done by **PeerJS's free public broker**; we run nothing.
 
 ```
 guest browser  --RTCDataChannel-->  HOST browser (referee)
@@ -17,8 +17,8 @@ guest browser  --RTCDataChannel-->  HOST browser (referee)
                                        host's OWN client talks to the
                                        referee via a local loopback
         \                             /
-         \  --WebSocket (signaling)--/
-          matchmaker: room codes + relay WebRTC offer/answer/ICE only
+         \  --PeerJS broker (0.peerjs.com, free/public)--/
+          introduces peers by id + relays SDP/ICE only; not ours to run
 ```
 
 ## The load-bearing decision — REVERSED 2026-07 (P2P rebuild)
@@ -38,8 +38,11 @@ bought and cost, stated plainly so nobody re-discovers it the hard way:
   a paid, always-on server carrying live game traffic. Currently **NO-GO / not
   configured**, so some networks can't join. This is the single biggest risk and
   the thing to playtest (see project-state).
-- **Cost — "no server" is not literally true.** Browsers can't find each other
-  unaided; the matchmaker is a small always-on service. It's just tiny now.
+- **Cost — we depend on a third-party broker.** Browsers can't find each other
+  unaided. That introduction is now done by PeerJS's **free public broker**
+  (0.peerjs.com) — we don't run it, but it's a shared best-effort service we
+  don't control (it can rate-limit or go down; room ids share a global
+  namespace, so we prefix them `prophunt-`). No server of ours is the point.
 - **Cost — anti-cheat given up.** The host's browser holds the full unfiltered
   state (including who's an undisguised prop). A determined host can inspect or
   tamper with it. Guests still get filtered snapshots; guest *input* is still
@@ -50,16 +53,20 @@ bought and cost, stated plainly so nobody re-discovers it the hard way:
 If a future session considers moving back, that's a legitimate call — this
 reversal was a product decision, not a technical necessity.
 
-## Matchmaker (`server/`)
+## Peer introduction (PeerJS public broker — nothing of ours)
 
-- `index.js` — HTTP static file server (serves `client/`, `/shared/`, `/assets/`)
-  + a `ws` WebSocketServer for **signaling only**. Mints 4-char room codes
-  (unambiguous alphabet), pairs peers (create/join), and relays WebRTC handshake
-  blobs (`SIG.RELAY`) between a host and each guest by peer id. On host
-  disconnect it tells everyone (`SIG.HOST_LEFT`) and drops the room; on guest
-  disconnect it tells the host (`SIG.PEER_LEFT`). **No game logic, no tick, no
-  config.** (The old `Room.js` and `config.js` were deleted; rules moved to
-  `shared/referee.js`.)
+- There is **no `server/` anymore.** Peer discovery + WebRTC handshake relay is
+  done by PeerJS's free public broker. `client/js/net.js` just uses the PeerJS
+  client library (imported from esm.sh). Room codes are minted client-side (the
+  host claims the peer id `prophunt-<CODE>`; a collision on the shared broker
+  fires `unavailable-id` and it retries with a new code). Host-left / guest-left
+  are detected from **DataConnection `close`**, not a broker event.
+- `server/` still physically exists as **tombstones** (`index.js`, `Room.js`,
+  `config.js`) only because this environment has no file-deletion tool. Nothing
+  imports or runs them. `git rm -r server/` when a shell is available.
+- The static files (`index.html` at the repo root, `client/`, `shared/`,
+  `assets/`) are served by any static host — set up for **Cloudflare Pages**,
+  no build step, output dir = repo root. See README.
 
 ## Referee (`shared/referee.js`) — runs in the HOST browser
 
@@ -76,16 +83,22 @@ reversal was a product decision, not a technical necessity.
 ## Client (`client/`)
 
 No build step. Three.js loaded from CDN via `<script type="importmap">`.
+`index.html` lives at the **repo root** (static hosts serve it as the index) and
+references the game code by absolute path (`/client/css`, `/client/js`,
+`/shared`, `/assets`); the JS/CSS themselves stay under `client/`.
 
 - `main.js` — glue + render loop + light client-side prediction for the local
   player (integrates own movement each frame, reconciles toward the authoritative
   pos at 0.08/frame). Sends INPUT at 20 Hz via `session.send`. Identical code for
   host and guest.
-- `net.js` — the **dual-mode network layer** (`Session`): a signaling WebSocket
-  to the matchmaker, plus either (host) an in-tab `Referee` + loopback link + a
-  bridge from each guest's `RTCDataChannel` into the referee, or (guest) one
-  `RTCDataChannel` to the host. Data channels are configured **reliable +
-  ordered** explicitly. ICE servers (STUN; TURN placeholder) live here.
+- `net.js` — the **dual-mode network layer** (`Session`), now built on **PeerJS**
+  (imported from esm.sh): either (host) claim `prophunt-<CODE>` on the broker,
+  build an in-tab `Referee` + loopback link, and bridge each guest's
+  `DataConnection` into the referee, or (guest) open one `DataConnection` to the
+  host. Connections are opened **reliable + ordered** (`reliable:true`) with
+  `serialization:'json'`. ICE config (STUN; TURN placeholder) is `PEER_CONFIG`
+  here — the successor to the old `ICE_SERVERS`. Guest name reaches the host via
+  the connection's `metadata`. PeerJS does all SDP/ICE plumbing internally.
 - `input.js` — WASD + pointer-lock mouse look; emits action events.
 - `scene.js` — all Three.js. Builds world from config, reconciles player meshes
   to snapshots, interpolates others, first-person camera for self.
@@ -94,11 +107,10 @@ No build step. Three.js loaded from CDN via `<script type="importmap">`.
 
 ## Shared (`shared/`)
 
-- `protocol.js` — **two protocols**: `SIG` (client ↔ matchmaker signaling) and
-  the unchanged `C2S`/`S2C`/`PHASE`/`ROLE` (client ↔ referee). Dependency-free
-  ESM, loaded by both runtimes.
-- `referee.js` — the authoritative referee (see above). Browser-only in practice
-  (the matchmaker never imports it).
+- `protocol.js` — **one protocol**: `C2S`/`S2C`/`PHASE`/`ROLE` (client ↔
+  referee). Dependency-free ESM. The old `SIG` signaling protocol is gone —
+  PeerJS's broker owns peer introduction, so there's no signaling of ours.
+- `referee.js` — the authoritative referee (see above). Browser-only.
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
   `maps.json` (size, colors, spawns, prop placements), `props.json` (prop-type
   catalog). Adding maps/props needs no engine change.

@@ -1,35 +1,18 @@
-// Shared message protocol.
-// Imported by the Node matchmaker (../shared/protocol.js) and by the browser
-// client (served at /shared/protocol.js). Keep it dependency-free ESM so both
-// runtimes can load it unchanged.
+// Shared message protocol between the browser client and the in-browser referee.
+// Dependency-free ESM, loaded by the client (served at /shared/protocol.js) and
+// by the referee (shared/referee.js) — same file, one language.
 //
-// Two separate protocols live here since the P2P rebuild:
-//   - SIG: client <-> matchmaker over WebSocket. Room codes + WebRTC handshake
-//     relay only. The matchmaker never sees a game message.
-//   - C2S/S2C: client <-> referee. Unchanged by the rebuild — they used to ride
-//     a WebSocket to a server-side referee; now they ride an RTCDataChannel to
-//     the host's in-browser referee (or a local loopback for the host itself).
-//     The referee speaks exactly the same language regardless of transport.
+// Only ONE protocol lives here: C2S/S2C, client <-> referee. It used to ride a
+// WebSocket to a server-side referee; now it rides a PeerJS DataConnection to
+// the host's in-browser referee (or a local loopback for the host itself). The
+// referee speaks exactly the same language regardless of transport.
+//
+// The old SIG (client <-> matchmaker) protocol is gone: PeerJS's public broker
+// now does the room-code + WebRTC handshake introduction, so there is no
+// signaling protocol of our own to define. See client/js/net.js.
 
-// ---- Signaling: client <-> matchmaker (WebSocket) -------------------------
-export const SIG = {
-  // Client -> matchmaker
-  CREATE: 'sig-create', // { name }              -> make a room, become its host
-  JOIN: 'sig-join', // { name, room }        -> ask to join; matchmaker links you to the host
-  RELAY: 'sig-relay', // { to, payload }       -> pass a WebRTC handshake blob to peer `to`
-  // Matchmaker -> client
-  CREATED: 'sig-created', // { room, id }          -> you are host; `id` is your peer/player id
-  JOINED: 'sig-joined', // { room, id, hostId }  -> you may now offer/answer to `hostId`
-  PEER_JOIN: 'sig-peer-join', // { id, name }          -> (to host) a new peer wants to connect
-  PEER_LEFT: 'sig-peer-left', // { id }                -> a peer's signaling socket dropped
-  HOST_LEFT: 'sig-host-left', // {}                    -> the host is gone; the room is dead
-  ERROR: 'sig-error', // { msg }
-};
-
-// Client -> Referee message types (over DataChannel to the host, or loopback).
+// Client -> Referee message types (over the PeerJS DataConnection, or loopback).
 export const C2S = {
-  CREATE: 'create', // { name }                     -> create a room, become host
-  JOIN: 'join', // { name, room }               -> join an existing room
   PICK_TEAM: 'pickTeam', // { team:'hunter'|'prop'|null }  -> choose a lobby team (replaces ready)
   PICK_MAP: 'pickMap', // { mapId }                     -> host chooses which map to play (host + lobby only)
   START: 'start', // {}                            -> host starts the match
