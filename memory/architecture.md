@@ -88,7 +88,13 @@ No build step. Three.js loaded from CDN via `<script type="importmap">`.
   ordered** explicitly. ICE servers (STUN; TURN placeholder) live here.
 - `input.js` — WASD + pointer-lock mouse look; emits action events.
 - `scene.js` — all Three.js. Builds world from config, reconciles player meshes
-  to snapshots, interpolates others, first-person camera for self.
+  to snapshots, interpolates others, first-person camera for self. Also loads
+  **optional custom models/textures**: a prop type or map can declare a glTF
+  `model` and/or image `texture` (loaded via `three/addons` GLTFLoader from the
+  same CDN). These are additive + view-only — the colored primitive is built
+  first and kept as the fallback if a file is missing or fails to load, so a bad
+  asset never breaks play. Model paths resolve under `/assets/`. See
+  `docs/custom-content.md` and `memory/notes/custom-content.md`.
 - `ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic.
 - `config.js` — fetches `shared/config`; the host passes it into the `Referee`.
 
@@ -101,7 +107,12 @@ No build step. Three.js loaded from CDN via `<script type="importmap">`.
   (the matchmaker never imports it).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
   `maps.json` (size, colors, spawns, prop placements), `props.json` (prop-type
-  catalog). Adding maps/props needs no engine change.
+  catalog). Adding maps/props needs no engine change. Optional visual fields
+  (all additive, ignored by the referee): props may add `model`/`modelScale`/
+  `modelYOffset`/`texture`; maps may add `model`/`modelScale`/`modelYOffset`/
+  `groundTexture`/`groundTextureRepeat`. Primitive shape/size fields stay
+  required — they're the fallback look AND the single source of size. A custom
+  map model is decoration only; gameplay bounds still come from `map.size`.
 
 ## Movement convention (must stay in sync between referee & client prediction)
 

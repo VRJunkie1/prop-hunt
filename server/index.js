@@ -37,7 +37,12 @@ const MIME = {
   '.png': 'image/png',
   '.webp': 'image/webp',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
+  // Custom-content 3D assets (glTF/.glb + their binary buffers).
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
+  '.bin': 'application/octet-stream',
 };
 
 async function serveStatic(req, res) {

@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Prop Hunt</title>
     <link rel="stylesheet" href="/css/style.css" />
-    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. -->
+    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free.
+         The `three/addons/` entry unlocks the built-in glTF loader used to load
+         custom map/prop models — same version, same CDN, still no build step. -->
     <script type="importmap">
       {
         "imports": {
-          "three": "https://unpkg.com/three@0.161.0/build/three.module.js"
+          "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/"
         }
       }
     </script>

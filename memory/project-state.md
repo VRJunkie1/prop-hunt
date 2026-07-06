@@ -35,6 +35,41 @@ Implemented:
 - [8] Architecture notes updated (authority reversal recorded; see
       architecture.md).
 
+## Custom content (models/textures) — steps 1–3 DONE this session, NOT playtested
+
+Groundwork for "design our own maps / drop in maps found online" is in:
+- **Loader** (`client/js/scene.js`): glTF `model` + image `texture` support for
+  both prop types and maps, via `three/addons` GLTFLoader (added to the
+  `index.html` importmap — same Three version/CDN, still no build step). Colored
+  primitive is built first and kept as the fallback on any load failure, so a
+  missing/broken asset never breaks a match. Assets resolve under `/assets/`.
+- **Data schema** (additive, referee ignores it): props → `model`/`modelScale`/
+  `modelYOffset`/`texture`; maps → `model`/`modelScale`/`modelYOffset`/
+  `groundTexture`/`groundTextureRepeat`. Default `maps.json`/`props.json` are
+  unchanged (game looks identical) — the fields are opt-in; author docs show the
+  exact JSON to add.
+- **Dev server MIME** (`server/index.js`): `.glb`/`.gltf`/`.bin`/`.jpeg` added so
+  models serve locally (Cloudflare Pages already serves them fine).
+- **Docs**: `docs/custom-content.md` (how to add a map/prop, path rules, honest
+  format/perf/license caveats), `memory/notes/custom-content.md`.
+
+Not done / next:
+- **NOT playtested with a real model** (no `.glb` asset or browser in this env).
+  Step 7 of the plan: playtest one custom-model map + textures on a phone; that's
+  where model file size / texture size get tuned for mobile framerates.
+- **Physics (plan steps 4–6) NOT started** — it's the riskier second session and
+  is **blocked on the group's step-5 design decision**: when a hidden *player*-prop
+  is trampled, does it (a) stay immovable, (b) fake a wobble [suggested], or (c)
+  trampling is decoration-only? Physics must live in a NEW host-side module,
+  **never** inside `shared/referee.js` (the duplicated movement/tag math). Props
+  react; players don't get shoved. Moving-prop positions ride the existing
+  snapshot broadcast (only in-motion props), not a new channel.
+- Draco/Meshopt-compressed glTF NOT supported (no decoder wired). Export
+  uncompressed. Skinned/animated model instancing uses plain `.clone()` (fine for
+  static props; would need SkeletonUtils for shared skeletons later).
+- Map-selection UI still not built — referee defaults to the first map in
+  `maps.json`, so a custom map must be first (or wire a picker).
+
 ## Open threads / not done — READ BEFORE BUILDING ON THIS
 
 - [9] **NEVER PLAYTESTED — this is the load-bearing gap.** The whole rebuild
