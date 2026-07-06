@@ -10,6 +10,14 @@ app is fully static and deploys to **Cloudflare Pages**.
 
 ## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. STILL NOT PLAYTESTED.
 
+### Check-repair (2026-07): three.js CDN moved unpkg → esm.sh
+Automated headless-load check reported two `net::ERR_FAILED`. Cause: the Three.js
+importmap loaded `https://unpkg.com/three@0.161.0/build/three.module.js`; unpkg's
+redirect to that build path was failing the check (PeerJS on esm.sh loaded fine).
+Fix: point the `three` importmap entry at `https://esm.sh/three@0.161.0` so both
+third-party modules share one reliable CDN. One-line change in `index.html`; no
+code/gameplay touched. `scene.js` still imports the bare `three` specifier.
+
 Most recent session (2026-07, "BUILD IT" / deployability) removed the last thing
 blocking deploy: the always-on Node matchmaker. Static Cloudflare Pages can't run
 it, so nobody could ever connect. Swapped it for PeerJS's free public broker —

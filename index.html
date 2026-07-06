@@ -8,11 +8,14 @@
          serve it as the site index. The game code stays in subfolders — hence
          the /client/ and /shared/ prefixes below and in the JS modules. -->
     <link rel="stylesheet" href="/client/css/style.css" />
-    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. -->
+    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free.
+         Loaded from esm.sh (same CDN as PeerJS in net.js): unpkg's redirect to
+         build/three.module.js was failing the headless load check (ERR_FAILED),
+         so both third-party modules now come from one reliable esm.sh origin. -->
     <script type="importmap">
       {
         "imports": {
-          "three": "https://unpkg.com/three@0.161.0/build/three.module.js"
+          "three": "https://esm.sh/three@0.161.0"
         }
       }
     </script>

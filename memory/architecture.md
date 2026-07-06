@@ -82,7 +82,11 @@ reversal was a product decision, not a technical necessity.
 
 ## Client (`client/`)
 
-No build step. Three.js loaded from CDN via `<script type="importmap">`.
+No build step. Three.js loaded from CDN via `<script type="importmap">` — from
+**esm.sh** (`https://esm.sh/three@0.161.0`), the same origin as PeerJS in
+`net.js`. It was on unpkg (`build/three.module.js`) until 2026-07, when unpkg's
+redirect started failing the headless load check (`net::ERR_FAILED`); esm.sh
+serves it reliably, so both third-party modules now come from one CDN.
 `index.html` lives at the **repo root** (static hosts serve it as the index) and
 references the game code by absolute path (`/client/css`, `/client/js`,
 `/shared`, `/assets`); the JS/CSS themselves stay under `client/`.
