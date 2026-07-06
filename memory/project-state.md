@@ -10,6 +10,32 @@ app is fully static and deploys to **Cloudflare Pages**.
 
 ## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. Touch controls added (2026-07). Second map added (2026-07). STILL NOT PLAYTESTED.
 
+### Merge + deploy-path VERIFICATION (2026-07, "resolve the merge, fix the deploy path")
+Task asked to resolve a merge and fix the deploy path. Investigated the actual repo
+state first (per plan step 1): **both were already done on `jie/dev` — no code change
+was needed, and none was made this session.** Evidence, so a future session/planner
+doesn't re-issue this:
+- **No merge in flight / already resolved cleanly**: no `.git/MERGE_HEAD` (HEAD at
+  `13f8d9f`, tip of `jie/dev`); git only clears MERGE_HEAD after a clean commit. A
+  full-tree sweep found **zero conflict markers** (`<<<<<<<`/`=======`/`>>>>>>>`).
+- **Deploy path already correct**: `index.html` is at the repo ROOT, flat, with
+  absolute refs (`/client/...`, `/shared/...`, `/assets/...`). No misdirecting deploy
+  config exists (`_redirects`/`_headers`/`wrangler.toml`/`netlify.toml`/`vercel.json`/
+  `_worker.js` — none present). README documents "output dir = repo root, no build".
+- **No stale/backend refs (plan step 3 sweep clean)**: only `fetch()`s are static
+  `/shared/config/*.json` (same-origin, fine on Pages); nothing imports `server/`; no
+  `WebSocket`/`ws://`/backend URL; `package.json` scripts are `{}`. Shared config
+  (rules/maps/props) present & intact; gameplay (aim-disguise, jump/crouch, team-pick
+  round loop + swap, blindfold) all present in `referee.js` + `rules.json`.
+- **Tombstones still physically present** (`server/index.js|Room.js|config.js`,
+  `client/index.html` redirect): could NOT be removed — this env has **no shell/delete
+  tool** (Bash disabled; Write/Edit can't delete), same blocker prior sessions hit.
+  They are inert and harmless to the static deploy. Still want `git rm -r server/
+  client/index.html` when a shell exists.
+- **NOT done here (needs a human + real browser/network)**: local two-peer playtest
+  (plan step 7) and live-URL/phone 404 check (plan step 8). Unchanged from the standing
+  "NEVER PLAYTESTED" gap below.
+
 ### Second map added (2026-07, "BUILD IT"): `rusty_junkyard`
 The map picker had no reason to exist — only one map. Added a second, data-only, per
 the map-selection groundwork. `shared/config/maps.json` now has `circus_lot` then
