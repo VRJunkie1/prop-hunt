@@ -11,6 +11,8 @@
   "tagAngleDeg": 22,
   "tagVertPad": 0.35,
   "disguiseRange": 4.5,
+  "disguiseAngleDeg": 45,
+  "disguiseVertPad": 1.0,
   "mapMargin": 1.5,
   "gravity": 22,
   "jumpSpeed": 6.5,

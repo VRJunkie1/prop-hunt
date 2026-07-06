@@ -21,6 +21,7 @@ export class UI {
       lobbyHint: $('lobbyHint'),
       hud: $('hud'),
       crosshair: $('crosshair'),
+      targetHint: $('targetHint'),
       hudRole: $('hudRole'),
       hudTimer: $('hudTimer'),
       hudProps: $('hudProps'),
@@ -114,6 +115,14 @@ export class UI {
     this.el.feed.appendChild(d);
     while (this.el.feed.childElementCount > 5) this.el.feed.firstChild.remove();
     setTimeout(() => d.remove(), 6000);
+  }
+
+  // Crosshair target hint (e.g. "Click to disguise as Crate"). Pure display —
+  // main.js decides what, if anything, is a valid target. Empty string hides it.
+  setTargetHint(text) {
+    const el = this.el.targetHint;
+    el.textContent = text;
+    el.classList.toggle('hidden', !text);
   }
 
   setClickToPlay(visible) {

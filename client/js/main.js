@@ -45,20 +45,15 @@ input.onAction = (name) => {
   if (name === 'tag') session.send({ t: C2S.TAG });
 };
 
+// Disguise is aim-based: shoot a ray from the camera and take the FIRST prop it
+// hits within range (disguiseRange doubles as the max look distance — the one
+// tunable both this ray and the referee's range check read). No hit / too far =
+// nothing happens. The referee re-checks the id loosely; see referee.js.
 function tryDisguise() {
   if (state.role !== ROLE.PROP) return;
-  const range = state.cfg.rules.disguiseRange;
-  let best = null;
-  let bestDist = Infinity;
-  for (const p of state.props) {
-    const d = Math.hypot(p.x - state.self.x, p.z - state.self.z);
-    if (d <= range && d < bestDist) {
-      bestDist = d;
-      best = p;
-    }
-  }
-  if (best) session.send({ t: C2S.DISGUISE, propId: best.id });
-  else ui.feed('No prop close enough to disguise as.');
+  const hit = scene.propUnderCrosshair(state.cfg.rules.disguiseRange);
+  if (hit) session.send({ t: C2S.DISGUISE, propId: hit.id });
+  else ui.feed('Look right at a prop within range to disguise as it.');
 }
 
 // ---- network handling -----------------------------------------------------
@@ -267,6 +262,7 @@ function frame(now) {
   state.eyeHeight += (targetEye - state.eyeHeight) * Math.min(1, dt * 12);
 
   scene.setCamera(state.self, state.eyeHeight, input.yaw, input.pitch);
+  updateDisguiseTarget();
   scene.interpolate(0.25);
   scene.render();
 
@@ -274,6 +270,17 @@ function frame(now) {
   ui.setClickToPlay(inGame && !input.locked && !state.blindfolded);
 
   requestAnimationFrame(frame);
+}
+
+// Crosshair feedback for props: highlight the prop under the crosshair (scene
+// layer) and show a hint (UI layer). The raycast + "valid target?" decision live
+// here in the game code — the scene only glows a mesh, the UI only prints text.
+function updateDisguiseTarget() {
+  const canDisguise =
+    state.role === ROLE.PROP && state.movable && (state.phase === PHASE.HIDING || state.phase === PHASE.HUNTING);
+  const hit = canDisguise ? scene.propUnderCrosshair(state.cfg.rules.disguiseRange) : null;
+  scene.highlightProp(hit ? hit.mesh : null);
+  ui.setTargetHint(hit ? `Click to disguise as ${hit.type[0].toUpperCase() + hit.type.slice(1)}` : '');
 }
 
 // Send movement intent to the referee at a fixed rate.

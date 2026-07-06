@@ -127,6 +127,19 @@ button.primary:hover { background: #ff6fb5; }
   pointer-events: none;
   text-shadow: 0 0 4px #000;
 }
+#targetHint {
+  position: absolute;
+  top: 56%; left: 50%;
+  transform: translateX(-50%);
+  font-size: 15px;
+  color: #ffffffdd;
+  background: #00000077;
+  padding: 4px 12px;
+  border-radius: 14px;
+  pointer-events: none;
+  text-shadow: 0 0 4px #000;
+  white-space: nowrap;
+}
 #hud { position: absolute; inset: 0; pointer-events: none; }
 .hud-top {
   position: absolute;

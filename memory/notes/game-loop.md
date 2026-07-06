@@ -42,11 +42,15 @@ Players pick a team in the lobby (`C2S.PICK_TEAM`, stored as `player.team`).
   by the network layer (whole match torn down). `resetToLobby` clears
   roles/teams and broadcasts a `toLobby` event + fresh lobby.
 
-## Disguise (`applyDisguise`)
-Prop only, alive, phase HIDING/HUNTING, target prop within `disguiseRange` of the
-player. Sets `player.disguise = prop.type` (a type string, so the client just
-renders that catalog shape). Client picks the *nearest* in-range prop id and
-sends it.
+## Disguise (`applyDisguise`) — AIM-based since 2026-07
+Prop only, alive, phase HIDING/HUNTING. **You disguise as the prop you're looking
+at**, not merely the nearest one. The client raycasts from the camera
+(`scene.propUnderCrosshair`) and sends that prop's **stable id** (from
+`maps.json`); the referee re-checks the id loosely (range + facing, NO occlusion)
+and sets `player.disguise = prop.type`. See `memory/notes/disguise.md` for the
+full client-strict / referee-loose split. `disguiseRange` doubles as the client's
+max look distance; `disguiseAngleDeg` / `disguiseVertPad` tune the referee's
+facing gate.
 
 ## Tag (`applyTag`)
 Hunter only, alive, phase HUNTING. Server computes the hunter's forward vector

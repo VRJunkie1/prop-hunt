@@ -16,20 +16,20 @@
       { "x": 16, "z": 0 }
     ],
     "props": [
-      { "type": "crate", "x": -6, "z": -4 },
-      { "type": "crate", "x": 8, "z": 9 },
-      { "type": "crate", "x": -12, "z": 6 },
-      { "type": "barrel", "x": 4, "z": -8 },
-      { "type": "barrel", "x": -9, "z": -11 },
-      { "type": "barrel", "x": 11, "z": -3 },
-      { "type": "chair", "x": 2, "z": 5 },
-      { "type": "chair", "x": -3, "z": 12 },
-      { "type": "crystal", "x": 13, "z": 13 },
-      { "type": "crystal", "x": -14, "z": -6 },
-      { "type": "ball", "x": 7, "z": 2 },
-      { "type": "ball", "x": -5, "z": 8 },
-      { "type": "cactus", "x": 10, "z": -12 },
-      { "type": "cactus", "x": -11, "z": 14 }
+      { "id": 1, "type": "crate", "x": -6, "z": -4 },
+      { "id": 2, "type": "crate", "x": 8, "z": 9 },
+      { "id": 3, "type": "crate", "x": -12, "z": 6 },
+      { "id": 4, "type": "barrel", "x": 4, "z": -8 },
+      { "id": 5, "type": "barrel", "x": -9, "z": -11 },
+      { "id": 6, "type": "barrel", "x": 11, "z": -3 },
+      { "id": 7, "type": "chair", "x": 2, "z": 5 },
+      { "id": 8, "type": "chair", "x": -3, "z": 12 },
+      { "id": 9, "type": "crystal", "x": 13, "z": 13 },
+      { "id": 10, "type": "crystal", "x": -14, "z": -6 },
+      { "id": 11, "type": "ball", "x": 7, "z": 2 },
+      { "id": 12, "type": "ball", "x": -5, "z": 8 },
+      { "id": 13, "type": "cactus", "x": 10, "z": -12 },
+      { "id": 14, "type": "cactus", "x": -11, "z": 14 }
     ]
   }
 }

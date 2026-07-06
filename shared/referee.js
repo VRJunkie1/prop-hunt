@@ -25,14 +25,13 @@ function send(player, obj) {
   }
 }
 
-let nextPropId = 1;
-
 export class Referee {
   // config: the content-as-data bundle the client already fetched
   //         ({ rules, maps, props }). code: the room code, for lobby messages.
   constructor(config, code) {
     this.rules = config.rules;
     this.maps = config.maps;
+    this.propCatalog = config.props; // prop-type catalog, for aim/height checks
     this.mapId = Object.keys(this.maps)[0]; // DEFAULT_MAP_ID
 
     this.code = code;
@@ -135,6 +134,13 @@ export class Referee {
     player.input.crouch = !!msg.crouch;
   }
 
+  // Disguise is now AIM-based: the client raycasts and sends the id of the prop
+  // under its crosshair. The referee re-checks that request loosely — range +
+  // facing only, NO occlusion geometry. This asymmetry is DELIBERATE: the client
+  // is stricter (its first-hit ray means an occluding prop wins), so the referee
+  // will accept anything the client would ever send. Its only job here is to stop
+  // a tampered "I aimed at a prop across the map" claim, not to re-simulate the
+  // scene. Do NOT port heavy 3D geometry in here — see memory/notes/disguise.md.
   applyDisguise(player, propId) {
     if (player.role !== ROLE.PROP || !player.alive) return;
     if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
@@ -142,9 +148,34 @@ export class Referee {
     if (!prop) return;
     const dx = prop.x - player.pos.x;
     const dz = prop.z - player.pos.z;
-    if (Math.hypot(dx, dz) > this.rules.disguiseRange) return;
+    const dist = Math.hypot(dx, dz);
+    if (dist > this.rules.disguiseRange) return;
+    // Facing gate — skipped when standing basically on top of the prop (dist~0,
+    // no meaningful direction). Uses the SAME crouch-aware eye height + pitch the
+    // tag gate uses, so crouch/jump can't make the two sides disagree about aim.
+    if (dist > 1e-3) {
+      const fx = -Math.sin(player.yaw);
+      const fz = -Math.cos(player.yaw);
+      const cos = (dx / dist) * fx + (dz / dist) * fz;
+      if (cos < Math.cos(this.rules.disguiseAngleDeg * DEG2RAD)) return; // not facing it
+      // Vertical: the aim ray's height at the prop's distance must land within
+      // the prop's body column (feet at y=0 up to its catalog height), padded.
+      const eyeY = player.pos.y + this.eyeHeight(player);
+      const rayY = eyeY + Math.tan(player.pitch) * dist;
+      const pad = this.rules.disguiseVertPad;
+      if (rayY < -pad || rayY > this.propHeight(prop) + pad) return;
+    }
     player.disguise = prop.type;
     send(player, { t: S2C.EVENT, kind: 'disguised', type: prop.type });
+  }
+
+  // How tall a prop stands (feet on the ground at y=0), derived from its catalog
+  // shape — mirrors makePropMesh's baseY math on the client. Used by the disguise
+  // vertical aim gate only.
+  propHeight(prop) {
+    const c = this.propCatalog[prop.type];
+    if (!c) return this.rules.standBodyHeight; // unknown shape: fall back sane
+    return c.shape === 'sphere' ? c.r * 2 : c.h;
   }
 
   applyTag(hunter) {
@@ -224,9 +255,12 @@ export class Referee {
   // players in neither list spectate (role stays null).
   beginRound(hunterIds, propIds) {
     const map = this.maps[this.mapId];
-    // Build authoritative prop instances from map data.
+    // Build authoritative prop instances from map data. Each placement carries a
+    // STABLE id from the map file (maps.json) — the same id the client's scene
+    // tags its meshes with, so a DISGUISE request ("prop #17") is unambiguous on
+    // both sides. See memory/notes/disguise.md.
     this.props = (map.props || []).map((p) => ({
-      id: nextPropId++,
+      id: p.id,
       type: p.type,
       x: p.x,
       z: p.z,

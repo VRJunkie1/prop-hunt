@@ -133,6 +133,23 @@ cone, PLUS a vertical check — the aim ray height at the target's distance
 to tags and keeps "you tag what you aim at" true. eyeY/bodyHeight come from the
 same crouch-aware helpers the camera + avatar use.
 
+## Disguise is aim-based (added 2026-07)
+
+A prop disguises as **the prop under its crosshair**, not the nearest one. Props
+carry a **stable id** in `maps.json`; both the client scene and the referee build
+from that file, so the id is the shared language. The client raycasts
+(`scene.propUnderCrosshair`, first hit within `disguiseRange` = occlusion for
+free) and sends `{ propId }`; the referee re-checks the id **loosely** — range +
+facing (yaw cone + crouch-aware vertical gate) only, **no occlusion geometry**.
+
+This client-strict / referee-loose split is **intentional and inverse to the
+movement-math rule**: for movement we duplicate the math so both sides agree; for
+disguise we deliberately DON'T duplicate the occlusion geometry — the referee only
+needs to reject "aimed across the map" cheats, not re-simulate the scene. A future
+session must not "fix" the mismatch by porting Three.js raycasting into the
+referee. Full rationale + the crosshair-feedback layering in
+`memory/notes/disguise.md`.
+
 ## Phase state machine (referee-owned, in `shared/referee.js`)
 
 LOBBY → (host START) → HIDING (hunters frozen **and blindfolded**) → HUNTING →

@@ -7,9 +7,25 @@ networking model is **peer-to-peer over WebRTC** — players connect directly to
 each other; the room creator's browser hosts the referee. A tiny Node
 **matchmaker** only mints room codes and relays the WebRTC handshake.
 
-## Status: Gameplay update (blindfold, jump, crouch, team lobby, round loop) implemented in code. NOT playtested.
+## Status: Gameplay update (blindfold, jump, crouch, team lobby, round loop, aim-to-disguise) implemented in code. NOT playtested.
 
-Most recent session (2026-07, "clank" task) added, on top of the P2P rebuild —
+Most recent session (2026-07, aim-to-disguise) made disguise **aim-based instead
+of proximity-based** — a prop now disguises as the prop under its crosshair, not
+the nearest one. No server change (all in the host referee + client). Details:
+- **Stable prop ids** in `maps.json` (`id` per placement); referee `beginRound`
+  builds `this.props` from them (dropped the runtime `nextPropId` counter). Ids
+  are the shared language between client scene and referee.
+- **Client raycast** (`scene.propUnderCrosshair`, `THREE.Raycaster` from crosshair,
+  first hit within `disguiseRange` = occlusion for free). `main.js` `tryDisguise`
+  sends `{ propId }`; `updateDisguiseTarget` highlights the mesh (`highlightProp`)
+  + shows a hint (`ui.setTargetHint`, new `#targetHint` DOM/CSS).
+- **Referee** `applyDisguise` re-checks loosely: range + yaw cone
+  (`disguiseAngleDeg`) + crouch-aware vertical gate (`disguiseVertPad`, via new
+  `propHeight` helper reusing the tag gate's `eyeHeight`). Client-strict /
+  referee-loose asymmetry is intentional — see `memory/notes/disguise.md`.
+- New tunables: `disguiseAngleDeg` 45, `disguiseVertPad` 1.0 in `rules.json`.
+
+Earlier session (2026-07, "clank" task) added, on top of the P2P rebuild —
 all rule changes live in the host's referee, no server change:
 - **Hunter blindfold during HIDING** — data (referee sends hunters only
   themselves in the snapshot) + screen (black 🙈 overlay w/ countdown,
@@ -87,6 +103,13 @@ Implemented:
 - **Crouch tag tuning is untested feel.** `tagVertPad` 0.35 makes a level-aiming
       hunter miss a crouched prop at close range but still tag standing/jumping
       ones. Numbers are a first guess — verify in playtest, tune in `rules.json`.
+- **Aim-to-disguise not playtested / untested feel.** `disguiseAngleDeg` 45 and
+      `disguiseVertPad` 1.0 are first guesses for the referee's loose facing gate;
+      the client ray is exact. Playtest the edge cases where "valid on my screen"
+      and "referee says yes" could drift: disguise while crouched, mid-jump, aiming
+      at a prop partly behind another, and right at the range limit. Tune in
+      `rules.json`. Note: the client ray currently ignores walls/other players as
+      occluders (tests static props only) — acceptable, matches "first prop hit".
 - Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 

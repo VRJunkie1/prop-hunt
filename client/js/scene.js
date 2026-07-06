@@ -53,6 +53,9 @@ export class Scene3D {
     this.selfId = null;
     this.catalog = null;
     this.players = new Map(); // id -> { mesh, target:{x,z,yaw}, kind }
+    this.propMeshes = []; // static disguisable props, tagged with userData.propId
+    this.raycaster = new THREE.Raycaster(); // aim-to-disguise crosshair ray
+    this.highlighted = null; // prop mesh currently under the crosshair, if any
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -106,14 +109,44 @@ export class Scene3D {
       this.scene.add(wall);
     }
 
-    // Static props.
+    // Static props. Each mesh carries its stable prop id + type so the aim ray
+    // (propUnderCrosshair) can name exactly what the player is looking at.
+    this.propMeshes = [];
+    this.highlighted = null;
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
       built.mesh.position.set(p.x, built.baseY, p.z);
       built.mesh.rotation.y = p.rot || 0;
+      built.mesh.userData.propId = p.id;
+      built.mesh.userData.propType = p.type;
       this.scene.add(built.mesh);
+      this.propMeshes.push(built.mesh);
     }
+  }
+
+  // Shoot a ray straight out of the camera (screen centre = the crosshair) and
+  // return { id, type, mesh } of the FIRST static prop it hits within maxDist, or
+  // null. First-hit is the point: an occluding barrel in front of a crate gets
+  // you the barrel. Only static props are tested — you disguise as scenery, not
+  // as other players.
+  propUnderCrosshair(maxDist) {
+    if (!this.propMeshes.length) return null;
+    this.raycaster.far = maxDist;
+    this.raycaster.setFromCamera({ x: 0, y: 0 }, this.camera);
+    const hits = this.raycaster.intersectObjects(this.propMeshes, false);
+    if (!hits.length) return null;
+    const mesh = hits[0].object;
+    return { id: mesh.userData.propId, type: mesh.userData.propType, mesh };
+  }
+
+  // Emissive glow on the prop under the crosshair (view-layer feedback only — the
+  // "is this a valid target" decision lives in main.js). Pass null to clear.
+  highlightProp(mesh) {
+    if (this.highlighted === mesh) return;
+    if (this.highlighted) this.highlighted.material.emissive.setHex(0x000000);
+    this.highlighted = mesh || null;
+    if (mesh) mesh.material.emissive.setHex(0x2a2a10);
   }
 
   setSelf(id) {
