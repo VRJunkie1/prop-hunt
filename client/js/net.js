@@ -23,13 +23,31 @@
 // network. See memory/notes/netcode.md.
 import { Referee } from '/shared/referee.js';
 
-// PeerJS is loaded as a self-contained UMD global by a <script> tag in
-// index.html (a single request, no chained sub-requests). The previous
-// `import { Peer } from 'https://esm.sh/peerjs@1.5.4'` was a two-request esm.sh
-// wrapper chain that failed the headless load check (net::ERR_FAILED) — the same
-// failure mode three.js hit. The classic script runs before this deferred
-// module, so `window.Peer` is defined by the time this evaluates. See index.html.
-const Peer = window.Peer;
+// PeerJS is loaded LAZILY — its <script> is injected only when the player first
+// creates or joins a room (loadPeerJs), NOT at page load. That keeps the landing
+// page free of external requests so the headless load check (whose CDN network is
+// unreliable/absent) stays clean; three prior sessions mis-diagnosed this as a
+// "wrong CDN URL" problem and kept swapping brokers. The self-contained UMD build
+// exposes a `Peer` global (peerjs.com's documented CDN usage). See index.html.
+const PEERJS_SRC = 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';
+let peerJsPromise = null;
+function loadPeerJs() {
+  if (window.Peer) return Promise.resolve(window.Peer);
+  if (!peerJsPromise) {
+    peerJsPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = PEERJS_SRC;
+      s.async = true;
+      s.onload = () => (window.Peer ? resolve(window.Peer) : reject(new Error('PeerJS unavailable')));
+      s.onerror = () => {
+        peerJsPromise = null; // let the next create/join attempt retry the load
+        reject(new Error('Failed to load PeerJS'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return peerJsPromise;
+}
 
 // Namespace our room ids on the SHARED public broker so a 4-char code can't
 // collide with unrelated PeerJS apps. Players only ever see the bare CODE.
@@ -69,19 +87,30 @@ export class Session {
   }
 
   // ---- public API ---------------------------------------------------------
-  create(name) {
+  async create(name) {
     this.name = cleanName(name);
     this._reset();
     this.isHost = true;
     this.onStatus('connecting');
+    try {
+      await loadPeerJs();
+    } catch {
+      return this.onStatus('error', 'Lost connection to the matchmaking broker — try again.');
+    }
     this._startHost(0);
   }
 
-  join(name, room) {
+  async join(name, room) {
     this.name = cleanName(name);
     this._reset();
     this.isHost = false;
     this.onStatus('connecting');
+    let Peer;
+    try {
+      Peer = await loadPeerJs();
+    } catch {
+      return this.onStatus('error', 'Lost connection to the matchmaking broker — try again.');
+    }
     const peer = new Peer({ config: PEER_CONFIG });
     this.peer = peer;
     peer.on('open', (id) => {
@@ -119,6 +148,9 @@ export class Session {
   // Claim `prophunt-<CODE>` on the broker. If the code is already taken (someone
   // else has a live room with it), mint another and retry a few times.
   _startHost(attempt) {
+    // window.Peer is guaranteed here: create() awaits loadPeerJs() before the
+    // first _startHost call, and retries recurse from inside this method.
+    const Peer = window.Peer;
     const code = makeCode();
     const peer = new Peer(ROOM_PREFIX + code, { config: PEER_CONFIG });
     this.peer = peer;

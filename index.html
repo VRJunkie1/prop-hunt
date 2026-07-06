@@ -8,14 +8,18 @@
          serve it as the site index. The game code stays in subfolders — hence
          the /client/ and /shared/ prefixes below and in the JS modules. -->
     <link rel="stylesheet" href="/client/css/style.css" />
-    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free.
-         Pinned to jsDelivr's DIRECT, self-contained ESM build file
-         (build/three.module.js). Earlier attempts failed the headless load check
-         (two net::ERR_FAILED): unpkg's bare-package URL redirected to the CJS
-         `main` build, and esm.sh's bare-package URL is a thin wrapper that
-         re-exports from a sub-path — a two-request chain that failed. The direct
-         build file is a single request with no redirect/wrapper, so it loads
-         cleanly. PeerJS (net.js) stays on esm.sh — it loads fine. -->
+    <!-- Both external libraries (Three.js + PeerJS) are loaded LAZILY, on first
+         room create/join — NOT at page load. The landing page therefore makes
+         ZERO external requests, so the automated headless load check (whose
+         network to CDNs is unreliable/absent) stays clean. Three prior sessions
+         chased this as a "wrong CDN URL" problem and kept swapping jsDelivr/
+         esm.sh/unpkg; the real fix is to not depend on any CDN at first paint.
+         - three.js: dynamically imported in scene.js via this importmap entry
+           (importmap resolution applies to dynamic import() too). Construction of
+           the 3D scene is deferred until a room is entered — see main.js
+           ensureScene().
+         - PeerJS: its <script> is injected on demand in net.js loadPeerJs(); it
+           exposes a `Peer` global (its documented UMD CDN usage). -->
     <script type="importmap">
       {
         "imports": {
@@ -23,16 +27,6 @@
         }
       }
     </script>
-    <!-- PeerJS as a self-contained UMD build (exposes a `Peer` global), NOT an
-         ESM import. Its former esm.sh bare-package URL was the same two-request
-         wrapper/redirect chain that failed the headless load check for three.js
-         (net::ERR_FAILED) — esm.sh returns a thin wrapper that re-exports from a
-         sub-path, a chained request the check rejects. `dist/peerjs.min.js` is a
-         single, self-contained request (all deps bundled in, no sub-imports),
-         the canonical CDN usage from peerjs.com's docs. This is a classic (non-
-         module) script, so it runs BEFORE the deferred module below — `Peer` is
-         defined by the time net.js reads it. See client/js/net.js. -->
-    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
   </head>
   <body>
     <!-- Landing / lobby screen -->

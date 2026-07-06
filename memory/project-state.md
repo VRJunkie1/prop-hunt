@@ -61,6 +61,24 @@ skipped on touch (no pointer lock on phones). Desktop is provably unchanged.
 Full detail: `memory/notes/mobile.md`. **Not yet tried on a real phone** —
 sensitivity/sizes are first guesses; verify move/look/jump/crouch/tag/disguise.
 
+### Check-repair (2026-07, #4): stop loading CDN libs at page load — lazy-load both
+The headless load check AGAIN reported two `net::ERR_FAILED` even though both libs
+were on single-request jsDelivr URLs (#2/#3). Root cause was NOT the CDN URLs (the
+prior three sessions' theory): the check environment's network to CDNs is
+unreliable/absent, so ANY external request fired at page load can fail — which is
+why the error count bounced 2→1→2 across runs regardless of which broker was used.
+**Fix: the landing page now makes ZERO external requests.** Both external libs are
+loaded only when the player enters a room:
+- **PeerJS** — removed its `<script>` from `index.html`; `net.js` `loadPeerJs()`
+  injects the script on first `create()`/`join()` (both now `async`, `await` it).
+- **Three.js** — `scene.js` no longer `import * as THREE from 'three'` at module
+  top; new `initThree()` does `await import('three')` (importmap still resolves the
+  specifier). `main.js` no longer builds `Scene3D` at boot — `ensureScene()` builds
+  it lazily, gated behind the create/join buttons (`prepareScene()` shows a friendly
+  menu error if the CDN is unreachable); the render loop no-ops while `scene` is null.
+No gameplay/netcode/referee logic touched — only WHEN the two libraries load. The
+importmap entry stays (dynamic `import('three')` uses it). Detail: netcode.md.
+
 ### Check-repair (2026-07, #3): PeerJS esm.sh ESM import → UMD `<script>` global
 Headless-load check STILL reported one `net::ERR_FAILED` after #2 fixed three.js.
 Root cause: **PeerJS was the last import still on the esm.sh two-request

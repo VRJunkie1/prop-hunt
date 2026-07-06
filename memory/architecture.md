@@ -82,18 +82,22 @@ reversal was a product decision, not a technical necessity.
 
 ## Client (`client/`)
 
-No build step. Three.js loaded from CDN via `<script type="importmap">` — from
-**jsDelivr's direct build file**
-(`https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`). History:
-it was on unpkg, then esm.sh; both used the *bare-package* URL, which resolves to
-a redirect/wrapper chain (unpkg → CJS `main`; esm.sh → thin re-export wrapper), and
-both failed the headless load check (`net::ERR_FAILED`, one per request in the
-chain). The direct build file is a single self-contained ESM request with no
-redirect — the canonical three.js CDN usage — so it loads cleanly. **PeerJS hit
-the same esm.sh chain failure** and was moved off it: it now loads as a
-self-contained UMD `<script>` (`.../peerjs@1.5.4/dist/peerjs.min.js`) in
-`index.html`, exposing a `Peer` global that `net.js` reads via `window.Peer` (it
-can't be a zero-import ESM file — it has bundled deps). See netcode.md.
+No build step. **Both external libraries load LAZILY, on first room create/join —
+NOT at page load**, so the landing page makes zero external requests and the
+headless load check (whose CDN network is unreliable/absent) stays clean. This
+superseded three earlier check-repairs that treated it as a "wrong CDN URL"
+problem and kept swapping unpkg/esm.sh/jsDelivr — the error count bounced because
+*any* eager CDN request there can fail, not because a specific URL was wrong.
+- **Three.js**: importmap entry (`three` →
+  `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`, jsDelivr's
+  direct single-request build) is kept, but the specifier is now resolved by a
+  **dynamic `import('three')`** in `scene.js` `initThree()`. `main.js` builds the
+  `Scene3D` lazily (`ensureScene()`), gated behind the create/join buttons; the
+  render loop no-ops until then.
+- **PeerJS**: its `<script>` was removed from `index.html`; `net.js`
+  `loadPeerJs()` injects it (`.../peerjs@1.5.4/dist/peerjs.min.js`, a UMD build
+  exposing a `Peer` global) on demand. Still UMD, not ESM — it has bundled deps.
+See netcode.md.
 `index.html` lives at the **repo root** (static hosts serve it as the index) and
 references the game code by absolute path (`/client/css`, `/client/js`,
 `/shared`, `/assets`); the JS/CSS themselves stay under `client/`.

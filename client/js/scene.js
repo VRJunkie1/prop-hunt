@@ -1,7 +1,21 @@
 // All Three.js rendering lives here. The scene is a pure view of server state:
 // it builds the map + props from config, and each frame reconciles player
 // meshes against the latest authoritative snapshot. No game rules here.
-import * as THREE from 'three';
+//
+// Three.js is imported LAZILY (initThree) instead of at module load, so the
+// landing page pulls in NO external CDN resources — the headless load check stays
+// clean even when its network to CDNs is unreliable. THREE is filled in before
+// any Scene3D/makePropMesh call runs (main.js awaits initThree() in ensureScene()
+// before constructing the scene), so every THREE.* reference below resolves fine.
+// See index.html for the full rationale.
+let THREE = null;
+
+// Resolve the 'three' importmap entry on demand and cache the module namespace.
+// Callers MUST await this before constructing Scene3D or calling makePropMesh.
+export async function initThree() {
+  if (!THREE) THREE = await import('three');
+  return THREE;
+}
 
 // Vertical squash applied to a crouching avatar. Roughly matches the
 // crouch/stand body-height ratio in rules.json (1.1 / 1.8).

@@ -11,15 +11,40 @@ import { loadConfig } from './config.js';
 import { Session } from './net.js';
 import { Input } from './input.js';
 import { setupTouchControls } from './touch.js';
-import { Scene3D } from './scene.js';
+import { Scene3D, initThree } from './scene.js';
 import { UI } from './ui.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 
 const ui = new UI();
 let session = null; // created in boot() once config is loaded
 const canvas = document.getElementById('view');
-const scene = new Scene3D(canvas);
+// Scene3D pulls in Three.js, so it (and the CDN request) is deferred until the
+// player enters a room — ensureScene() builds it then. Null on the landing page.
+let scene = null;
 const input = new Input(canvas);
+
+// Lazily load Three.js and build the renderer the first time a room is entered,
+// so the landing page makes no external request. Idempotent; reused across matches.
+async function ensureScene() {
+  if (!scene) {
+    await initThree();
+    scene = new Scene3D(canvas);
+  }
+  return scene;
+}
+
+// ensureScene() wrapped for the menu buttons: loads Three.js on demand and, if
+// the CDN can't be reached, surfaces a friendly menu error instead of a silent
+// dead button. Returns true on success.
+async function prepareScene() {
+  try {
+    await ensureScene();
+    return true;
+  } catch {
+    ui.menuError('Could not load the 3D engine — check your connection and retry.');
+    return false;
+  }
+}
 
 const state = {
   selfId: null,
@@ -228,6 +253,13 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
+  // On the landing page the scene doesn't exist yet (Three.js loads only once a
+  // room is entered). Nothing to render until then — just keep the loop alive.
+  if (!scene) {
+    requestAnimationFrame(frame);
+    return;
+  }
+
   const r = state.cfg.rules;
   const crouching = state.movable && input.crouch;
   if (state.movable) {
@@ -309,12 +341,14 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // (start and all gameplay) rides the peer link via session.send().
 function wireMenu() {
   const nameEl = ui.el.name;
-  document.getElementById('createBtn').addEventListener('click', () => {
+  document.getElementById('createBtn').addEventListener('click', async () => {
+    if (!(await prepareScene())) return;
     session.create(nameEl.value);
   });
-  document.getElementById('joinBtn').addEventListener('click', () => {
+  document.getElementById('joinBtn').addEventListener('click', async () => {
     const room = ui.el.roomCode.value.toUpperCase().trim();
     if (!room) return ui.menuError('Enter a room code.');
+    if (!(await prepareScene())) return;
     session.join(nameEl.value, room);
   });
   // Team pickers replace the Ready button: clicking a column IS readying up.
