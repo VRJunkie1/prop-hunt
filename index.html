@@ -9,13 +9,17 @@
          the /client/ and /shared/ prefixes below and in the JS modules. -->
     <link rel="stylesheet" href="/client/css/style.css" />
     <!-- Three.js via CDN + importmap keeps the skeleton build-step-free.
-         Loaded from esm.sh (same CDN as PeerJS in net.js): unpkg's redirect to
-         build/three.module.js was failing the headless load check (ERR_FAILED),
-         so both third-party modules now come from one reliable esm.sh origin. -->
+         Pinned to jsDelivr's DIRECT, self-contained ESM build file
+         (build/three.module.js). Earlier attempts failed the headless load check
+         (two net::ERR_FAILED): unpkg's bare-package URL redirected to the CJS
+         `main` build, and esm.sh's bare-package URL is a thin wrapper that
+         re-exports from a sub-path — a two-request chain that failed. The direct
+         build file is a single request with no redirect/wrapper, so it loads
+         cleanly. PeerJS (net.js) stays on esm.sh — it loads fine. -->
     <script type="importmap">
       {
         "imports": {
-          "three": "https://esm.sh/three@0.161.0"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js"
         }
       }
     </script>

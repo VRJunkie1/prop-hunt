@@ -24,13 +24,23 @@ skipped on touch (no pointer lock on phones). Desktop is provably unchanged.
 Full detail: `memory/notes/mobile.md`. **Not yet tried on a real phone** —
 sensitivity/sizes are first guesses; verify move/look/jump/crouch/tag/disguise.
 
-### Check-repair (2026-07): three.js CDN moved unpkg → esm.sh
-Automated headless-load check reported two `net::ERR_FAILED`. Cause: the Three.js
-importmap loaded `https://unpkg.com/three@0.161.0/build/three.module.js`; unpkg's
-redirect to that build path was failing the check (PeerJS on esm.sh loaded fine).
-Fix: point the `three` importmap entry at `https://esm.sh/three@0.161.0` so both
-third-party modules share one reliable CDN. One-line change in `index.html`; no
-code/gameplay touched. `scene.js` still imports the bare `three` specifier.
+### Check-repair (2026-07, #2): three.js CDN → jsDelivr direct build file
+Automated headless-load check STILL reported two `net::ERR_FAILED` after the
+esm.sh swap below. Root cause: **bare-package CDN URLs for three resolve to a
+redirect/wrapper chain, not a single file.** unpkg's `three@0.161.0` redirected
+to the CJS `main` build; esm.sh's `three@0.161.0` is a thin wrapper module that
+re-exports from a sub-path (`/es2022/three.mjs`) — two chained requests, both of
+which failed the check → the two errors. Fix: point the `three` importmap entry
+at jsDelivr's **direct build file** `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`
+— a single request, self-contained ESM, no redirect/wrapper. This is the
+canonical three.js CDN usage. One-line change in `index.html`; no code/gameplay
+touched. `scene.js` still imports the bare `three` specifier. PeerJS stays on
+esm.sh in `net.js` (loads fine — a working named-export ESM wrapper).
+
+### Check-repair (2026-07, #1): three.js CDN moved unpkg → esm.sh (superseded by #2)
+Automated headless-load check reported two `net::ERR_FAILED`. Diagnosed as unpkg's
+redirect failing; moved `three` to `https://esm.sh/three@0.161.0`. Did NOT fix it
+— esm.sh's bare-package URL has the same redirect/wrapper problem (see #2 above).
 
 Most recent session (2026-07, "BUILD IT" / deployability) removed the last thing
 blocking deploy: the always-on Node matchmaker. Static Cloudflare Pages can't run
