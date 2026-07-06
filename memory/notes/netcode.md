@@ -41,8 +41,19 @@ hostId}` (you're a guest), `sig-peer-join{id,name}` (to host: new guest inbound)
 ## Game protocol (`C2S`/`S2C`) — UNCHANGED by the rebuild
 Same message shapes as the old server model; only the pipe changed. See the
 protocol file for the full list (create/join are gone from C2S — they're SIG now).
-Snapshot player entry: `{id,name,x,z,yaw,alive,hunter,disguise}`, positions
-rounded. `hunter`/`disguise` are the only role leakage to guests.
+Snapshot player entry: `{id,name,x,y,z,yaw,alive,crouch,hunter,disguise}`,
+positions rounded (`y` = jump height, `crouch` bool for the squash + hitbox).
+`hunter`/`disguise` are the only role leakage to guests.
+INPUT now carries `{mx,mz,yaw,pitch,jump,crouch}` (jump/crouch held-state bools).
+`READY` is gone — replaced by `PICK_TEAM {team:'hunter'|'prop'|null}`; LOBBY now
+carries `players:[{id,name,team}]` + `canStart`.
+
+### Per-recipient snapshots (blindfold)
+`broadcastSnapshot` no longer sends one identical message to all. It builds the
+full player list once, then `send()`s each player their own view: a **hunter
+during HIDING receives only themselves** (the data half of the blindfold);
+everyone else gets the full list. Keep this per-recipient loop if you touch
+snapshot code.
 
 ## Host authority & the loopback
 The host's own client sends C2S straight into the referee

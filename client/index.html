@@ -40,12 +40,22 @@
 
     <!-- Lobby (in a room, before match starts) -->
     <div id="lobby" class="screen hidden">
-      <div class="menu-card">
+      <div class="menu-card lobby-card">
         <h1>LOBBY</h1>
         <p class="roomcode">Room code: <span id="lobbyCode">----</span></p>
-        <ul id="playerList" class="player-list"></ul>
+        <p class="pick-hint">Click a side to join it. Picking a team readies you up.</p>
+        <div class="teams">
+          <div id="teamHunters" class="team-col hunters">
+            <h2>🔫 Hunters</h2>
+            <ul id="hunterList" class="team-list"></ul>
+          </div>
+          <div id="teamProps" class="team-col props">
+            <h2>📦 Props</h2>
+            <ul id="propList" class="team-list"></ul>
+          </div>
+        </div>
+        <p class="unassigned">Not picked: <span id="unassignedList">—</span></p>
         <div class="row">
-          <button id="readyBtn">Ready</button>
           <button id="startBtn" class="primary hidden">Start match</button>
         </div>
         <p id="lobbyHint" class="hint"></p>
@@ -66,6 +76,12 @@
         <div id="feed" class="feed"></div>
       </div>
       <div id="clickToPlay" class="overlay hidden">Click to play</div>
+      <!-- Hunter blindfold during the hiding phase -->
+      <div id="blindfold" class="blindfold hidden">
+        <div class="blindfold-emoji">🙈</div>
+        <div class="blindfold-text">Hiding phase — eyes closed!</div>
+        <div id="blindfoldTimer" class="blindfold-timer"></div>
+      </div>
     </div>
 
     <script type="module" src="/js/main.js"></script>

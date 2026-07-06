@@ -30,9 +30,9 @@ export const SIG = {
 export const C2S = {
   CREATE: 'create', // { name }                     -> create a room, become host
   JOIN: 'join', // { name, room }               -> join an existing room
-  READY: 'ready', // { ready }                     -> toggle ready in lobby
+  PICK_TEAM: 'pickTeam', // { team:'hunter'|'prop'|null }  -> choose a lobby team (replaces ready)
   START: 'start', // {}                            -> host starts the match
-  INPUT: 'input', // { mx, mz, yaw, pitch }        -> movement + look intent
+  INPUT: 'input', // { mx, mz, yaw, pitch, jump, crouch } -> movement + look + jump/crouch intent
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
   TAG: 'tag', // {}                            -> hunter attempts a tag
 };
@@ -40,10 +40,10 @@ export const C2S = {
 // Referee -> Client message types.
 export const S2C = {
   JOINED: 'joined', // { id, room, host }
-  LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}] }
+  LOBBY: 'lobby', // { room, hostId, canStart, players:[{id,name,team}] }
   STARTED: 'started', // { mapId, props:[{id,type,x,z,rot}] }
   ROLE: 'role', // { role }                     -> your secret role for the round
-  SNAPSHOT: 'snapshot', // authoritative world state (see Room.buildSnapshot)
+  SNAPSHOT: 'snapshot', // authoritative world state (see Referee.broadcastSnapshot)
   EVENT: 'event', // { kind, ... }               -> discrete game events
   ERROR: 'error', // { msg }
 };

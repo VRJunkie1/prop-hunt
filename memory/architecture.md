@@ -108,16 +108,69 @@ No build step. Three.js loaded from CDN via `<script type="importmap">`.
 yaw about Y. forward = (-sin yaw, -cos yaw), right = (cos yaw, -sin yaw).
 `vx = -sin*mz + cos*mx`, `vz = -cos*mz - sin*mx`, normalized if len>1, then
 `pos += v * moveSpeed * dt`, clamped to `±(map.size/2 - mapMargin)`. Three.js
-camera uses `YXZ` rotation order (yaw then pitch). Both `Referee.integrate` and
-`main.js` frame loop use this exact formula — change both together. For the host,
-reconciliation is a near-no-op (its authoritative pos tracks its prediction with
-no round trip); guests still predict against real latency.
+camera uses `YXZ` rotation order (yaw then pitch).
+
+**Crouch + jump extend this (added 2026-07) and the same "two places, identical
+math" rule applies — now to THREE axes:**
+- **Crouch** (held Ctrl/C): horizontal speed × `crouchSpeedMult`, camera eye
+  height eased to `crouchEyeHeight`, avatar squashed (`CROUCH_SCALE` in scene.js),
+  and — critically — the referee's **tag hitbox** uses `crouchBodyHeight`.
+- **Jump** (held Space): `pos.y` gains a vertical axis. `grounded = pos.y<=0`;
+  `if (grounded && jump) vy = jumpSpeed; vy -= gravity*dt; pos.y += vy*dt;` then
+  clamp `pos.y` to ≥0. jump/crouch travel as **held-state booleans** in the INPUT
+  message (edge-triggering would desync 20 Hz send vs 60 fps predict); the referee
+  only acts on `jump` when grounded, so holding Space doesn't spam hops.
+
+`Referee.integrate` and the `main.js` frame loop implement all of the above
+identically — change both together. For the host, reconciliation is a near-no-op
+(its authoritative pos tracks its prediction with no round trip); guests still
+predict against real latency.
+
+**Tag is now a 3D ray gate** (`applyTag`): unchanged horizontal distance + yaw
+cone, PLUS a vertical check — the aim ray height at the target's distance
+(`eyeY + tan(pitch)*dist`) must land inside the target's body column
+(`[footY, footY+bodyHeight] ± tagVertPad`). This is what makes crouch/jump matter
+to tags and keeps "you tag what you aim at" true. eyeY/bodyHeight come from the
+same crouch-aware helpers the camera + avatar use.
 
 ## Phase state machine (referee-owned, in `shared/referee.js`)
 
-LOBBY → (host START, ≥minPlayers) → HIDING (hunters frozen) → HUNTING → ENDING
-→ LOBBY. Timers via `phaseEndsAt`. Hunters win when all props eliminated; props
-win if the hunt timer expires with any prop alive.
+LOBBY → (host START) → HIDING (hunters frozen **and blindfolded**) → HUNTING →
+ENDING (scoreboard, `endingSeconds`) → **next round with teams SWAPPED**
+(`nextRoundOrLobby` → `beginRound`), looping HIDING→…→ENDING→next round. Timers
+via `phaseEndsAt`. Hunters win when all props eliminated; props win if the hunt
+timer expires with any prop alive.
+
+**The loop only returns to LOBBY via one referee decision**, in two cases:
+(1) the host leaves — the network layer tears the whole match down; (2) a
+disconnect empties a whole team mid-round (`bailIfTeamEmpty`, called from the
+single `removePlayer` path) or a swap would leave a side empty
+(`nextRoundOrLobby`). There is exactly one place each decides "lobby vs keep
+playing." `resetToLobby(reason)` clears roles/teams and broadcasts a `toLobby`
+event + a fresh lobby.
+
+**Teams (round assignment).** Round one uses the players' **own lobby picks**
+(`player.team`), not a random ratio. Each later round swaps: last round's hunters
+become props and vice-versa (`computeSwappedTeams`); mid-match joiners (role
+null) fold into the smaller side so they play the next round.
+
+## Blindfold (hunters can't cheat during HIDING) — two halves
+
+1. **Data:** `broadcastSnapshot` sends each recipient a tailored player list; a
+   hunter during HIDING gets a list containing **only themselves**, so even dev-
+   tools poking reveals nothing. (Host caveat below still applies.)
+2. **Screen:** a full black "🙈 eyes closed" overlay with the countdown, wired the
+   same show/hide way as the click-to-play overlay — `ui.setBlindfold()` flipped
+   from `main.js` `updateBlindfold()` on role+phase. No game logic in the UI.
+
+## Lobby team pickers (replaces the Ready button)
+
+Two clickable columns — **Hunters left, Props right** (`index.html` + `ui.js`
+`renderLobby`). Clicking a column sends `C2S.PICK_TEAM {team}`; clicking your
+current team unpicks. **Picking IS readying** — the Ready button is gone. The
+referee owns the truth: `broadcastLobby` computes `canStart` (everyone picked +
+≥1 per side + ≥minPlayers) and the lobby only *displays* teams + gates Start on
+it. `startMatch` re-validates before beginning.
 
 ## Role/identity hiding
 
@@ -125,6 +178,7 @@ Snapshots expose `hunter: bool` (seekers are meant to be visible) and `disguise`
 (the prop type a prop chose). They never expose which players are undisguised
 props **to guests**. Own role comes via a private `ROLE` message. Two caveats,
 both by design now: (1) the **host** holds the full state in its own tab, so it
-can see undisguised props — an accepted cost of host authority; (2) an
-undisguised prop still renders as a neutral capsule and so is visible while
-moving — acceptable for the skeleton; see project-state open threads.
+can see undisguised props — an accepted cost of host authority (the HIDING
+blindfold's data half is likewise honor-system for the host); (2) an undisguised
+prop still renders as a neutral capsule and so is visible while moving —
+acceptable for the skeleton; see project-state open threads.

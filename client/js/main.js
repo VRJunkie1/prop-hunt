@@ -27,9 +27,12 @@ const state = {
   cfg: null,
   map: null,
   props: [], // authoritative prop instances for the active match
-  self: { x: 0, z: 0 }, // predicted local position
-  serverSelf: { x: 0, z: 0 }, // last authoritative position for reconciliation
+  self: { x: 0, y: 0, z: 0, vy: 0 }, // predicted local position + vertical velocity
+  serverSelf: { x: 0, y: 0, z: 0 }, // last authoritative position for reconciliation
+  eyeHeight: 1.6, // current (lerped) camera eye height; drops when crouching
   movable: false,
+  blindfolded: false, // hunter, during HIDING — screen blackout ("eyes closed")
+  timeLeft: 0, // last known phase countdown (for the blindfold overlay)
   spawned: false, // snap to the authoritative spawn on the first snapshot
   bounds: 18,
 };
@@ -131,6 +134,8 @@ function backToMenu(msg) {
   state.phase = PHASE.LOBBY;
   state.movable = false;
   state.spawned = false;
+  state.blindfolded = false;
+  ui.setBlindfold(false, 0);
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
@@ -138,31 +143,57 @@ function backToMenu(msg) {
 
 function onSnapshot(msg) {
   state.phase = msg.phase;
+  state.timeLeft = msg.timeLeft;
   ui.setHud(msg);
   scene.syncPlayers(msg.players);
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
     state.serverSelf.x = me.x;
+    state.serverSelf.y = me.y || 0;
     state.serverSelf.z = me.z;
     if (!state.spawned) {
       state.self.x = me.x;
+      state.self.y = me.y || 0;
       state.self.z = me.z;
+      state.self.vy = 0;
       state.spawned = true;
     }
     const frozenHunter = state.role === ROLE.HUNTER && msg.phase === PHASE.HIDING;
     state.movable = me.alive && !frozenHunter && (msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING);
     if (!state.movable) {
       state.self.x = me.x;
+      state.self.y = me.y || 0;
       state.self.z = me.z;
+      state.self.vy = 0;
     }
   }
+  updateBlindfold();
+}
+
+// The blindfold's screen half: hunters see a blackout during HIDING. The data
+// half (referee sends them nothing) lives in shared/referee.js. Kept as a pure
+// show/hide switch driven by role+phase, same pattern as the click-to-play
+// overlay — no game logic sneaks into the UI layer.
+function updateBlindfold() {
+  state.blindfolded = state.role === ROLE.HUNTER && state.phase === PHASE.HIDING;
+  ui.setBlindfold(state.blindfolded, Math.max(0, Math.ceil(state.timeLeft)));
 }
 
 function onEvent(msg) {
   switch (msg.kind) {
     case 'phase':
-      if (msg.phase === PHASE.HIDING) ui.banner('HIDING PHASE — props, disguise now!', 2500);
+      state.phase = msg.phase;
+      if (msg.phase === PHASE.HIDING) {
+        state.timeLeft = msg.seconds;
+        ui.banner('HIDING PHASE — props, disguise now!', 2500);
+      }
       if (msg.phase === PHASE.HUNTING) ui.banner('HUNT! Hunters are loose.', 2500);
+      // Flip the blackout the instant the phase changes, before the next
+      // snapshot — no window where a hunter glimpses the world.
+      updateBlindfold();
+      break;
+    case 'toLobby':
+      ui.feed(msg.reason || 'Returned to the lobby.');
       break;
     case 'eliminated':
       ui.feed(`${msg.name} was found!`);
@@ -178,7 +209,12 @@ function onEvent(msg) {
       const won =
         (msg.winner === ROLE.HUNTER && state.role === ROLE.HUNTER) ||
         (msg.winner === ROLE.PROP && state.role === ROLE.PROP);
-      ui.banner(`${msg.winner === ROLE.HUNTER ? 'HUNTERS' : 'PROPS'} WIN — ${won ? 'you won!' : 'you lost.'}`, 6000);
+      // Scoreboard holds for the ENDING phase, then the referee rolls into the
+      // next round with teams swapped — no trip back to the lobby.
+      ui.banner(
+        `${msg.winner === ROLE.HUNTER ? 'HUNTERS' : 'PROPS'} WIN — ${won ? 'you won!' : 'you lost.'}\nNext round starting… teams swap!`,
+        9000
+      );
       break;
     }
   }
@@ -190,6 +226,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
+  const r = state.cfg.rules;
+  const crouching = state.movable && input.crouch;
   if (state.movable) {
     const { mx, mz } = input.moveVector();
     const sin = Math.sin(input.yaw);
@@ -201,22 +239,39 @@ function frame(now) {
       vx /= len;
       vz /= len;
     }
-    const speed = state.cfg.rules.moveSpeed;
+    // Same crouch multiplier + jump/gravity as the referee (shared/referee.js
+    // integrate). Must stay identical or the local player rubber-bands.
+    const speed = r.moveSpeed * (input.crouch ? r.crouchSpeedMult : 1);
     state.self.x += vx * speed * dt;
     state.self.z += vz * speed * dt;
     state.self.x = clamp(state.self.x, -state.bounds, state.bounds);
     state.self.z = clamp(state.self.z, -state.bounds, state.bounds);
+
+    const grounded = state.self.y <= 0;
+    if (grounded && input.jump) state.self.vy = r.jumpSpeed;
+    state.self.vy -= r.gravity * dt;
+    state.self.y += state.self.vy * dt;
+    if (state.self.y < 0) {
+      state.self.y = 0;
+      state.self.vy = 0;
+    }
+
     // Gentle reconciliation toward the authoritative position.
     state.self.x += (state.serverSelf.x - state.self.x) * 0.08;
+    state.self.y += (state.serverSelf.y - state.self.y) * 0.08;
     state.self.z += (state.serverSelf.z - state.self.z) * 0.08;
   }
 
-  scene.setCamera(state.self, input.yaw, input.pitch);
+  // Ease the eye height toward stand/crouch so ducking dips the camera smoothly.
+  const targetEye = crouching ? r.crouchEyeHeight : r.standEyeHeight;
+  state.eyeHeight += (targetEye - state.eyeHeight) * Math.min(1, dt * 12);
+
+  scene.setCamera(state.self, state.eyeHeight, input.yaw, input.pitch);
   scene.interpolate(0.25);
   scene.render();
 
   const inGame = !ui.el.game.classList.contains('hidden');
-  ui.setClickToPlay(inGame && !input.locked);
+  ui.setClickToPlay(inGame && !input.locked && !state.blindfolded);
 
   requestAnimationFrame(frame);
 }
@@ -227,7 +282,7 @@ function startInputLoop() {
     if (!session || !session.ready) return;
     if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
     const { mx, mz } = input.moveVector();
-    session.send({ t: C2S.INPUT, mx, mz, yaw: input.yaw, pitch: input.pitch });
+    session.send({ t: C2S.INPUT, mx, mz, yaw: input.yaw, pitch: input.pitch, jump: input.jump, crouch: input.crouch });
   }, 1000 / 20);
 }
 
@@ -246,12 +301,16 @@ function wireMenu() {
     if (!room) return ui.menuError('Enter a room code.');
     session.join(nameEl.value, room);
   });
-  ui.el.readyBtn.addEventListener('click', () => {
-    ui.el.readyBtn._ready = !ui.el.readyBtn._ready;
-    session.send({ t: C2S.READY, ready: ui.el.readyBtn._ready });
-    ui.el.readyBtn.textContent = ui.el.readyBtn._ready ? 'Not ready' : 'Ready';
-  });
+  // Team pickers replace the Ready button: clicking a column IS readying up.
+  // Clicking the team you're already on unpicks you.
+  ui.el.teamHunters.addEventListener('click', () => pickTeam('hunter'));
+  ui.el.teamProps.addEventListener('click', () => pickTeam('prop'));
   ui.el.startBtn.addEventListener('click', () => session.send({ t: C2S.START }));
+}
+
+function pickTeam(team) {
+  const next = ui.myTeam === team ? null : team;
+  session.send({ t: C2S.PICK_TEAM, team: next });
 }
 
 // Build a fresh Session and wire its callbacks. Sessions are single-use, so this

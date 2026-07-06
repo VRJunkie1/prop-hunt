@@ -6,9 +6,17 @@
   "hunterRatio": 0.34,
   "hidingSeconds": 20,
   "huntingSeconds": 150,
-  "endingSeconds": 8,
+  "endingSeconds": 10,
   "tagRange": 4.5,
   "tagAngleDeg": 22,
+  "tagVertPad": 0.35,
   "disguiseRange": 4.5,
-  "mapMargin": 1.5
+  "mapMargin": 1.5,
+  "gravity": 22,
+  "jumpSpeed": 6.5,
+  "crouchSpeedMult": 0.5,
+  "standEyeHeight": 1.6,
+  "crouchEyeHeight": 1.0,
+  "standBodyHeight": 1.8,
+  "crouchBodyHeight": 1.1
 }

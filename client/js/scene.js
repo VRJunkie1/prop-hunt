@@ -3,6 +3,10 @@
 // meshes against the latest authoritative snapshot. No game rules here.
 import * as THREE from 'three';
 
+// Vertical squash applied to a crouching avatar. Roughly matches the
+// crouch/stand body-height ratio in rules.json (1.1 / 1.8).
+const CROUCH_SCALE = 0.6;
+
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
 // disguised players.
@@ -146,12 +150,14 @@ export class Scene3D {
         const mesh = this.meshForPlayer(p);
         mesh.position.set(p.x, mesh.userData.baseY, p.z);
         this.scene.add(mesh);
-        entry = { mesh, kind, target: { x: p.x, z: p.z, yaw: p.yaw } };
+        entry = { mesh, kind, baseY: mesh.userData.baseY, target: { x: p.x, y: p.y || 0, z: p.z, yaw: p.yaw } };
         this.players.set(p.id, entry);
       }
       entry.target.x = p.x;
+      entry.target.y = p.y || 0;
       entry.target.z = p.z;
       entry.target.yaw = p.yaw;
+      entry.crouch = !!p.crouch;
       entry.mesh.visible = p.alive;
     }
     // Remove players no longer present.
@@ -163,19 +169,26 @@ export class Scene3D {
     }
   }
 
-  // Smoothly move other players toward their latest snapshot position.
+  // Smoothly move other players toward their latest snapshot position. Also
+  // applies vertical jump offset and a crouch squash so ducking/hopping reads
+  // to everyone — and matches the referee's shrunk tag hitbox.
   interpolate(alpha) {
     for (const entry of this.players.values()) {
       const m = entry.mesh;
       m.position.x += (entry.target.x - m.position.x) * alpha;
       m.position.z += (entry.target.z - m.position.z) * alpha;
+      const s = entry.crouch ? CROUCH_SCALE : 1;
+      m.scale.y = s;
+      // Keep feet on the ground (+ jump height): center = foot + scaled half-height.
+      m.position.y = (entry.target.y || 0) + entry.baseY * s;
       m.rotation.y = entry.target.yaw;
     }
   }
 
-  // Place the first-person camera.
-  setCamera(pos, yaw, pitch) {
-    this.camera.position.set(pos.x, 1.6, pos.z);
+  // Place the first-person camera. eyeHeight dips when crouching; pos.y rises
+  // when jumping — both fed from main.js prediction.
+  setCamera(pos, eyeHeight, yaw, pitch) {
+    this.camera.position.set(pos.x, (pos.y || 0) + eyeHeight, pos.z);
     this.camera.rotation.set(0, 0, 0, 'YXZ');
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = yaw;

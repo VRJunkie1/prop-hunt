@@ -12,8 +12,11 @@ export class UI {
       name: $('name'),
       roomCode: $('roomCode'),
       lobbyCode: $('lobbyCode'),
-      playerList: $('playerList'),
-      readyBtn: $('readyBtn'),
+      teamHunters: $('teamHunters'),
+      teamProps: $('teamProps'),
+      hunterList: $('hunterList'),
+      propList: $('propList'),
+      unassignedList: $('unassignedList'),
       startBtn: $('startBtn'),
       lobbyHint: $('lobbyHint'),
       hud: $('hud'),
@@ -24,7 +27,10 @@ export class UI {
       banner: $('banner'),
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
+      blindfold: $('blindfold'),
+      blindfoldTimer: $('blindfoldTimer'),
     };
+    this.myTeam = null; // the team the local player has picked (or null)
   }
 
   show(screen) {
@@ -38,25 +44,46 @@ export class UI {
     this.el.menuError.textContent = msg || '';
   }
 
-  renderLobby({ room, hostId, players }, selfId) {
+  renderLobby({ room, hostId, players, canStart }, selfId) {
     this.el.lobbyCode.textContent = room;
-    this.el.playerList.innerHTML = '';
-    for (const p of players) {
-      const li = document.createElement('li');
-      const name = document.createElement('span');
-      name.textContent = p.name + (p.id === selfId ? ' (you)' : '');
-      if (p.id === hostId) name.classList.add('host');
-      const status = document.createElement('span');
-      status.textContent = p.ready ? 'ready' : '';
-      status.classList.add('ready');
-      li.append(name, status);
-      this.el.playerList.appendChild(li);
-    }
+
+    // Remember our own pick so the click handler can toggle it off, and so we
+    // can highlight the column we're on.
+    const me = players.find((p) => p.id === selfId);
+    this.myTeam = me ? me.team || null : null;
+
+    const fill = (listEl, team) => {
+      listEl.innerHTML = '';
+      for (const p of players.filter((pl) => pl.team === team)) {
+        const li = document.createElement('li');
+        li.textContent = p.name + (p.id === selfId ? ' (you)' : '');
+        if (p.id === hostId) li.classList.add('host');
+        listEl.appendChild(li);
+      }
+    };
+    fill(this.el.hunterList, 'hunter');
+    fill(this.el.propList, 'prop');
+
+    // Everyone who hasn't picked yet.
+    const undecided = players.filter((p) => p.team !== 'hunter' && p.team !== 'prop');
+    this.el.unassignedList.textContent = undecided.length
+      ? undecided.map((p) => p.name + (p.id === selfId ? ' (you)' : '')).join(', ')
+      : 'everyone has picked!';
+
+    // Highlight the column the local player is on.
+    this.el.teamHunters.classList.toggle('picked', this.myTeam === 'hunter');
+    this.el.teamProps.classList.toggle('picked', this.myTeam === 'prop');
+
     const isHost = hostId === selfId;
     this.el.startBtn.classList.toggle('hidden', !isHost);
+    this.el.startBtn.disabled = !canStart;
     this.el.lobbyHint.textContent = isHost
-      ? `You are host. Start when everyone has joined (min ${players.length >= 2 ? '' : '2 '}players).`
-      : 'Waiting for the host to start…';
+      ? canStart
+        ? 'Everyone picked — start when ready.'
+        : 'Pick a side. Start unlocks when everyone has picked and both teams have a player.'
+      : this.myTeam
+        ? `You're on the ${this.myTeam === 'hunter' ? 'Hunters' : 'Props'}. Waiting for the host to start…`
+        : 'Click a team to join. Left = Hunters, right = Props.';
   }
 
   setRole(role) {
@@ -91,5 +118,12 @@ export class UI {
 
   setClickToPlay(visible) {
     this.el.clickToPlay.classList.toggle('hidden', !visible);
+  }
+
+  // Hunter blackout during the hiding phase — the visible half of the blindfold
+  // (the referee also starves them of data). Pure show/hide + countdown text.
+  setBlindfold(visible, seconds) {
+    this.el.blindfold.classList.toggle('hidden', !visible);
+    if (visible) this.el.blindfoldTimer.textContent = `Eyes open in ${seconds}s`;
   }
 }

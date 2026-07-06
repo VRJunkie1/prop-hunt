@@ -7,10 +7,30 @@ networking model is **peer-to-peer over WebRTC** — players connect directly to
 each other; the room creator's browser hosts the referee. A tiny Node
 **matchmaker** only mints room codes and relays the WebRTC handshake.
 
-## Status: P2P rebuild implemented in code (plan steps 1–8). NOT playtested.
+## Status: Gameplay update (blindfold, jump, crouch, team lobby, round loop) implemented in code. NOT playtested.
 
-The networking core was rewritten this session. All game rules/content are
-unchanged — only where the referee runs and how messages travel changed.
+Most recent session (2026-07, "clank" task) added, on top of the P2P rebuild —
+all rule changes live in the host's referee, no server change:
+- **Hunter blindfold during HIDING** — data (referee sends hunters only
+  themselves in the snapshot) + screen (black 🙈 overlay w/ countdown,
+  `ui.setBlindfold`). `shared/referee.js` `broadcastSnapshot`; `main.js`
+  `updateBlindfold`.
+- **Jump** (Space) + **crouch** (Ctrl/C): vertical `pos.y`+gravity and crouch
+  speed/eye-height/hitbox, added identically in `Referee.integrate` and `main.js`
+  frame loop. Tag became a 3D ray gate so crouch/jump affect it. New tunables in
+  `rules.json` (gravity, jumpSpeed, crouch*, stand*/tag vert pad). **Tag rebind:
+  Space→jump, so tag is now F / left-click only.**
+- **Lobby team pickers** replace the Ready button — two columns (Hunters left,
+  Props right), click to join, names move live. `C2S.PICK_TEAM`; referee owns
+  `canStart`. `index.html` + `ui.js` `renderLobby` + `style.css`.
+- **Round loop**: ENDING → next round with **teams swapped** (`nextRoundOrLobby`
+  / `computeSwappedTeams`), staying in-game. Lobby only on host-leave or a team
+  emptying (`bailIfTeamEmpty`, one `removePlayer` path). Round one uses picked
+  teams (`hunterRatio` now unused).
+
+### Earlier: P2P rebuild (plan steps 1–8). Also NOT playtested.
+The networking core was rewritten. All game rules/content were unchanged then —
+only where the referee runs and how messages travel changed.
 
 Implemented:
 - [1] **Matchmaker** (`server/index.js`): HTTP static + WebRTC signaling relay
@@ -58,8 +78,15 @@ Implemented:
       for skeleton; future: auto-disguise at hunt start, or hide/lock undisguised
       props.
 - No client-side prediction of collisions; players can overlap props/walls
-      (walls are visual; the referee only clamps to map bounds).
-- `ready` flag exists in lobby but host can start regardless — intentional.
+      (walls are visual; the referee only clamps to map bounds). Jump has no
+      ceiling/roof logic either — you just arc back to y=0.
+- **Controls are keyboard-only.** No touch controls exist at all (mouse-look +
+      WASD + Space/Ctrl). Prop hunt is unplayable on phones today; a mobile layer
+      (virtual joystick, look-drag, on-screen jump/crouch/tag buttons) is a real
+      separate project — not started.
+- **Crouch tag tuning is untested feel.** `tagVertPad` 0.35 makes a level-aiming
+      hunter miss a crouched prop at close range but still tag standing/jumping
+      ones. Numbers are a first guess — verify in playtest, tune in `rules.json`.
 - Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 

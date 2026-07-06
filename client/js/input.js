@@ -36,8 +36,10 @@ export class Input {
   onKeyDown(e) {
     this.keys.add(e.code);
     if (!this.locked) return;
+    // Space now jumps (below via held-state), so stop the page from scrolling.
+    if (e.code === 'Space') e.preventDefault();
     if (e.code === 'KeyE') this.onAction('disguise');
-    if (e.code === 'KeyF' || e.code === 'Space') this.onAction('tag');
+    if (e.code === 'KeyF') this.onAction('tag'); // Space freed up for jumping
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).
@@ -49,5 +51,15 @@ export class Input {
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) mx += 1;
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) mx -= 1;
     return { mx, mz };
+  }
+
+  // Held-state jump/crouch. Held (not edge-triggered) so the referee and the
+  // client prediction read the SAME signal each step and stay in sync — the
+  // referee only acts on jump when grounded, so holding Space doesn't spam hops.
+  get jump() {
+    return this.keys.has('Space');
+  }
+  get crouch() {
+    return this.keys.has('ControlLeft') || this.keys.has('ControlRight') || this.keys.has('KeyC');
   }
 }
