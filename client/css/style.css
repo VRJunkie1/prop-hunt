@@ -113,6 +113,32 @@ button.primary:hover { background: #ff6fb5; }
 .team-list .host::after { content: " ★"; color: gold; }
 .unassigned { font-size: 12px; opacity: 0.75; margin: 12px 0 4px; text-align: left; }
 .unassigned span { color: var(--accent2); }
+
+/* ---- lobby map picker ---- */
+.maps-panel { margin: 16px 0 4px; text-align: left; }
+.maps-title { margin: 0 0 8px; font-size: 15px; }
+.map-list { list-style: none; padding: 0; margin: 0; }
+.map-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  background: #170e2c;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  margin-bottom: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.map-row:not(.locked):hover { background: #1f1338; }
+.map-row:not(.locked):active { transform: translateY(1px); }
+.map-row.selected { border-color: var(--accent2); background: #1c1b3a; }
+.map-row.selected .map-name::after { content: " ✓"; color: var(--accent2); }
+.map-row.locked { cursor: default; }
+.map-name { font-weight: bold; }
+.map-size { font-size: 12px; opacity: 0.6; }
+.map-hint { font-size: 12px; opacity: 0.7; margin: 8px 0 0; text-align: left; }
+
 #startBtn:disabled { opacity: 0.45; cursor: not-allowed; }
 #startBtn:disabled:hover { background: var(--accent); }
 

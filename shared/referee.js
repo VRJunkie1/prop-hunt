@@ -32,7 +32,11 @@ export class Referee {
     this.rules = config.rules;
     this.maps = config.maps;
     this.propCatalog = config.props; // prop-type catalog, for aim/height checks
-    this.mapId = Object.keys(this.maps)[0]; // DEFAULT_MAP_ID
+    // The one piece of lobby map state: which map the host has selected. Defaults
+    // to the first map in the file so a single-map build plays with zero clicks.
+    // Changed only by a host PICK_MAP in the lobby; carried to clients solely in
+    // the lobby broadcast (see broadcastLobby / memory/notes/map-selection.md).
+    this.mapId = Object.keys(this.maps)[0]; // DEFAULT_MAP_ID / selected map
 
     this.code = code;
     this.players = new Map(); // id -> player
@@ -48,11 +52,16 @@ export class Referee {
   }
 
   // ---- membership ---------------------------------------------------------
-  // player: { id, name, send }. `send` is how the referee talks back to this
-  // player — a DataChannel write for guests, a direct call for the host.
+  // player: { id, name, send, host? }. `send` is how the referee talks back to
+  // this player — a DataChannel write for guests, a direct call for the host.
+  // `host` is set ONLY by the network layer, and only for the loopback player it
+  // adds for itself (guests arrive over data channels). That flag is the single
+  // source of truth for "who may pick the map / start" — the referee otherwise
+  // treats every player identically. See memory/notes/map-selection.md.
   addPlayer(player) {
     player.role = null;
     player.alive = true;
+    player.host = !!player.host; // authoritative host marker (set by net.js)
     player.team = null; // lobby team pick ('hunter'|'prop'|null); replaces `ready`
     player.disguise = null;
     player.pos = { x: 0, y: 0, z: 0 };
@@ -62,7 +71,10 @@ export class Referee {
     player.input = { mx: 0, mz: 0, jump: false, crouch: false };
 
     this.players.set(player.id, player);
-    if (!this.hostId) this.hostId = player.id; // host adds itself first
+    // The host is whoever the network layer flagged (the loopback player it adds
+    // for itself). Fall back to "first added" only if no flag ever arrives, which
+    // preserves the old behaviour for any caller that doesn't pass the flag.
+    if (player.host || !this.hostId) this.hostId = player.id;
 
     send(player, { t: S2C.JOINED, id: player.id, room: this.code, host: this.hostId === player.id });
     this.broadcastLobby();
@@ -102,6 +114,16 @@ export class Referee {
         // in the lobby; anything else clears the pick.
         if (this.phase === PHASE.LOBBY) {
           player.team = msg.team === 'hunter' || msg.team === 'prop' ? msg.team : null;
+          this.broadcastLobby();
+        }
+        break;
+      case C2S.PICK_MAP:
+        // Selecting the map is host-only, lobby-only, and validated against the
+        // map file. Three gates, all silently dropped on failure — the referee is
+        // the truth, not the buttons, so a faked message from a guest gets nowhere
+        // (same spirit as START re-validating). See memory/notes/map-selection.md.
+        if (player.id === this.hostId && this.phase === PHASE.LOBBY && this.maps[msg.mapId]) {
+          this.mapId = msg.mapId;
           this.broadcastLobby();
         }
         break;
@@ -294,7 +316,10 @@ export class Referee {
       if (player.role) send(player, { t: S2C.ROLE, role: player.role });
     }
 
-    this.broadcast({ t: S2C.STARTED, mapId: this.mapId, props: this.props });
+    // No mapId here on purpose: the selected map already reached every client in
+    // the lobby broadcast, and that is its ONLY carrier. Sending it a second time
+    // is how the two copies drift apart ("props on my screen, not yours").
+    this.broadcast({ t: S2C.STARTED, props: this.props });
     this.setPhase(PHASE.HIDING, this.rules.hidingSeconds);
   }
 
@@ -460,7 +485,10 @@ export class Referee {
       players.every((p) => p.team === 'hunter' || p.team === 'prop') &&
       players.some((p) => p.team === 'hunter') &&
       players.some((p) => p.team === 'prop');
-    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase, canStart });
+    // mapId rides along here as the sole carrier of the map selection — every
+    // client (host and guests) remembers the latest one and builds its scene from
+    // it at match start. No separate map handoff exists.
+    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase, canStart, mapId: this.mapId });
   }
 
   broadcastSnapshot() {

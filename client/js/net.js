@@ -147,7 +147,10 @@ export class Session {
     // the plan asks us to verify is harmless — the client's reconcile-toward-
     // server nudge (main.js) converges to a no-op because serverSelf tracks our
     // prediction almost exactly. Guests still predict against a real round trip.
-    this.referee.addPlayer({ id, name: this.name, send: (obj) => this.onMessage(obj) });
+    // We are the host: mark the loopback player so the referee knows which single
+    // player may pick the map / start. This is the ONE place that knows for sure
+    // (guests only ever arrive over data channels). See referee.addPlayer.
+    this.referee.addPlayer({ id, name: this.name, host: true, send: (obj) => this.onMessage(obj) });
   }
 
   // A guest is inbound. Create its peer connection + data channel and offer.

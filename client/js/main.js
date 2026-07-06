@@ -26,6 +26,7 @@ const state = {
   phase: PHASE.LOBBY,
   cfg: null,
   map: null,
+  selectedMapId: null, // latest map id from the lobby broadcast — the SOLE carrier
   props: [], // authoritative prop instances for the active match
   self: { x: 0, y: 0, z: 0, vy: 0 }, // predicted local position + vertical velocity
   serverSelf: { x: 0, y: 0, z: 0 }, // last authoritative position for reconciliation
@@ -68,6 +69,8 @@ function handleGameMessage(msg) {
       break;
 
     case S2C.LOBBY:
+      // Remember the selected map — this broadcast is its only source of truth.
+      if (msg.mapId) state.selectedMapId = msg.mapId;
       ui.renderLobby(msg, state.selfId);
       if (msg.phase === PHASE.LOBBY) {
         state.phase = PHASE.LOBBY;
@@ -76,7 +79,10 @@ function handleGameMessage(msg) {
       break;
 
     case S2C.STARTED: {
-      state.map = state.cfg.maps[msg.mapId];
+      // The map isn't in this message on purpose — we build from the id we
+      // remembered from the lobby broadcast, the single carrier of the choice.
+      const mapId = state.selectedMapId || Object.keys(state.cfg.maps)[0];
+      state.map = state.cfg.maps[mapId];
       state.props = msg.props;
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
@@ -313,6 +319,14 @@ function wireMenu() {
   ui.el.teamHunters.addEventListener('click', () => pickTeam('hunter'));
   ui.el.teamProps.addEventListener('click', () => pickTeam('prop'));
   ui.el.startBtn.addEventListener('click', () => session.send({ t: C2S.START }));
+  // Map selection (host only). Event-delegated because rows are re-rendered each
+  // lobby update. Guest rows are 'locked' and ignored here; even so the referee
+  // re-validates (host + lobby + valid id), so a faked click changes nothing.
+  ui.el.mapList.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-map-id]');
+    if (!row || row.classList.contains('locked')) return;
+    session.send({ t: C2S.PICK_MAP, mapId: row.dataset.mapId });
+  });
 }
 
 function pickTeam(team) {
@@ -331,6 +345,7 @@ function newSession() {
 // ---- boot -----------------------------------------------------------------
 (async function boot() {
   state.cfg = await loadConfig();
+  ui.setMaps(state.cfg.maps); // the lobby renders the map list from this catalog
   newSession();
   wireMenu();
   startInputLoop();

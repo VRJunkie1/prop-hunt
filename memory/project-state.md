@@ -7,9 +7,27 @@ networking model is **peer-to-peer over WebRTC** — players connect directly to
 each other; the room creator's browser hosts the referee. A tiny Node
 **matchmaker** only mints room codes and relays the WebRTC handshake.
 
-## Status: Gameplay update (blindfold, jump, crouch, team lobby, round loop, aim-to-disguise) implemented in code. NOT playtested.
+## Status: Gameplay update (blindfold, jump, crouch, team lobby, round loop, aim-to-disguise, host map picker) implemented in code. NOT playtested.
 
-Most recent session (2026-07, aim-to-disguise) made disguise **aim-based instead
+Most recent session (2026-07, host map picker) added **host-only lobby map
+selection** as groundwork for multiple maps (still one map today, so it's invisible
+until a second is added to `maps.json`). No matchmaker change — all in the host
+referee + client. Details:
+- **Referee learns who the host is**: `net.js` `_becomeHost` adds its loopback
+  player with `host: true`; `referee.addPlayer` sets `hostId` from that flag
+  (falls back to first-added). Single source of truth for host-only actions.
+- **`referee.mapId` is the selected map** (defaults to first map). New
+  `C2S.PICK_MAP {mapId}` gated by host + LOBBY phase + id-exists, silently dropped
+  otherwise. `broadcastLobby` now carries `mapId`.
+- **One carrier rule**: `S2C.LOBBY.mapId` is the SOLE source of the choice; clients
+  remember it (`state.selectedMapId`) and build the scene from it at match start.
+  `S2C.STARTED` **no longer sends mapId** (was a second copy → desync risk).
+- **UI**: `ui.renderMaps` lists maps (name + size), marks the selected one for all,
+  host rows clickable / guest rows `locked`. `.maps-panel` in `index.html`,
+  `.map-*` styles in `style.css`, click delegated in `main.js`.
+- **Rename**: "Start match" → "Start game". Full detail: `memory/notes/map-selection.md`.
+
+Earlier session (2026-07, aim-to-disguise) made disguise **aim-based instead
 of proximity-based** — a prop now disguises as the prop under its crosshair, not
 the nearest one. No server change (all in the host referee + client). Details:
 - **Stable prop ids** in `maps.json` (`id` per placement); referee `beginRound`
@@ -110,7 +128,10 @@ Implemented:
       at a prop partly behind another, and right at the range limit. Tune in
       `rules.json`. Note: the client ray currently ignores walls/other players as
       occluders (tests static props only) — acceptable, matches "first prop hit".
-- Single map (`circus_lot`); map selection UI not built. Adding maps is data-only.
+- Single map (`circus_lot`). **Host map-picker UI now exists** (lobby list,
+      host-only selection); adding a real second map is data-only (add to
+      `maps.json`) and the picker/referee pick it up automatically. See
+      `memory/notes/map-selection.md`. Picker itself NOT playtested.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 
 ## Key decisions
@@ -131,5 +152,6 @@ Implemented:
 
 Referee (host browser): `shared/referee.js`. Matchmaker: `server/index.js`.
 Protocol: `shared/protocol.js` (SIG + C2S/S2C). Network layer: `client/js/net.js`.
-Tunables: `shared/config/rules.json`. Client entry: `client/js/main.js`. Notes:
-`memory/notes/` (netcode, game-loop).
+Tunables: `shared/config/rules.json`. Maps: `shared/config/maps.json`. Client
+entry: `client/js/main.js`. Lobby UI: `client/js/ui.js`. Notes: `memory/notes/`
+(netcode, game-loop, disguise, map-selection).

@@ -31,6 +31,7 @@ export const C2S = {
   CREATE: 'create', // { name }                     -> create a room, become host
   JOIN: 'join', // { name, room }               -> join an existing room
   PICK_TEAM: 'pickTeam', // { team:'hunter'|'prop'|null }  -> choose a lobby team (replaces ready)
+  PICK_MAP: 'pickMap', // { mapId }                     -> host chooses which map to play (host + lobby only)
   START: 'start', // {}                            -> host starts the match
   INPUT: 'input', // { mx, mz, yaw, pitch, jump, crouch } -> movement + look + jump/crouch intent
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
@@ -40,8 +41,10 @@ export const C2S = {
 // Referee -> Client message types.
 export const S2C = {
   JOINED: 'joined', // { id, room, host }
-  LOBBY: 'lobby', // { room, hostId, canStart, players:[{id,name,team}] }
-  STARTED: 'started', // { mapId, props:[{id,type,x,z,rot}] }
+  LOBBY: 'lobby', // { room, hostId, phase, canStart, mapId, players:[{id,name,team}] }
+  //   mapId is the SOLE carrier of the selected map — the client remembers the
+  //   latest one it sees here and builds its scene from it at match start.
+  STARTED: 'started', // { props:[{id,type,x,z,rot}] }  (map comes from the remembered LOBBY mapId)
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state (see Referee.broadcastSnapshot)
   EVENT: 'event', // { kind, ... }               -> discrete game events

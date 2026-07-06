@@ -17,6 +17,8 @@ export class UI {
       hunterList: $('hunterList'),
       propList: $('propList'),
       unassignedList: $('unassignedList'),
+      mapList: $('mapList'),
+      mapHint: $('mapHint'),
       startBtn: $('startBtn'),
       lobbyHint: $('lobbyHint'),
       hud: $('hud'),
@@ -32,6 +34,13 @@ export class UI {
       blindfoldTimer: $('blindfoldTimer'),
     };
     this.myTeam = null; // the team the local player has picked (or null)
+    this.maps = null; // the map catalog (maps.json), set once at boot via setMaps
+  }
+
+  // The lobby map list is rendered straight from the map file (which every
+  // client already downloaded); the referee only tells us WHICH id is selected.
+  setMaps(maps) {
+    this.maps = maps;
   }
 
   show(screen) {
@@ -45,8 +54,10 @@ export class UI {
     this.el.menuError.textContent = msg || '';
   }
 
-  renderLobby({ room, hostId, players, canStart }, selfId) {
+  renderLobby({ room, hostId, players, canStart, mapId }, selfId) {
     this.el.lobbyCode.textContent = room;
+    const isHost = hostId === selfId;
+    this.renderMaps(mapId, isHost);
 
     // Remember our own pick so the click handler can toggle it off, and so we
     // can highlight the column we're on.
@@ -75,7 +86,6 @@ export class UI {
     this.el.teamHunters.classList.toggle('picked', this.myTeam === 'hunter');
     this.el.teamProps.classList.toggle('picked', this.myTeam === 'prop');
 
-    const isHost = hostId === selfId;
     this.el.startBtn.classList.toggle('hidden', !isHost);
     this.el.startBtn.disabled = !canStart;
     this.el.lobbyHint.textContent = isHost
@@ -85,6 +95,32 @@ export class UI {
       : this.myTeam
         ? `You're on the ${this.myTeam === 'hunter' ? 'Hunters' : 'Props'}. Waiting for the host to start…`
         : 'Click a team to join. Left = Hunters, right = Props.';
+  }
+
+  // Render the map list for everyone. The selected map is marked for all players;
+  // only the host's rows are interactive (click -> C2S.PICK_MAP, wired in
+  // main.js). Guests see the same list but read-only ('locked'). A faked click
+  // from a guest is caught by the referee anyway (host + lobby + valid-id gates).
+  renderMaps(selectedMapId, isHost) {
+    const listEl = this.el.mapList;
+    listEl.innerHTML = '';
+    for (const [id, m] of Object.entries(this.maps || {})) {
+      const li = document.createElement('li');
+      li.dataset.mapId = id;
+      li.className = 'map-row' + (id === selectedMapId ? ' selected' : '') + (isHost ? '' : ' locked');
+
+      const name = document.createElement('span');
+      name.className = 'map-name';
+      name.textContent = m.name || id;
+      const size = document.createElement('span');
+      size.className = 'map-size';
+      size.textContent = `${m.size}×${m.size}`;
+      li.append(name, size);
+      listEl.appendChild(li);
+    }
+    this.el.mapHint.textContent = isHost
+      ? 'Pick the map to play. Everyone sees your choice.'
+      : 'The host chooses the map.';
   }
 
   setRole(role) {

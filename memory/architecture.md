@@ -189,6 +189,35 @@ referee owns the truth: `broadcastLobby` computes `canStart` (everyone picked +
 ≥1 per side + ≥minPlayers) and the lobby only *displays* teams + gates Start on
 it. `startMatch` re-validates before beginning.
 
+## Lobby map selection (host-only, added 2026-07)
+
+The host picks which map is played from a list rendered straight from `maps.json`
+(every client already downloaded it). Four load-bearing rules, all so the choice
+travels exactly one road:
+
+- **The referee knows who the host is.** The network layer (`net.js`
+  `_becomeHost`) adds its own loopback player with `host: true`; `addPlayer` uses
+  that flag to set `hostId` (falling back to first-added if absent). This is the
+  single source of truth for "who may pick the map / start" — the referee still
+  treats all players identically otherwise.
+- **One selected-map setting**: `referee.mapId`, defaulting to the first map in
+  the file (single-map builds play with zero clicks). `beginRound`/`integrate`
+  already read it, so the choice flows into spawns/props/bounds for free.
+- **`C2S.PICK_MAP {mapId}` with three gates**, silently dropped on any failure:
+  sender is `hostId`, phase is LOBBY, and `maps[mapId]` exists. The referee is the
+  truth, not the buttons — a guest faking the message via dev tools gets nowhere.
+- **The lobby broadcast (`S2C.LOBBY.mapId`) is the SOLE carrier.** Each client
+  remembers the latest id it saw (`state.selectedMapId`) and builds its 3D scene
+  from it at match start. `S2C.STARTED` deliberately **no longer carries mapId** —
+  two copies of the same value is how "props on my screen, not yours" desyncs are
+  born. Referee props (from `mapId` in `beginRound`) and client scene (from the
+  remembered id) both derive from the same value delivered in one message.
+
+Rendering: `ui.renderMaps` lists every map (name + size), marks the selected one
+for everyone, and makes rows interactive only for the host (guest rows are
+`locked`, click ignored in `main.js` and re-rejected by the referee anyway). Full
+detail in `memory/notes/map-selection.md`.
+
 ## Role/identity hiding
 
 Snapshots expose `hunter: bool` (seekers are meant to be visible) and `disguise`
