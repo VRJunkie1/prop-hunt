@@ -8,7 +8,18 @@ creator's browser hosts the referee. Peer introduction (room codes + WebRTC
 handshake) is done by **PeerJS's free public broker**; we run **no backend**. The
 app is fully static and deploys to **Cloudflare Pages**.
 
-## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. Touch controls added (2026-07). STILL NOT PLAYTESTED.
+## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. Touch controls added (2026-07). Second map added (2026-07). STILL NOT PLAYTESTED.
+
+### Second map added (2026-07, "BUILD IT"): `rusty_junkyard`
+The map picker had no reason to exist — only one map. Added a second, data-only, per
+the map-selection groundwork. `shared/config/maps.json` now has `circus_lot` then
+`rusty_junkyard` (appended AFTER so Circus Lot stays the default — order = behaviour).
+Junkyard is designed to play differently: smaller (size 34 → tighter sightlines),
+scenery grouped into five clustered scrap piles instead of a spread field, overcast
+grey/dirt palette, reuses existing prop types only (crate/barrel/chair/ball). Pure
+data change — no engine/netcode/UI code touched; the picker + referee read the file.
+Sanity-checked on paper (bounds/overlap/disguise-reachable). Full detail:
+`memory/notes/map-selection.md`. **NOT playtested** (needs two peers + a browser).
 
 ### Mobile touch controls added (2026-07, "BUILD IT" ship pass, plan step 7)
 The last big buildable gap — the game was keyboard+mouse only, unplayable on
@@ -201,10 +212,12 @@ Implemented:
       at a prop partly behind another, and right at the range limit. Tune in
       `rules.json`. Note: the client ray currently ignores walls/other players as
       occluders (tests static props only) — acceptable, matches "first prop hit".
-- Single map (`circus_lot`). **Host map-picker UI now exists** (lobby list,
-      host-only selection); adding a real second map is data-only (add to
-      `maps.json`) and the picker/referee pick it up automatically. See
-      `memory/notes/map-selection.md`. Picker itself NOT playtested.
+- **Two maps now** (`circus_lot` default, `rusty_junkyard` added 2026-07). The
+      picker finally has something to pick. Adding more is still data-only (append to
+      `maps.json`, keep coords within `±(size/2 − mapMargin)`). See
+      `memory/notes/map-selection.md`. **Picker + junkyard NOT playtested**: confirm
+      both rows list with names, host switches / guest locked, and a full round (incl.
+      round-two team swap) stays on the chosen map on both browsers, incl. mobile.
 - **Reconnection/host migration**: none. If the host drops, the match is over.
 
 ## Key decisions

@@ -50,11 +50,40 @@ click handler is event-delegated on `#mapList` because rows re-render each lobby
 update. Markup: `.maps-panel` in `index.html`; styles in `style.css`
 (`.map-row`/`.map-row.selected`/`.map-row.locked`).
 
-## To add a real second map
+## Second map added (2026-07): `rusty_junkyard`
 
-Just add another entry to `shared/config/maps.json` (same shape: size, ground/sky,
-hunterSpawn, spawns, props with stable ids). No engine/UI change — the list, the
-picker, and the referee all read the file. That was the point of doing this now.
+The picker now has a reason to exist. `shared/config/maps.json` has two entries:
+`circus_lot` (unchanged) then `rusty_junkyard`. **Order is behaviour**: the referee
+defaults `mapId` to `Object.keys(maps)[0]`, so Circus Lot stays the default every
+session opens on — the new map was deliberately appended, never prepended.
+
+Junkyard is designed to *play differently* from Circus Lot so choosing matters:
+- **Smaller** (size 34 vs 40 → bound ±15.5 at `mapMargin` 1.5) = tighter sightlines.
+- **Clustered cover**, not an evenly-scattered field: scenery is grouped into five
+  scrap piles (four corners + a center pile) instead of Circus's spread-out layout.
+- **Overcast palette** (`ground #5c4a38` dirt, `sky #8b929c` grey) vs Circus's
+  purple/pink, so the two maps read as different places at a glance.
+- Reuses existing prop types only (crate/barrel/chair/ball — no crystal/cactus, which
+  read as circus/desert). Adding new prop *shapes* is a separate, bigger job.
+- Hunter spawns at the south edge `(0,-14)`; prop-player spawns are tucked at the
+  clusters (immediate cover) and mostly out of the hunter's forward view. (Note:
+  hunters are blindfolded the whole HIDING phase anyway — see game-loop.md — so
+  distance-to-cover matters more than literal line-of-sight from hunter spawn.)
+- 15 scenery props, ids 1–15 (ids are per-map/self-contained — Circus uses its own
+  1–14; the referee rebuilds `this.props` from the selected map each `beginRound`).
+
+Sanity-checked on paper: every spawn/prop is inside ±15.5, no two props in a cluster
+overlap, and every cluster has an adjacent prop spawn so disguising is viable
+everywhere. **NOT yet playtested** (needs two peers + a browser — not possible here):
+confirm both rows show in the lobby with names, host can switch, guests see it locked,
+and a full round (incl. round-two team swap) stays on the chosen map.
+
+## To add a *third* map
+
+Same recipe — append another entry to `shared/config/maps.json` (shape: `name`, `size`,
+`ground`/`sky`, `hunterSpawn`, `spawns`, `props` with stable ids). No engine/UI change.
+Keep coords within `±(size/2 − mapMargin)`. Append (don't prepend) unless you mean to
+change the default map.
 
 ## Related rename
 

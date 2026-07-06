@@ -31,5 +31,39 @@
       { "id": 13, "type": "cactus", "x": 10, "z": -12 },
       { "id": 14, "type": "cactus", "x": -11, "z": 14 }
     ]
+  },
+  "rusty_junkyard": {
+    "name": "Rusty Junkyard",
+    "size": 34,
+    "ground": "#5c4a38",
+    "sky": "#8b929c",
+    "hunterSpawn": { "x": 0, "z": -14 },
+    "spawns": [
+      { "x": -12.5, "z": -8 },
+      { "x": 12.5, "z": -7 },
+      { "x": -12, "z": 11 },
+      { "x": 12, "z": 12.5 },
+      { "x": -3.5, "z": 3 },
+      { "x": 3, "z": 3.5 },
+      { "x": -14, "z": 2 },
+      { "x": 14, "z": 3 }
+    ],
+    "props": [
+      { "id": 1, "type": "crate", "x": -11, "z": -9 },
+      { "id": 2, "type": "crate", "x": -9, "z": -8.5 },
+      { "id": 3, "type": "barrel", "x": -10.5, "z": -7 },
+      { "id": 4, "type": "chair", "x": -8.5, "z": -10 },
+      { "id": 5, "type": "crate", "x": 10.5, "z": -7 },
+      { "id": 6, "type": "barrel", "x": 12, "z": -6 },
+      { "id": 7, "type": "crate", "x": 9, "z": -5.5 },
+      { "id": 8, "type": "crate", "x": -9, "z": 9 },
+      { "id": 9, "type": "barrel", "x": -10.5, "z": 9.5 },
+      { "id": 10, "type": "ball", "x": -8, "z": 10.5 },
+      { "id": 11, "type": "crate", "x": 9, "z": 10 },
+      { "id": 12, "type": "barrel", "x": 10.5, "z": 11 },
+      { "id": 13, "type": "crate", "x": 8, "z": 11.5 },
+      { "id": 14, "type": "crate", "x": 0, "z": 2 },
+      { "id": 15, "type": "ball", "x": 1.6, "z": 2.6 }
+    ]
   }
 }
