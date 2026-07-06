@@ -21,8 +21,15 @@
 // onStatus. It is identical code whether we turn out to be host or guest — the
 // host's own inputs take the same round-trip-free path a guest's would over the
 // network. See memory/notes/netcode.md.
-import { Peer } from 'https://esm.sh/peerjs@1.5.4';
 import { Referee } from '/shared/referee.js';
+
+// PeerJS is loaded as a self-contained UMD global by a <script> tag in
+// index.html (a single request, no chained sub-requests). The previous
+// `import { Peer } from 'https://esm.sh/peerjs@1.5.4'` was a two-request esm.sh
+// wrapper chain that failed the headless load check (net::ERR_FAILED) — the same
+// failure mode three.js hit. The classic script runs before this deferred
+// module, so `window.Peer` is defined by the time this evaluates. See index.html.
+const Peer = window.Peer;
 
 // Namespace our room ids on the SHARED public broker so a 4-char code can't
 // collide with unrelated PeerJS apps. Players only ever see the bare CODE.

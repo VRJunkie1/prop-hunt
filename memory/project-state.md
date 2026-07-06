@@ -35,6 +35,19 @@ skipped on touch (no pointer lock on phones). Desktop is provably unchanged.
 Full detail: `memory/notes/mobile.md`. **Not yet tried on a real phone** —
 sensitivity/sizes are first guesses; verify move/look/jump/crouch/tag/disguise.
 
+### Check-repair (2026-07, #3): PeerJS esm.sh ESM import → UMD `<script>` global
+Headless-load check STILL reported one `net::ERR_FAILED` after #2 fixed three.js.
+Root cause: **PeerJS was the last import still on the esm.sh two-request
+wrapper/redirect chain** — the exact failure mode #2 diagnosed for three.js. The
+prior note's "PeerJS loads fine on esm.sh" was an unverified assumption. Unlike
+three, PeerJS can't be a zero-import ESM file (bundled runtime deps), so the fix
+is its **self-contained UMD build** loaded via a classic `<script src=".../dist/
+peerjs.min.js">` in `index.html` (single request, no sub-requests, exposes a
+`Peer` global — peerjs.com's own documented CDN usage). `net.js` dropped the
+`import { Peer } from 'esm.sh/peerjs'` and now reads `const Peer = window.Peer`
+(the classic script runs before the deferred module, so it's defined in time). No
+gameplay/netcode logic touched. Full detail: `memory/notes/netcode.md`.
+
 ### Check-repair (2026-07, #2): three.js CDN → jsDelivr direct build file
 Automated headless-load check STILL reported two `net::ERR_FAILED` after the
 esm.sh swap below. Root cause: **bare-package CDN URLs for three resolve to a
@@ -45,8 +58,9 @@ which failed the check → the two errors. Fix: point the `three` importmap entr
 at jsDelivr's **direct build file** `https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js`
 — a single request, self-contained ESM, no redirect/wrapper. This is the
 canonical three.js CDN usage. One-line change in `index.html`; no code/gameplay
-touched. `scene.js` still imports the bare `three` specifier. PeerJS stays on
-esm.sh in `net.js` (loads fine — a working named-export ESM wrapper).
+touched. `scene.js` still imports the bare `three` specifier. (At the time PeerJS
+was left on esm.sh, assumed to "load fine" — that assumption was WRONG and is what
+check-repair #3 above fixed: PeerJS had the same esm.sh chain failure.)
 
 ### Check-repair (2026-07, #1): three.js CDN moved unpkg → esm.sh (superseded by #2)
 Automated headless-load check reported two `net::ERR_FAILED`. Diagnosed as unpkg's

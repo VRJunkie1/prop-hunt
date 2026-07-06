@@ -89,8 +89,11 @@ it was on unpkg, then esm.sh; both used the *bare-package* URL, which resolves t
 a redirect/wrapper chain (unpkg → CJS `main`; esm.sh → thin re-export wrapper), and
 both failed the headless load check (`net::ERR_FAILED`, one per request in the
 chain). The direct build file is a single self-contained ESM request with no
-redirect — the canonical three.js CDN usage — so it loads cleanly. PeerJS is
-still imported from esm.sh in `net.js` (`https://esm.sh/peerjs@1.5.4`, loads fine).
+redirect — the canonical three.js CDN usage — so it loads cleanly. **PeerJS hit
+the same esm.sh chain failure** and was moved off it: it now loads as a
+self-contained UMD `<script>` (`.../peerjs@1.5.4/dist/peerjs.min.js`) in
+`index.html`, exposing a `Peer` global that `net.js` reads via `window.Peer` (it
+can't be a zero-import ESM file — it has bundled deps). See netcode.md.
 `index.html` lives at the **repo root** (static hosts serve it as the index) and
 references the game code by absolute path (`/client/css`, `/client/js`,
 `/shared`, `/assets`); the JS/CSS themselves stay under `client/`.

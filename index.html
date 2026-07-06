@@ -23,6 +23,16 @@
         }
       }
     </script>
+    <!-- PeerJS as a self-contained UMD build (exposes a `Peer` global), NOT an
+         ESM import. Its former esm.sh bare-package URL was the same two-request
+         wrapper/redirect chain that failed the headless load check for three.js
+         (net::ERR_FAILED) — esm.sh returns a thin wrapper that re-exports from a
+         sub-path, a chained request the check rejects. `dist/peerjs.min.js` is a
+         single, self-contained request (all deps bundled in, no sub-imports),
+         the canonical CDN usage from peerjs.com's docs. This is a classic (non-
+         module) script, so it runs BEFORE the deferred module below — `Peer` is
+         defined by the time net.js reads it. See client/js/net.js. -->
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
   </head>
   <body>
     <!-- Landing / lobby screen -->

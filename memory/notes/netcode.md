@@ -14,6 +14,20 @@ All of this lives behind `client/js/net.js` (`Session`). `main.js` only calls
 `session.create/join/send`, reads `session.ready`, and sets `session.onMessage`
 / `session.onStatus`. It cannot tell host from guest — by design.
 
+## How PeerJS is loaded (do NOT re-ESM-import it)
+PeerJS is pulled in as a **self-contained UMD `<script>` tag in `index.html`**
+(`https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js`) that exposes a
+`Peer` global; `net.js` reads it via `const Peer = window.Peer` (the classic
+script runs before the deferred module, so it's defined in time). This is
+deliberate and load-bearing for the automated **headless load check**: the old
+`import { Peer } from 'https://esm.sh/peerjs@1.5.4'` was a two-request esm.sh
+wrapper/redirect chain (top URL re-exports from a sub-path) that failed the check
+with `net::ERR_FAILED` — the EXACT same failure mode three.js hit before it moved
+to a single jsDelivr build file. PeerJS can't be a zero-import ESM file (it has
+bundled runtime deps), so the UMD build (all deps inlined, single request, no
+sub-requests) is the robust choice — and it's peerjs.com's own documented CDN
+usage. If you ever switch back to an ESM import, re-run the headless load check.
+
 ## Room codes & connecting (PeerJS)
 - **Room id = `prophunt-<CODE>`** on the shared public broker. The 4-char CODE
   (unambiguous alphabet, minted client-side in `net.js` `makeCode`) is the only
