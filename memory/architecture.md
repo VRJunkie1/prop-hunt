@@ -140,8 +140,9 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
 - `referee.js` — the authoritative referee (see above). Browser-only, transport-
   agnostic (unchanged by the PeerJS swap — it only ever saw `send` callbacks).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
-  `maps.json` (size, colors, spawns, prop placements), `props.json` (prop-type
-  catalog). Adding maps/props needs no engine change.
+  `maps.json` (size, colors, spawns, prop placements — currently `circus_lot` +
+  `toy_workshop`), `props.json` (prop-type catalog). Adding maps/props needs no
+  engine change; the lobby map picker renders any new map automatically.
 
 ## Movement convention (must stay in sync between referee & client prediction)
 
@@ -158,6 +159,16 @@ no round trip); guests still predict against real latency.
 LOBBY → (host START, ≥minPlayers) → HIDING (hunters frozen) → HUNTING → ENDING
 → LOBBY. Timers via `phaseEndsAt`. Hunters win when all props eliminated; props
 win if the hunt timer expires with any prop alive.
+
+## Lobby map selection (host-authoritative, single gate)
+
+The host picks the round's map from the lobby. `C2S.PICK_MAP{mapId}` →
+`Referee.setMapId(id, byId)` is the ONE validation point (host-only, LOBBY-only,
+map must exist); the stored `Referee.mapId` is then trusted by `startMatch` and
+`integrate` with no re-check. `mapId` rides `S2C.LOBBY` so late joiners see the
+pick; `resetToLobby` deliberately keeps it (a map is a lobby setting, not
+per-player state). Picker UI (`js/ui.js`) renders from `maps.json` and holds no
+game logic — non-host disable is cosmetic. Detail: `memory/notes/map-selection.md`.
 
 ## Role/identity hiding
 
