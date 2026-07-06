@@ -10,6 +10,7 @@
 import { loadConfig } from './config.js';
 import { Session } from './net.js';
 import { Input } from './input.js';
+import { setupTouchControls } from './touch.js';
 import { Scene3D } from './scene.js';
 import { UI } from './ui.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
@@ -272,8 +273,10 @@ function frame(now) {
   scene.interpolate(0.25);
   scene.render();
 
+  // On touch devices there's no pointer lock (looking is a drag), so the
+  // click-to-play prompt would just block the on-screen controls — skip it.
   const inGame = !ui.el.game.classList.contains('hidden');
-  ui.setClickToPlay(inGame && !input.locked && !state.blindfolded);
+  ui.setClickToPlay(inGame && !input.locked && !state.blindfolded && !input.isTouch);
 
   requestAnimationFrame(frame);
 }
@@ -346,6 +349,7 @@ function newSession() {
 (async function boot() {
   state.cfg = await loadConfig();
   ui.setMaps(state.cfg.maps); // the lobby renders the map list from this catalog
+  if (input.isTouch) setupTouchControls(input, ui); // on-screen controls for phones
   newSession();
   wireMenu();
   startInputLoop();

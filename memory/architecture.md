@@ -103,7 +103,16 @@ references the game code by absolute path (`/client/css`, `/client/js`,
   `serialization:'json'`. ICE config (STUN; TURN placeholder) is `PEER_CONFIG`
   here — the successor to the old `ICE_SERVERS`. Guest name reaches the host via
   the connection's `metadata`. PeerJS does all SDP/ICE plumbing internally.
-- `input.js` — WASD + pointer-lock mouse look; emits action events.
+- `input.js` — WASD + pointer-lock mouse look; emits action events. Also holds
+  the small touch hooks (`isTouch`, `touchMove/touchJump/touchCrouch`,
+  `applyLookDelta`) that the mobile layer writes into — so the game reads one
+  intent regardless of device.
+- `touch.js` — **mobile on-screen controls** (`setupTouchControls`): a left
+  virtual joystick → `input.touchMove`, a full-screen look-drag layer →
+  `input.applyLookDelta`, and JUMP/CROUCH (held) + ACTION (fires `onAction
+  ('primary')`) buttons. Isolated from `input.js`; wired only when `input.isTouch`.
+  Adds NO new movement/look/referee path — it feeds the existing intent fields.
+  Full detail in `memory/notes/mobile.md`.
 - `scene.js` — all Three.js. Builds world from config, reconciles player meshes
   to snapshots, interpolates others, first-person camera for self.
 - `ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic.

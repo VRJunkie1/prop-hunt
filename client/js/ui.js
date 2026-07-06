@@ -32,9 +32,18 @@ export class UI {
       clickToPlay: $('clickToPlay'),
       blindfold: $('blindfold'),
       blindfoldTimer: $('blindfoldTimer'),
+      touch: $('touch'),
     };
     this.myTeam = null; // the team the local player has picked (or null)
     this.maps = null; // the map catalog (maps.json), set once at boot via setMaps
+    this.touchEnabled = false; // true on touch devices — shows on-screen controls
+  }
+
+  // Called once at boot (touch.js) when we're on a touch device: the on-screen
+  // controls then appear whenever the game screen is up.
+  enableTouch() {
+    this.touchEnabled = true;
+    if (!this.el.game.classList.contains('hidden')) this.el.touch.classList.remove('hidden');
   }
 
   // The lobby map list is rendered straight from the map file (which every
@@ -48,6 +57,7 @@ export class UI {
     const inGame = screen === 'game';
     this.el.hud.classList.toggle('hidden', !inGame);
     this.el.crosshair.classList.toggle('hidden', !inGame);
+    this.el.touch.classList.toggle('hidden', !(inGame && this.touchEnabled));
   }
 
   menuError(msg) {

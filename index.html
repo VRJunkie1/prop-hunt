@@ -88,6 +88,20 @@
         <div id="feed" class="feed"></div>
       </div>
       <div id="clickToPlay" class="overlay hidden">Click to play</div>
+      <!-- On-screen controls for touch devices (shown only on phones/tablets;
+           wired in client/js/touch.js). Look = drag anywhere on #touchLook;
+           the joystick + buttons sit above it and own their own touches. -->
+      <div id="touch" class="touch hidden">
+        <div id="touchLook" class="touch-look"></div>
+        <div id="joystick" class="joystick">
+          <div id="joyKnob" class="joy-knob"></div>
+        </div>
+        <div class="touch-buttons">
+          <button id="btnAction" class="touch-btn action" aria-label="action">◎</button>
+          <button id="btnJump" class="touch-btn jump" aria-label="jump">⤒</button>
+          <button id="btnCrouch" class="touch-btn crouch" aria-label="crouch">⤓</button>
+        </div>
+      </div>
       <!-- Hunter blindfold during the hiding phase -->
       <div id="blindfold" class="blindfold hidden">
         <div class="blindfold-emoji">🙈</div>

@@ -8,7 +8,21 @@ creator's browser hosts the referee. Peer introduction (room codes + WebRTC
 handshake) is done by **PeerJS's free public broker**; we run **no backend**. The
 app is fully static and deploys to **Cloudflare Pages**.
 
-## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. STILL NOT PLAYTESTED.
+## Status: DEPLOYABLE now (PeerJS swap done). Gameplay complete in code. Touch controls added (2026-07). STILL NOT PLAYTESTED.
+
+### Mobile touch controls added (2026-07, "BUILD IT" ship pass, plan step 7)
+The last big buildable gap — the game was keyboard+mouse only, unplayable on
+phones, and the group mostly plays on phones. Added an on-screen control layer
+that feeds the SAME intent the keyboard/mouse already produced (no netcode /
+referee / movement-math change): left virtual joystick → move, full-screen
+look-drag → yaw/pitch, and JUMP/CROUCH (held) + ACTION (tag/disguise by role)
+buttons. New file `client/js/touch.js`; small hooks in `input.js`
+(`isTouch`, `touchMove/Jump/Crouch`, `applyLookDelta`); `#touch` block in
+`index.html`; `.touch*` CSS; `ui.enableTouch()` shows it with the game screen
+on touch devices only; boot wires it when `input.isTouch`; click-to-play prompt
+skipped on touch (no pointer lock on phones). Desktop is provably unchanged.
+Full detail: `memory/notes/mobile.md`. **Not yet tried on a real phone** —
+sensitivity/sizes are first guesses; verify move/look/jump/crouch/tag/disguise.
 
 ### Check-repair (2026-07): three.js CDN moved unpkg → esm.sh
 Automated headless-load check reported two `net::ERR_FAILED`. Cause: the Three.js
@@ -160,10 +174,13 @@ Implemented:
 - No client-side prediction of collisions; players can overlap props/walls
       (walls are visual; the referee only clamps to map bounds). Jump has no
       ceiling/roof logic either — you just arc back to y=0.
-- **Controls are keyboard-only.** No touch controls exist at all (mouse-look +
-      WASD + Space/Ctrl). Prop hunt is unplayable on phones today; a mobile layer
-      (virtual joystick, look-drag, on-screen jump/crouch/tag buttons) is a real
-      separate project — not started.
+- **Mobile touch controls exist now** (2026-07): virtual joystick, look-drag,
+      on-screen jump/crouch/action buttons in `client/js/touch.js` (see
+      `memory/notes/mobile.md`). They feed the same intent as keyboard/mouse — no
+      separate movement path. **Still untested on a real phone**: tune look
+      sensitivity (`applyLookDelta` default 0.004) and joystick/button sizes on
+      device; confirm move/look/jump/crouch/tag/disguise all work, including the
+      disguise edge cases (crouched, mid-jump, max range, prop behind another).
 - **Crouch tag tuning is untested feel.** `tagVertPad` 0.35 makes a level-aiming
       hunter miss a crouched prop at close range but still tag standing/jumping
       ones. Numbers are a first guess — verify in playtest, tune in `rules.json`.
@@ -202,5 +219,6 @@ Peer introduction: PeerJS public broker (no file of ours; used in
 `client/js/net.js`). Protocol: `shared/protocol.js` (C2S/S2C only). Network layer:
 `client/js/net.js`. Tunables: `shared/config/rules.json`. Maps:
 `shared/config/maps.json`. Client entry: `client/js/main.js`. Lobby UI:
-`client/js/ui.js`. Notes: `memory/notes/` (netcode, game-loop, disguise,
-map-selection). `server/` = tombstones only (delete when a shell exists).
+`client/js/ui.js`. Touch controls: `client/js/touch.js`. Notes: `memory/notes/`
+(netcode, game-loop, disguise, map-selection, mobile). `server/` = tombstones
+only (delete when a shell exists).
