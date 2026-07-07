@@ -187,3 +187,5 @@ Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
 `shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
 input-mouselook, map-selection). Dead code
 awaiting `git rm`: `client/`, `server/`.
+
+- The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)
