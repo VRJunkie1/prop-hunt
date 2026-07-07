@@ -133,9 +133,16 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
     iOS happens in the first tap handler here (glue layer, not `ui.js`). Full
     detail: `memory/notes/touch-controls.md`.
 - `js/scene.js` — all Three.js. Builds world from config, reconciles player meshes
-  to snapshots, interpolates others, first-person camera for self. Pixel ratio is
-  capped at 2 (phones); re-measures on `orientationchange`; `preventDefault`s
-  `webglcontextlost` so a mobile GPU hiccup can restore instead of white-screening.
+  to snapshots, interpolates others. The local player now uses a **third-person
+  follow camera** (default) that orbits behind/above them off the same yaw/pitch;
+  it renders the player's OWN model (via the shared disguise/role path) and is
+  collision-aware (a raycast against walls+props pulls it in, snap-in/ease-out
+  smoothing). `setThirdPerson(false)` restores the classic first-person eye view
+  (toggle: V on desktop). `aimScreenPoint()` projects the referee's yaw-forward aim
+  so the reticle marks where the tag cone lands, not screen center. Detail:
+  `memory/notes/third-person-camera.md`. Pixel ratio is capped at 2 (phones);
+  re-measures on `orientationchange`; `preventDefault`s `webglcontextlost` so a
+  mobile GPU hiccup can restore instead of white-screening.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
   "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
   msg?)`, called from `main.js` in response to `input.js` pointer-lock events

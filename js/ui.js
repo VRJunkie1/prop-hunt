@@ -129,6 +129,20 @@ export class UI {
     el.className = 'link ' + (relayed ? 'relayed' : 'direct');
   }
 
+  // Position the aim reticle. `pt` is {x,y} in pixels (third-person: where the tag
+  // cone points on screen) or null to recenter (first-person). The CSS keeps a
+  // translate(-50%,-50%), so left/top land the reticle centered on the point.
+  setCrosshair(pt) {
+    const c = this.el.crosshair;
+    if (!pt) {
+      c.style.left = '50%';
+      c.style.top = '50%';
+      return;
+    }
+    c.style.left = `${pt.x}px`;
+    c.style.top = `${pt.y}px`;
+  }
+
   setRole(role) {
     this.el.hudRole.textContent = role === 'hunter' ? 'HUNTER' : 'PROP';
     this.el.hudRole.className = 'pill ' + role;

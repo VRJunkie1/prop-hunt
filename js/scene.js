@@ -50,6 +50,30 @@ export class Scene3D {
     this.catalog = null;
     this.players = new Map(); // id -> { mesh, target:{x,z,yaw}, kind }
 
+    // ---- third-person follow camera -----------------------------------------
+    // The local player now sees their OWN model from a camera orbiting behind and
+    // slightly above them (default). yaw/pitch (from mouse-look / touch drag) orbit
+    // the camera instead of turning a first-person head. A collision ray pulls the
+    // camera in when a wall/prop sits between it and the player. `thirdPerson=false`
+    // flips back to the classic eye view (toggle: V on desktop).
+    this.thirdPerson = true;
+    this.selfMesh = null; // the local player's own avatar (only in third-person)
+    this.selfKind = null; // appearance signature, so we rebuild on disguise/role change
+    this.selfAlive = true;
+    this.colliders = []; // walls + static props the camera ray tests against
+    this._raycaster = new THREE.Raycaster();
+    // Tunables.
+    this._camDesiredDist = 5.0; // how far behind the player the camera wants to sit
+    this._camHeadY = 1.5; // look-at height on the player (upper body / head)
+    this._camHeightBias = 0.4; // extra lift so we look slightly down over them
+    this._camMinDist = 1.2; // never pull closer than this (avoids clipping into the model)
+    this._camDist = this._camDesiredDist; // smoothed current distance (eased for pull-in/out)
+    // Reused scratch vectors (no per-frame allocation in the render loop).
+    this._vTarget = new THREE.Vector3();
+    this._vDesired = new THREE.Vector3();
+    this._vDir = new THREE.Vector3();
+    this._vAim = new THREE.Vector3();
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
     // Orientation changes on phones sometimes report the new size a beat late;
@@ -78,6 +102,12 @@ export class Scene3D {
     // Clear previous scene contents.
     this.scene.clear();
     this.players.clear();
+    // scene.clear() also drops the self avatar; reset its trackers and the camera's
+    // collision set / smoothed distance so a fresh match starts fully zoomed out.
+    this.selfMesh = null;
+    this.selfKind = null;
+    this.colliders = [];
+    this._camDist = this._camDesiredDist;
 
     this.scene.background = new THREE.Color(map.sky || '#87ceeb');
     this.scene.fog = new THREE.Fog(new THREE.Color(map.sky || '#87ceeb'), 40, 120);
@@ -110,6 +140,7 @@ export class Scene3D {
       wall.position.set(x, 1.5, z);
       wall.rotation.y = ry || 0;
       this.scene.add(wall);
+      this.colliders.push(wall); // camera pulls in against the arena walls
     }
 
     // Static props.
@@ -119,6 +150,7 @@ export class Scene3D {
       built.mesh.position.set(p.x, built.baseY, p.z);
       built.mesh.rotation.y = p.rot || 0;
       this.scene.add(built.mesh);
+      this.colliders.push(built.mesh); // ...and against static props
     }
   }
 
@@ -146,7 +178,14 @@ export class Scene3D {
     const seen = new Set();
     for (const p of players) {
       seen.add(p.id);
-      if (p.id === this.selfId) continue; // self is the camera, no avatar
+      if (p.id === this.selfId) {
+        // In third-person the local player sees their OWN model (built via the same
+        // disguise/role path everyone else is drawn with, so it matches what the
+        // referee and other clients believe this player is). In first-person there
+        // is no self avatar (the camera is the eyes).
+        this._syncSelf(p);
+        continue;
+      }
 
       let entry = this.players.get(p.id);
       const kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
@@ -183,13 +222,115 @@ export class Scene3D {
     }
   }
 
-  // Place the first-person camera.
+  // Build/rebuild (or tear down) the local player's own avatar to match their
+  // current appearance. Only present in third-person; the mesh is positioned each
+  // frame from the PREDICTED local position in setCamera (not the lagging snapshot).
+  _syncSelf(p) {
+    this.selfAlive = p.alive;
+    if (!this.thirdPerson) {
+      this._removeSelfMesh();
+      return;
+    }
+    const kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+    if (!this.selfMesh || this.selfKind !== kind) {
+      this._removeSelfMesh();
+      this.selfMesh = this.meshForPlayer(p);
+      this.selfKind = kind;
+      this.selfMesh.position.set(p.x, this.selfMesh.userData.baseY, p.z);
+      this.scene.add(this.selfMesh);
+    }
+  }
+
+  _removeSelfMesh() {
+    if (this.selfMesh) this.scene.remove(this.selfMesh);
+    this.selfMesh = null;
+    this.selfKind = null;
+  }
+
+  // Flip between third-person (default) and first-person. Removing the self avatar
+  // immediately keeps first-person from briefly showing the player's own model; it
+  // is rebuilt on the next snapshot when switching back.
+  setThirdPerson(on) {
+    this.thirdPerson = !!on;
+    if (!this.thirdPerson) this._removeSelfMesh();
+  }
+
+  // Place the camera. Third-person = orbit behind/above the player (collision-aware,
+  // smoothed); first-person = classic eye view. yaw/pitch come from the same
+  // mouse-look / touch-drag inputs either way — only their interpretation changes.
   setCamera(pos, yaw, pitch) {
-    this.camera.position.set(pos.x, 1.6, pos.z);
-    this.camera.rotation.set(0, 0, 0, 'YXZ');
-    this.camera.rotation.order = 'YXZ';
-    this.camera.rotation.y = yaw;
-    this.camera.rotation.x = pitch;
+    if (!this.thirdPerson) {
+      this.camera.position.set(pos.x, 1.6, pos.z);
+      this.camera.rotation.set(0, 0, 0, 'YXZ');
+      this.camera.rotation.order = 'YXZ';
+      this.camera.rotation.y = yaw;
+      this.camera.rotation.x = pitch;
+      return;
+    }
+
+    // Camera-forward (same convention as first-person / the referee's aim vector).
+    const cp = Math.cos(pitch);
+    const fx = -Math.sin(yaw) * cp;
+    const fy = Math.sin(pitch);
+    const fz = -Math.cos(yaw) * cp;
+
+    // Look-at point on the player; keep the own avatar glued to the predicted
+    // position/yaw so it tracks the camera without snapshot lag.
+    const target = this._vTarget.set(pos.x, this._camHeadY, pos.z);
+    if (this.selfMesh) {
+      this.selfMesh.position.set(pos.x, this.selfMesh.userData.baseY, pos.z);
+      this.selfMesh.rotation.y = yaw;
+      this.selfMesh.visible = this.selfAlive;
+    }
+
+    // Desired camera spot: behind (−forward) and lifted a touch. Floor the height
+    // so looking far up (which orbits the camera downward) can't sink it below the
+    // ground plane (the ground isn't a collider, so nothing else would stop it).
+    const dist = this._camDesiredDist;
+    const desired = this._vDesired.set(
+      target.x - fx * dist,
+      Math.max(0.4, target.y - fy * dist + this._camHeightBias),
+      target.z - fz * dist
+    );
+
+    // Collision pull-in: cast from the player toward the desired spot; if a wall or
+    // prop is in the way, clamp the distance so the camera never clips through it.
+    const dir = this._vDir.copy(desired).sub(target);
+    const desiredLen = dir.length() || 1e-3;
+    dir.multiplyScalar(1 / desiredLen);
+    let allowed = desiredLen;
+    if (this.colliders.length) {
+      this._raycaster.set(target, dir);
+      this._raycaster.far = desiredLen;
+      const hits = this._raycaster.intersectObjects(this.colliders, false);
+      if (hits.length) allowed = Math.max(this._camMinDist, hits[0].distance - 0.3);
+    }
+
+    // Smooth: snap IN immediately (so we never clip), ease back OUT when clear.
+    if (allowed < this._camDist) this._camDist = allowed;
+    else this._camDist += (allowed - this._camDist) * 0.12;
+    this._camDist = Math.min(this._camDist, desiredLen);
+
+    this.camera.position.copy(target).addScaledVector(dir, this._camDist);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(target);
+  }
+
+  // Screen-space point (pixels) where the aim indicator should sit, so the reticle
+  // marks where the referee's tag cone actually points (its yaw-forward vector) —
+  // NOT screen center, since the third-person eye is off the player. Returns null
+  // in first-person (reticle stays centered) or when the point is behind the camera.
+  aimScreenPoint(pos, yaw) {
+    if (!this.thirdPerson) return null;
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const D = 3.0; // a few metres ahead of the player, at ~chest height
+    const p = this._vAim.set(pos.x + fx * D, this._camHeadY - 0.4, pos.z + fz * D);
+    p.project(this.camera);
+    if (p.z > 1) return null; // behind the camera
+    const w = this.renderer.domElement.clientWidth;
+    const h = this.renderer.domElement.clientHeight;
+    return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
   }
 
   render() {

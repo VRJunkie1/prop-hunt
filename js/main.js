@@ -76,6 +76,13 @@ input.onTouchPlay = () => {
   input.enterGame();
 };
 
+// Optional view toggle (desktop V): flip third-person <-> first-person. Third-person
+// is the default; this flips the camera, the own-model visibility, and the reticle
+// behaviour together behind the scene's one flag.
+input.onToggleView = () => {
+  if (scene) scene.setThirdPerson(!scene.thirdPerson);
+};
+
 // ---- screen wake lock ------------------------------------------------------
 // Phones sleep the screen on their own; for the HOST that's fatal — the referee
 // and the WebRTC links live in that tab, so a sleeping host ends the match for
@@ -320,6 +327,10 @@ function frame(now) {
     scene.setCamera(state.self, input.yaw, input.pitch);
     scene.interpolate(0.25);
     scene.render();
+    // Drive the aim reticle off the referee's yaw-forward vector (where the tag
+    // cone actually swings), not screen center — the third-person eye sits off the
+    // player. Null => first-person, reticle stays centered.
+    ui.setCrosshair(scene.aimScreenPoint(state.self, input.yaw));
   }
 
   requestAnimationFrame(frame);

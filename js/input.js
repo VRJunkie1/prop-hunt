@@ -63,6 +63,7 @@ export class Input {
     this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
     this.onLockError = () => {}; // (reason: string) => void    (desktop pointer lock)
     this.onTouchPlay = () => {}; // () => void  fired when a touch player taps the overlay
+    this.onToggleView = () => {}; // () => void  V key: third-person <-> first-person
 
     // Touch state.
     this.touch = isTouchDevice();
@@ -240,6 +241,7 @@ export class Input {
     if (!this.locked) return;
     if (e.code === 'KeyE') this.onAction('disguise');
     if (e.code === 'KeyF' || e.code === 'Space') this.onAction('tag');
+    if (e.code === 'KeyV') this.onToggleView();
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).
