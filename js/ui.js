@@ -58,7 +58,7 @@ export class UI {
     this.el.lobbyHint.textContent = msg || '';
   }
 
-  renderLobby({ room, hostId, players, mapId }, selfId) {
+  renderLobby({ room, hostId, players, mapId, result }, selfId) {
     this.el.lobbyCode.textContent = room;
     this.el.playerList.innerHTML = '';
     for (const p of players) {
@@ -79,9 +79,12 @@ export class UI {
     const isHost = hostId === selfId;
     this.el.startBtn.classList.toggle('hidden', !isHost);
     this.renderMapPicker(mapId, isHost);
-    this.el.lobbyHint.textContent = isHost
-      ? `You are host. Start when everyone has joined (min ${players.length >= 2 ? '' : '2 '}players).`
-      : 'Waiting for the host to start…';
+    // Persistent lobby: show who won the previous round (if any) ahead of the
+    // ready/waiting hint, so a group running rounds back-to-back keeps the thread.
+    const resultNote = result ? `${result.winner === 'hunter' ? 'HUNTERS' : 'PROPS'} won the last round. ` : '';
+    this.el.lobbyHint.textContent = resultNote + (isHost
+      ? 'You are host. Start whenever you like — you can go solo, and friends can join mid-round.'
+      : 'Waiting for the host to start…');
   }
 
   // Render the lobby map picker straight from the shared maps catalog. Every

@@ -52,6 +52,16 @@ export class Scene3D {
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // Orientation changes on phones sometimes report the new size a beat late;
+    // a deferred re-measure avoids a one-frame letterbox after a rotate.
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 200));
+
+    // Mobile GPUs drop the WebGL context under memory pressure / backgrounding.
+    // Preventing the default lets the browser restore it instead of white-screening
+    // permanently; Three.js re-uploads its resources on the 'restored' event. The
+    // world itself is rebuilt on the next match start (buildWorld), which is the
+    // only place that holds the map data.
+    canvas.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
   }
 
   resize() {

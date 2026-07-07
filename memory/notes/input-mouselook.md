@@ -1,7 +1,12 @@
 # input & mouse-look (pointer lock)
 
 How the first-person mouse-look capture works, and the overlay-swallows-click bug
-fixed 2026-07.
+fixed 2026-07. **This whole note is the DESKTOP scheme.** `Input` now picks its
+scheme once by `isTouchDevice()`; everything below is wired only when that's false
+(`_wireDesktop`). The TOUCH scheme (joystick + drag-to-look + tap buttons +
+"Tap to play") is a separate lane — see `memory/notes/touch-controls.md`. Both
+emit the same `moveVector()`/yaw/pitch/`onAction` shape, so nothing downstream
+changed.
 
 ## The handshake
 
