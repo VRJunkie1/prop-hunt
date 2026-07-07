@@ -45,6 +45,10 @@ export class Referee {
     this.phase = PHASE.LOBBY;
     this.props = []; // authoritative prop instances for the active map
     this.phaseEndsAt = 0;
+    // Result of the most recent round, carried into the persistent lobby so a
+    // group running back-to-back rounds sees who won without a page reload.
+    // Rides S2C.LOBBY; cleared when the next match starts. null before round 1.
+    this.lastResult = null;
 
     this.lastTick = Date.now();
     this.lastSnapshot = 0;
@@ -68,6 +72,45 @@ export class Referee {
     if (!this.hostId) this.hostId = player.id; // host adds itself first
 
     send(player, { t: S2C.JOINED, id: player.id, room: this.code, host: this.hostId === player.id });
+
+    // ONE gate, two doors. This add-player point is the referee's single entry for
+    // everyone (host loopback + every guest DataConnection), so it's also the only
+    // place that has to decide lobby-join vs mid-round-join. Because the host is
+    // single-threaded, the id/name/role assignment below is atomic per newcomer —
+    // two guests whose channels open in the same instant can't collide.
+    if (this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING) {
+      // A round is live: slot them straight in instead of stranding them on a
+      // lobby screen (or forcing a wait for the next round).
+      this.admitMidGame(player);
+    } else {
+      // LOBBY (or the brief ENDING window, which flips to LOBBY in a few seconds —
+      // they just wait it out on the lobby screen).
+      this.broadcastLobby();
+    }
+  }
+
+  // Catch a mid-round joiner up to the running match. Everything a game decision
+  // touches happens HERE, on the referee — the guest side only presents what it's
+  // told. Late joiners come in as HUNTERS on purpose: joining as a prop mid-hunt
+  // is unfair (no time to hide) and hunter is the prop-hunt convention. They get
+  // the SAME filtered view every other guest receives (STARTED payload = map +
+  // static props; a private ROLE; the current phase + clock; then the normal
+  // per-tick snapshot) — never the host's full unfiltered state, so the "guests
+  // never learn who's an undisguised prop" rule holds for late joiners too.
+  admitMidGame(player) {
+    const map = this.maps[this.mapId];
+    player.role = ROLE.HUNTER;
+    player.alive = true;
+    player.disguise = null;
+    player.input = { mx: 0, mz: 0 };
+    player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
+
+    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this.props });
+    send(player, { t: S2C.ROLE, role: player.role });
+    const seconds = Math.max(0, (this.phaseEndsAt - Date.now()) / 1000);
+    send(player, { t: S2C.EVENT, kind: 'phase', phase: this.phase, seconds });
+    // Refresh the (hidden-during-play) lobby list so names stay in sync for when
+    // everyone returns to the persistent lobby.
     this.broadcastLobby();
   }
 
@@ -200,6 +243,8 @@ export class Referee {
       return;
     }
 
+    this.lastResult = null; // a fresh round supersedes the previous result
+
     const map = this.maps[this.mapId];
     // Build authoritative prop instances from map data.
     this.props = (map.props || []).map((p) => ({
@@ -212,7 +257,16 @@ export class Referee {
 
     // Randomly split into Hunters and Props (the host referee decides).
     shuffle(ids);
-    const hunterCount = Math.max(1, Math.round(ids.length * this.rules.hunterRatio));
+    // Always keep at least one prop (a round with nobody to hunt is pointless),
+    // so hunters are capped at players-1. For a SOLO launch (ids.length === 1)
+    // that cap is 0 → the lone host is a prop and can walk/disguise while testing
+    // a map; the win-checker treats "zero hunters" as no instant win, so the round
+    // just runs on the timer (surviving props win when it expires). See
+    // checkRoundOver.
+    const hunterCount = Math.min(
+      Math.max(1, Math.round(ids.length * this.rules.hunterRatio)),
+      Math.max(0, ids.length - 1),
+    );
     let spawnIdx = 0;
     ids.forEach((id, i) => {
       const player = this.players.get(id);
@@ -250,6 +304,7 @@ export class Referee {
   }
 
   endRound(winner) {
+    this.lastResult = { winner }; // survives into the persistent lobby (see broadcastLobby)
     this.broadcast({ t: S2C.EVENT, kind: 'roundOver', winner });
     this.setPhase(PHASE.ENDING, this.rules.endingSeconds);
   }
@@ -332,7 +387,8 @@ export class Referee {
     const players = [...this.players.values()].map((p) => ({ id: p.id, name: p.name, ready: p.ready }));
     // mapId rides along so every lobby screen (including a late joiner) shows the
     // host's current pick; the picker UI highlights it and renders from maps.json.
-    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase, mapId: this.mapId });
+    // lastResult carries the previous round's winner into the persistent lobby.
+    this.broadcast({ t: S2C.LOBBY, room: this.code, hostId: this.hostId, players, phase: this.phase, mapId: this.mapId, result: this.lastResult });
   }
 
   broadcastSnapshot() {

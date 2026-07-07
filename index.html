@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover: use the full screen behind notches; user-scalable=no +
+         maximum-scale=1: stop the browser's own pinch-zoom from fighting the
+         in-game drag-to-look / joystick. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>Prop Hunt</title>
     <link rel="stylesheet" href="/css/style.css" />
     <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. -->

@@ -11,6 +11,8 @@ change data, not code.
 checked each tick.
 
 - **LOBBY**: no simulation. Host `start` with ≥ `minPlayers` → `startMatch`.
+  `minPlayers` is now **1** (SOLO LAUNCH): the host can start alone to walk a map,
+  and friends join afterward (mid-game join, below).
 - **HIDING** (`hidingSeconds`): props move + disguise; hunters are frozen
   (`integrate` skips hunters this phase). → HUNTING.
 - **HUNTING** (`huntingSeconds`): hunters move + tag. Ends early if all props
@@ -18,6 +20,28 @@ checked each tick.
 - **ENDING** (`endingSeconds`): result shown → `resetToLobby`.
 
 `setPhase(phase, seconds)` sets the timer and broadcasts an `event{kind:'phase'}`.
+
+## Solo launch & the role-count math
+`startMatch` splits players into hunters/props. To keep a round meaningful there
+is **always ≥ 1 prop**: `hunterCount = min(max(1, round(n*hunterRatio)), n-1)`.
+For a solo start (`n === 1`) the `n-1` cap is 0 → the lone host is a **prop** and
+can walk/disguise while testing a map. `checkRoundOver` never fires a hunter-win
+when there are no hunters (it only ends early when props existed and all died), so
+a zero-hunter round just runs on the timer and the surviving prop "wins" at expiry.
+
+## Mid-game join (the referee's single add-player gate)
+`addPlayer` is the ONE entry point for every newcomer (host loopback + each guest
+DataConnection), so it's where lobby-join vs mid-round-join is decided. If the
+phase is HIDING/HUNTING it calls **`admitMidGame(player)`**, which:
+- assigns the newcomer as a **HUNTER** (joining as a prop mid-hunt is unfair — no
+  time to hide — and hunter is the convention), spawns them at `map.hunterSpawn`;
+- sends the **same filtered catch-up every guest gets**: `STARTED{mapId, props}`,
+  a private `ROLE`, an `event{kind:'phase'}` carrying the current phase + seconds
+  left, then the normal per-tick snapshot. Never the host's full state, so the
+  role-hiding invariant holds for late joiners too.
+Joins during the brief ENDING window fall to the lobby branch and just wait the
+few seconds until `resetToLobby`. The guest side needs no game logic — `STARTED`
+already switches it into the running game (see `main.js`).
 
 ## Map selection (lobby)
 The host picks the map before starting via `C2S.PICK_MAP{mapId}` →
@@ -30,10 +54,11 @@ Full detail in `memory/notes/map-selection.md`.
 1. Guard: LOBBY + ≥ minPlayers.
 2. Build authoritative prop instances from `maps[this.mapId].props` (assign ids) —
    `this.mapId` is the host's lobby pick, trusted (validated at pick time).
-3. Shuffle players; `hunterCount = max(1, round(n * hunterRatio))`. First N are
-   hunters (spawn at `map.hunterSpawn`), rest are props (round-robin
-   `map.spawns`). Send each a private `role`.
-4. Broadcast `started{mapId, props}`; `setPhase(HIDING)`.
+3. Shuffle players; `hunterCount = min(max(1, round(n*hunterRatio)), n-1)` (always
+   ≥1 prop; solo → 0 hunters). First N are hunters (spawn at `map.hunterSpawn`),
+   rest are props (round-robin `map.spawns`). Send each a private `role`.
+4. Broadcast `started{mapId, props}`; `setPhase(HIDING)`. Also clears
+   `this.lastResult` (a new round supersedes the previous result).
 
 ## Disguise (`applyDisguise`)
 Prop only, alive, phase HIDING/HUNTING, target prop within `disguiseRange` of the
@@ -50,13 +75,22 @@ Miss → private `event{kind:'miss'}`. Hit → broadcast `eliminated` +
 whether they've disguised — an undisguised prop can still be tagged. Fine for
 skeleton; revisit alongside the "undisguised props are visible" gap.
 
-## Win / reset
+## Win / reset (persistent lobby)
 `checkRoundOver`: if props existed and none are alive → hunters win → ENDING.
-Hunt-timer expiry in `tick` → props win → ENDING. `resetToLobby` clears roles /
-alive / disguise / ready and broadcasts `lobby{phase:'lobby'}` (how clients know
-to show the lobby screen again). **It deliberately does NOT reset `this.mapId`** —
-the map is a lobby setting, not per-player state, so the pick survives a
-reset-to-lobby (documented carve-out; see map-selection.md).
+Hunt-timer expiry in `tick` → props win → ENDING. `endRound(winner)` also stores
+`this.lastResult = {winner}`. `resetToLobby` clears roles / alive / disguise /
+ready and broadcasts `lobby{phase:'lobby'}` (how clients know to show the lobby
+screen again). **It deliberately does NOT reset `this.mapId`** — the map is a
+lobby setting, not per-player state, so the pick survives a reset-to-lobby
+(documented carve-out; see map-selection.md).
+
+The **lobby persists across rounds**: nothing tears down between rounds — peer
+connections stay open, the player list survives, the host stays host, the map
+stays picked. `this.lastResult` rides `S2C.LOBBY` (`{winner}|null`) so the lobby
+screen shows "HUNTERS/PROPS won the last round" for back-to-back play. Client side:
+`main.js`'s LOBBY handler detects it *was* in-game and tidies per-round view state
+(`input.exitGame()`, release wake lock, reset the ready button, clear role) WITHOUT
+reconnecting.
 
 ## Extending (intended seams)
 - New map: add to `maps.json`. New prop type: add to `props.json` + reference it

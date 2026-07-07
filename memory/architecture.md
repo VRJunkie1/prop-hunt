@@ -105,7 +105,10 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   player (integrates own movement each frame, reconciles toward the authoritative
   pos at 0.08/frame). Sends INPUT at 20 Hz via `session.send`. Identical code for
   host and guest. Also: **join-by-link** (`#CODE` in the URL auto-joins on boot)
-  and the lobby "Copy invite link" button.
+  and the lobby "Copy invite link" button. Owns the **screen wake lock** during a
+  match (`navigator.wakeLock`, re-acquired on `visibilitychange`; a sleeping host
+  kills the match for everyone) and the touch glue (`input.enterGame/exitGame`,
+  `onTouchPlay` → dismiss the "Tap to play" overlay).
 - `js/net.js` — the **dual-mode network layer** (`Session`), now on **PeerJS**: a
   `Peer` to the public broker, plus either (host) an in-tab `Referee` + loopback
   link + a bridge from each guest's `DataConnection` into the referee, or (guest)
@@ -114,15 +117,25 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   through the `Peer` `config` option. `detectRelayed()`/`_reportLink()` read
   `conn.peerConnection.getStats()` to tell the UI direct vs relayed. ~10s connect
   give-up timer preserved.
-- `js/input.js` — WASD + pointer-lock mouse look; emits action events. **Owns
-  the whole pointer-lock handshake**: it requests capture (on click of the
-  `lockTrigger` element passed in — the "Click to play" overlay, since that
-  overlay covers the canvas and swallows its clicks) and listens for the
-  browser's `pointerlockchange`/`pointerlockerror` signals, broadcasting them as
-  `onLockChange(locked)` / `onLockError(reason)`. The overlay's visibility is
-  driven off these real signals — never off a click or a guess.
+- `js/input.js` — **owns EVERY control scheme** and funnels them all into one
+  output shape (movement `mx,mz` + look `yaw,pitch` + action callbacks), so the
+  rest of the game is input-agnostic. Two schemes, chosen once by `isTouchDevice()`:
+  - **Desktop** — WASD + pointer-lock mouse look. **Owns the whole pointer-lock
+    handshake**: requests capture on click of the `lockTrigger` (the "Click to
+    play" overlay, which covers the canvas and swallows its clicks) and drives the
+    overlay off the browser's real `pointerlockchange`/`pointerlockerror` signals
+    (`onLockChange`/`onLockError`) — never a guess. Untouched by the touch work.
+  - **Touch** — nipplejs virtual joystick (lazy-loaded from jsDelivr, like
+    Three/PeerJS — nothing at boot), hand-rolled drag-to-look via pointer events on
+    the canvas (no pointer lock on phones, so it REPLACES mouse-look), and an
+    on-screen action button. A "Tap to play" path parallel to (not faked into) the
+    desktop lock path: `onTouchPlay` + `enterGame()`/`exitGame()`. Audio unlock for
+    iOS happens in the first tap handler here (glue layer, not `ui.js`). Full
+    detail: `memory/notes/touch-controls.md`.
 - `js/scene.js` — all Three.js. Builds world from config, reconciles player meshes
-  to snapshots, interpolates others, first-person camera for self.
+  to snapshots, interpolates others, first-person camera for self. Pixel ratio is
+  capped at 2 (phones); re-measures on `orientationchange`; `preventDefault`s
+  `webglcontextlost` so a mobile GPU hiccup can restore instead of white-screening.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
   "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
   msg?)`, called from `main.js` in response to `input.js` pointer-lock events
@@ -160,6 +173,22 @@ LOBBY → (host START, ≥minPlayers) → HIDING (hunters frozen) → HUNTING �
 → LOBBY. Timers via `phaseEndsAt`. Hunters win when all props eliminated; props
 win if the hunt timer expires with any prop alive.
 
+**`minPlayers` is 1 (solo launch)** — the host can start alone. Role math keeps
+≥1 prop (`hunterCount = min(max(1,round(n*hunterRatio)), n-1)`), so a solo host is
+a prop; a zero-hunter round has no instant win and just runs on the timer.
+
+**Mid-game join**: `addPlayer` is the single gate for everyone (host loopback +
+each guest DataConnection). During HIDING/HUNTING it routes to `admitMidGame`,
+which slots the newcomer in as a **hunter**, spawns them, and sends the SAME
+filtered catch-up every guest gets (`STARTED` + private `ROLE` + current
+phase/clock + normal snapshots) — never the host's full state. Guest side is pure
+presentation (`STARTED` drops it into the running game). See
+`memory/notes/game-loop.md`.
+
+**Persistent lobby**: nothing tears down between rounds — peers stay open, players
+survive, host stays host, map stays picked. `endRound` stores `lastResult`, which
+rides `S2C.LOBBY` so the lobby shows the previous winner for back-to-back rounds.
+
 ## Lobby map selection (host-authoritative, single gate)
 
 The host picks the round's map from the lobby. `C2S.PICK_MAP{mapId}` →
@@ -178,4 +207,6 @@ props **to guests**. Own role comes via a private `ROLE` message. Two caveats,
 both by design now: (1) the **host** holds the full state in its own tab, so it
 can see undisguised props — an accepted cost of host authority; (2) an
 undisguised prop still renders as a neutral capsule and so is visible while
-moving — acceptable for the skeleton; see project-state open threads.
+moving — acceptable for the skeleton; see project-state open threads. Mid-game
+joiners are guests too: `admitMidGame` sends them the same filtered
+`STARTED`/`ROLE`/snapshot path, so late entry doesn't leak the host's full state.

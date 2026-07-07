@@ -1,11 +1,56 @@
-// Keyboard + pointer-lock mouse look. Produces a movement intent (mx, mz) and
-// look angles (yaw, pitch) that main.js forwards to the server. Also surfaces
-// discrete action key presses (disguise, tag) via callbacks.
+// Input owns EVERY control scheme and funnels them all into the same shape the
+// rest of the game reads: a movement intent (mx, mz), look angles (yaw, pitch),
+// and discrete action callbacks. Nothing downstream (net/referee/scene) knows or
+// cares whether a frame's movement came from WASD, a thumbstick, or a drag.
+//
+// Two schemes live here:
+//   - DESKTOP: keyboard + pointer-lock mouse look (unchanged — see the
+//     input-mouselook note). Only wired on non-touch devices.
+//   - TOUCH (phones/tablets): a nipplejs virtual joystick for movement, a
+//     hand-rolled drag-to-look zone (pointer events; phones have no pointer lock,
+//     so this REPLACES mouse-look rather than imitating it), and on-screen tap
+//     buttons for the role action. Only wired on touch devices, so desktop is
+//     untouched. nipplejs is lazy-loaded from jsDelivr on first game entry (same
+//     "CDN import, no build step, nothing at boot" pattern as Three/PeerJS), so a
+//     bare landing page still makes zero external requests.
+
+// nipplejs (MIT) pulled as ESM from jsDelivr's prebuilt bundle, LAZILY — the
+// import only runs the first time a touch player actually enters a match, never
+// at page load. Cached after the first load.
+let _nippleFactory = null;
+async function loadNipple() {
+  if (!_nippleFactory) {
+    const mod = await import('https://cdn.jsdelivr.net/npm/nipplejs@0.10.2/+esm');
+    _nippleFactory = mod.default || mod;
+  }
+  return _nippleFactory;
+}
+
+// Audio unlock: iOS keeps audio muted until it's started inside a real user
+// gesture. We resume a shared AudioContext on the first in-game tap (see the tap
+// handlers below). It lives in this input/glue layer ON PURPOSE — not in ui.js —
+// so the "UI is logic-free" rule holds. Harmless today (no sounds yet); this is
+// the one correct place to do it, so future audio just works on phones.
+let _audioCtx = null;
+function unlockAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!_audioCtx) _audioCtx = new Ctx();
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  } catch {
+    /* audio is best-effort; never block gameplay on it */
+  }
+}
+
+const isTouchDevice = () =>
+  (typeof window !== 'undefined' && 'ontouchstart' in window) ||
+  (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+
 export class Input {
-  // lockTrigger is the element that is actually clicked to capture the mouse.
-  // The "Click to play" overlay is painted on top of the canvas and swallows
-  // its clicks, so the request must be wired to that element, not the canvas
-  // underneath it. Defaults to the canvas when no separate trigger is given.
+  // lockTrigger is the element clicked to capture the mouse (desktop) OR tapped to
+  // dismiss the overlay (touch) — the "Click/Tap to play" overlay, which is painted
+  // over the canvas and swallows its clicks. Defaults to the canvas.
   constructor(canvas, lockTrigger = canvas) {
     this.canvas = canvas;
     this.keys = new Set();
@@ -14,16 +59,33 @@ export class Input {
     this.locked = false;
     this.sensitivity = 0.0022;
 
-    this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag'
-    // Pointer-lock is a browser handshake: we only know capture succeeded when
-    // the browser confirms it. These fire on that confirmation so the UI can
-    // drive the overlay off the real lock state instead of guessing.
-    this.onLockChange = () => {}; // (locked: boolean) => void
-    this.onLockError = () => {}; // (reason: string) => void
+    this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag' | 'primary'
+    this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
+    this.onLockError = () => {}; // (reason: string) => void    (desktop pointer lock)
+    this.onTouchPlay = () => {}; // () => void  fired when a touch player taps the overlay
 
+    // Touch state.
+    this.touch = isTouchDevice();
+    this.touchMove = { mx: 0, mz: 0 }; // latest joystick vector (right+, forward+)
+    this.touchLookSens = 0.005;
+    this._joystick = null;
+    this._touchBuilt = false;
+    this._touchRoot = null;
+    this._lookPointerId = null; // the single finger currently driving look
+    this._lookLast = null;
+
+    // Keyboard is always live (a hybrid laptop still has it; a pure phone won't
+    // fire these). Action keys are gated on pointer lock below.
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
 
+    if (this.touch) this._wireTouch(lockTrigger);
+    else this._wireDesktop(lockTrigger);
+  }
+
+  // ---- desktop (unchanged behaviour) --------------------------------------
+  _wireDesktop(lockTrigger) {
+    const canvas = this.canvas;
     const requestLock = () => {
       if (!this.locked) canvas.requestPointerLock();
     };
@@ -34,9 +96,6 @@ export class Input {
       this.locked = document.pointerLockElement === canvas;
       this.onLockChange(this.locked);
     });
-    // The browser refused (or dropped) the request — e.g. no user gesture, a
-    // permission block, or the exit-then-relock throttle. Surface it so the
-    // overlay can say something useful instead of sitting there silently.
     document.addEventListener('pointerlockerror', () => {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) this.onLockError('Browser blocked mouse capture — click again (and allow pointer lock if your browser asks).');
@@ -47,9 +106,132 @@ export class Input {
       this.pitch -= e.movementY * this.sensitivity;
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch));
     });
-    // Left click = the role's primary action while locked.
     canvas.addEventListener('mousedown', (e) => {
       if (this.locked && e.button === 0) this.onAction('primary');
+    });
+  }
+
+  // ---- touch --------------------------------------------------------------
+  _wireTouch(lockTrigger) {
+    // Drag-to-look on the canvas. The joystick zone and action button are DOM
+    // elements layered OVER the canvas, so touches that land on them never reach
+    // here — the canvas only sees "empty" screen, which is exactly the look zone.
+    // One finger drives look at a time (the joystick finger is a different pointer
+    // captured by the joystick element).
+    const canvas = this.canvas;
+    canvas.style.touchAction = 'none'; // no pinch-zoom / pull-to-refresh eating drags
+    canvas.addEventListener('pointerdown', (e) => {
+      if (this._lookPointerId !== null) return;
+      this._lookPointerId = e.pointerId;
+      this._lookLast = { x: e.clientX, y: e.clientY };
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== this._lookPointerId || !this._lookLast) return;
+      this.yaw -= (e.clientX - this._lookLast.x) * this.touchLookSens;
+      this.pitch -= (e.clientY - this._lookLast.y) * this.touchLookSens;
+      this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch));
+      this._lookLast = { x: e.clientX, y: e.clientY };
+    });
+    const endLook = (e) => {
+      if (e.pointerId === this._lookPointerId) {
+        this._lookPointerId = null;
+        this._lookLast = null;
+      }
+    };
+    canvas.addEventListener('pointerup', endLook);
+    canvas.addEventListener('pointercancel', endLook);
+
+    // The "Tap to play" overlay: on touch there's no pointer lock to wait on, so
+    // tapping it just unlocks audio and tells main.js to dismiss the overlay. No
+    // fake lock events — the desktop lock path is left completely alone.
+    if (lockTrigger) {
+      lockTrigger.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        unlockAudio();
+        this.onTouchPlay();
+      });
+    }
+  }
+
+  // Show the touch controls and lazily build the joystick. Called by main.js when
+  // a match starts. No-op on desktop.
+  async enterGame() {
+    if (!this.touch) return;
+    this._buildTouchDom();
+    this._touchRoot.classList.remove('hidden');
+    await this._initJoystick();
+  }
+
+  // Hide the touch controls when we leave the game (back to lobby/menu). No-op on
+  // desktop. The joystick manager is kept (cheap) and reused next round.
+  exitGame() {
+    if (!this.touch) return;
+    if (this._touchRoot) this._touchRoot.classList.add('hidden');
+    this.touchMove = { mx: 0, mz: 0 };
+    this._lookPointerId = null;
+    this._lookLast = null;
+  }
+
+  // Build the on-screen controls once: a joystick zone (bottom-left) and an action
+  // button (bottom-right). Positioning/orientation handling is pure CSS
+  // (orientation media queries), so a rotate needs no JS. This DOM is created here,
+  // in the input module — ui.js stays free of control logic.
+  _buildTouchDom() {
+    if (this._touchBuilt) return;
+    const root = document.createElement('div');
+    root.id = 'touchControls';
+    root.className = 'hidden';
+
+    const stick = document.createElement('div');
+    stick.id = 'touchStick';
+    stick.className = 'touch-stick-zone';
+
+    const action = document.createElement('button');
+    action.id = 'touchAction';
+    action.type = 'button';
+    action.className = 'touch-btn';
+    action.textContent = 'ACTION';
+    // pointerdown (not click) for zero-latency taps, and so it never bubbles to the
+    // canvas look zone underneath.
+    action.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      unlockAudio();
+      this.onAction('primary'); // main.js maps 'primary' to tag/disguise by role
+    });
+
+    root.append(stick, action);
+    (this.canvas.parentElement || document.body).appendChild(root);
+    this._touchRoot = root;
+    this._stickZone = stick;
+    this._touchBuilt = true;
+  }
+
+  async _initJoystick() {
+    if (this._joystick || !this._stickZone) return;
+    let factory;
+    try {
+      factory = await loadNipple();
+    } catch {
+      return; // CDN down: look + action still work; movement just unavailable
+    }
+    this._joystick = factory.create({
+      zone: this._stickZone,
+      mode: 'dynamic', // stick materialises wherever the thumb lands in the zone
+      color: '#ff4fa3',
+      size: 110,
+      fadeTime: 100,
+    });
+    this._joystick.on('move', (_evt, data) => {
+      if (!data || !data.vector) return;
+      // nipplejs vector: x right(+), y up(+). Our convention: mx right(+),
+      // mz forward(+). Forward == up.
+      this.touchMove.mx = data.vector.x;
+      this.touchMove.mz = data.vector.y;
+    });
+    this._joystick.on('end', () => {
+      this.touchMove.mx = 0;
+      this.touchMove.mz = 0;
     });
   }
 
@@ -61,6 +243,8 @@ export class Input {
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).
+  // Keyboard and joystick are summed (then clamped) so a hybrid device can use
+  // either; main.js normalises the combined vector before applying speed.
   moveVector() {
     let mz = 0;
     let mx = 0;
@@ -68,6 +252,12 @@ export class Input {
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) mz -= 1;
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) mx += 1;
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) mx -= 1;
-    return { mx, mz };
+    if (this.touch) {
+      mx += this.touchMove.mx;
+      mz += this.touchMove.mz;
+    }
+    return { mx: clamp(mx, -1, 1), mz: clamp(mz, -1, 1) };
   }
 }
+
+const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);

@@ -8,7 +8,38 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: LOBBY MAP SELECTION BUILT (this session, on `vrmike/dev`).
+## Status: MULTIPLAYER + MOBILE UPDATE BUILT (this session, on `vrmike/dev`). Not yet playtested.
+
+Four things landed together, all against the seams the notes already named:
+
+1. **Solo launch.** `minPlayers` → 1 (`rules.json`). `startMatch` role math now
+   keeps ≥1 prop (`hunterCount = min(max(1,round(n*hunterRatio)), n-1)`), so a lone
+   host is a **prop** and can walk/disguise while testing a map; a zero-hunter
+   round has no instant win and runs on the timer. `checkRoundOver` already only
+   ends early when props existed and all died, so no change needed there.
+2. **Mid-game join.** `Referee.addPlayer` is the single gate; during HIDING/HUNTING
+   it routes to new `admitMidGame(player)`, which slots the newcomer in as a
+   **hunter**, spawns them, and sends the SAME filtered catch-up every guest gets
+   (`STARTED` + private `ROLE` + current phase/clock + normal snapshots) — never the
+   host's full state. `net.js` already called `addPlayer` on every guest connect
+   regardless of phase, so no network change was needed. Guest side is pure
+   presentation (`STARTED` drops it into the running game).
+3. **Persistent lobby.** Already returned ENDING→LOBBY keeping the map; this session
+   confirmed nothing else resets (peers stay open, host stays host, list survives)
+   and added `lastResult` (rides `S2C.LOBBY`) so the lobby shows the previous
+   winner. `main.js` tidies per-round view state on return WITHOUT reconnecting.
+4. **Phone / touch controls.** Whole layer in `js/input.js`: nipplejs joystick
+   (lazy CDN), hand-rolled drag-to-look, on-screen action button, "Tap to play" +
+   iOS audio unlock, portrait/landscape CSS, `touch-action:none`, `100dvh`, DPR cap
+   (pre-existing), wake lock (+ phone-host warning), `webglcontextlost` guard. Only
+   wired on touch devices — desktop WASD + mouse-look is UNCHANGED. Full detail:
+   `memory/notes/touch-controls.md`.
+
+Files touched: `shared/config/rules.json`, `shared/referee.js`, `shared/protocol.js`
+(doc), `js/main.js`, `js/input.js`, `js/ui.js`, `js/scene.js`, `index.html`,
+`css/style.css`. See `memory/notes/{game-loop,touch-controls,input-mouselook}.md`.
+
+## Status: LOBBY MAP SELECTION BUILT (earlier session, on `vrmike/dev`).
 
 The host can now pick the round's map from the lobby (two maps: `circus_lot` +
 `toy_workshop`). One validation gate (`Referee.setMapId`), one new lobby message
@@ -147,9 +178,20 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       quota, swap the three `turn:` entries in `js/net.js` for your own
       Metered/OpenRelay creds. The relay password ships in client code
       (unavoidable, backend-less) — only risk is quota drain.
-- **Phones out of scope (deliberate).** Controls are keyboard + mouse-look, so
-      it's desktop-only regardless of the deploy. Real touch controls are a
-      separate project.
+- **Phones now IN scope (this session).** Full touch controls added (joystick +
+      drag-to-look + tap buttons + "Tap to play", portrait & landscape). Desktop
+      WASD + mouse-look untouched. **Playtest owed** (see the mobile checklist in
+      the new-work status above and open thread below). Details in
+      `memory/notes/touch-controls.md`.
+- **PLAYTEST OWED for this session's work.** Do a desktop + phone pass: (a) start
+      SOLO on desktop, walk/disguise alone; (b) phone joins MID-ROUND via the invite
+      link → confirm it drops into the running game as a hunter and sees only what
+      other guests see (never undisguised props); (c) play with touch in BOTH
+      portrait and landscape (joystick moves, drag looks, action button
+      tags/disguises, "Tap to play" dismisses, no pinch-zoom); (d) finish the round
+      and start ANOTHER from the persistent lobby with nobody reconnecting (host
+      stays host, map stays picked, last winner shown). Two tabs on one machine is
+      still not a valid P2P test.
 - **Anti-cheat given up.** The host holds full unfiltered state (can see
       undisguised props / tamper). Accepted cost of host authority; no neutral
       referee. See architecture.md.
@@ -183,9 +225,9 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
 
 Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
-Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Tunables:
-`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
-input-mouselook, map-selection). Dead code
-awaiting `git rm`: `client/`, `server/`.
+Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Input (all
+schemes, incl. touch): `js/input.js`. Tunables: `shared/config/rules.json`. Notes:
+`memory/notes/` (netcode, game-loop, input-mouselook, map-selection,
+touch-controls). Dead code awaiting `git rm`: `client/`, `server/`.
 
 - The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)

@@ -2,7 +2,7 @@
   "tickRate": 30,
   "snapshotRate": 15,
   "moveSpeed": 6,
-  "minPlayers": 2,
+  "minPlayers": 1,
   "hunterRatio": 0.34,
   "hidingSeconds": 20,
   "huntingSeconds": 150,

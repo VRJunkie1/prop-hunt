@@ -11,10 +11,15 @@
 html, body {
   margin: 0;
   height: 100%;
+  height: 100dvh; /* mobile-safe: excludes the browser's dynamic toolbars (fallback above for old engines) */
   font-family: "Trebuchet MS", system-ui, sans-serif;
   color: var(--text);
   background: radial-gradient(circle at 50% 20%, #4a2a7a, var(--bg));
   overflow: hidden;
+  overscroll-behavior: none; /* kill pull-to-refresh / rubber-banding during play */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .screen {
@@ -130,7 +135,9 @@ button.ghost:hover { background: #3d2a66; }
 .map-btn.selected:disabled { opacity: 1; } /* non-hosts still see the current pick clearly */
 
 /* ---- in game ---- */
-#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+/* touch-action:none so pinch-zoom / pull-to-refresh don't eat drag-to-look (also
+   set in input.js for the drag zone; belt-and-braces here). */
+#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 #crosshair {
   position: absolute;
   top: 50%; left: 50%;
@@ -185,4 +192,59 @@ button.ghost:hover { background: #3d2a66; }
   max-width: 100%;
   background: #00000066;
   cursor: pointer;
+  touch-action: none;
+  z-index: 10; /* above the touch controls (z-index:5) so it always gets the tap */
+}
+
+/* ---- touch controls (only built/shown on touch devices; see js/input.js) ----
+   The joystick zone (bottom-left) and action button (bottom-right) are layered
+   over the canvas; the uncovered screen is the drag-to-look zone. Positions are
+   anchored to the safe-area corners, so a portrait<->landscape rotate re-flows
+   with no JS. */
+#touchControls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* children re-enable it; the gaps stay a look zone */
+  z-index: 5;
+}
+.touch-stick-zone {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 45vw;
+  max-width: 320px;
+  height: 55%;
+  pointer-events: auto;
+  touch-action: none;
+}
+.touch-btn {
+  position: absolute;
+  right: calc(20px + env(safe-area-inset-right, 0px));
+  bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  width: 96px;
+  height: 96px;
+  flex: none;
+  border-radius: 50%;
+  background: #ff4fa3cc;
+  color: #240b1c;
+  font-weight: bold;
+  font-size: 15px;
+  letter-spacing: 1px;
+  border: 3px solid #ffffff66;
+  pointer-events: auto;
+  touch-action: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.touch-btn:active { transform: scale(0.94); background: #ff4fa3; }
+
+/* Landscape: shorter screen, so keep the stick zone lower and tighter and lift the
+   action button clear of the thumb resting spot. */
+@media (orientation: landscape) {
+  .touch-stick-zone { width: 38vw; height: 70%; }
+  .touch-btn { bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+}
+/* Portrait: more vertical room; a slightly bigger button reads better on a phone. */
+@media (orientation: portrait) {
+  .touch-stick-zone { width: 60vw; height: 40%; }
+  .touch-btn { width: 108px; height: 108px; }
 }

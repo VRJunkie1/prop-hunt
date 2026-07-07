@@ -67,6 +67,41 @@ input.onLockError = (reason) => {
   const inGame = !ui.el.game.classList.contains('hidden');
   if (inGame) ui.setClickToPlay(true, reason);
 };
+// Touch has no pointer lock: tapping the overlay dismisses it and NOW brings up
+// the on-screen controls + joystick (deferred to here so the controls never sit
+// on top of the "Tap to play" overlay and steal its tap). Audio is unlocked inside
+// input.js's own tap handler — the one gesture iOS gives us.
+input.onTouchPlay = () => {
+  ui.setClickToPlay(false);
+  input.enterGame();
+};
+
+// ---- screen wake lock ------------------------------------------------------
+// Phones sleep the screen on their own; for the HOST that's fatal — the referee
+// and the WebRTC links live in that tab, so a sleeping host ends the match for
+// EVERYONE. Hold a wake lock while in a match and re-acquire it if the OS drops it
+// (e.g. after a tab switch). Best-effort: unsupported browsers just skip it.
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+  } catch {
+    /* denied / unsupported — nothing we can do, don't block play */
+  }
+}
+function releaseWakeLock() {
+  try {
+    if (wakeLock) wakeLock.release();
+  } catch {
+    /* ignore */
+  }
+  wakeLock = null;
+}
+document.addEventListener('visibilitychange', () => {
+  // The lock is auto-released when the tab is hidden; re-grab it on return if
+  // we're still in a match.
+  if (document.visibilityState === 'visible' && !ui.el.game.classList.contains('hidden')) acquireWakeLock();
+});
 
 function tryDisguise() {
   if (state.role !== ROLE.PROP) return;
@@ -100,7 +135,20 @@ function handleGameMessage(msg) {
       state.room = msg.room;
       ui.renderLobby(msg, state.selfId);
       if (msg.phase === PHASE.LOBBY) {
+        // Persistent lobby: a round just ended (or we're joining fresh). If we were
+        // in a match, return to the lobby screen WITHOUT reconnecting — peers stay
+        // open, we just tidy the per-round view state.
+        const wasInGame = !ui.el.game.classList.contains('hidden');
         state.phase = PHASE.LOBBY;
+        if (wasInGame) {
+          input.exitGame();
+          releaseWakeLock();
+          ui.setClickToPlay(false);
+          resetReadyButton();
+          state.role = null;
+          state.movable = false;
+          state.spawned = false;
+        }
         ui.show('lobby');
       }
       break;
@@ -113,8 +161,19 @@ function handleGameMessage(msg) {
       // First time we need Three.js: build the renderer now (lazy CDN load).
       ensureScene().then((s) => s.buildWorld(state.map, state.props, state.cfg.props));
       ui.show('game');
-      // Entering the game uncaptured — prompt for the click that grabs the mouse.
-      ui.setClickToPlay(!input.locked);
+      // Entering the game uncaptured. Desktop waits for the pointer-lock click;
+      // touch shows a "Tap to play" prompt (dismissed by input.onTouchPlay) and
+      // brings up the on-screen controls.
+      if (input.touch) {
+        // Controls are shown on the tap (input.onTouchPlay), not here — see there.
+        ui.setClickToPlay(true, 'Tap to play');
+        // A phone HOST that sleeps kills the match for everyone (referee lives in
+        // this tab). Wake lock covers auto-sleep; warn about a manual lock too.
+        if (session && session.isHost) ui.feed('You are hosting on a phone — keep this screen on, or the match ends for everyone.');
+      } else {
+        ui.setClickToPlay(!input.locked);
+      }
+      acquireWakeLock();
       ui.banner('Get ready…', 1500);
       break;
     }
@@ -166,9 +225,20 @@ function backToMenu(msg) {
   state.phase = PHASE.LOBBY;
   state.movable = false;
   state.spawned = false;
+  input.exitGame();
+  releaseWakeLock();
+  resetReadyButton();
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
+}
+
+// Reset the lobby ready toggle to its default. The referee clears server-side
+// ready on resetToLobby; this keeps the local button label/state in step so a
+// back-to-back round starts from "Ready", not a stale "Not ready".
+function resetReadyButton() {
+  ui.el.readyBtn._ready = false;
+  ui.el.readyBtn.textContent = 'Ready';
 }
 
 function onSnapshot(msg) {

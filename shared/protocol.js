@@ -22,7 +22,7 @@ export const C2S = {
 // Referee -> Client message types.
 export const S2C = {
   JOINED: 'joined', // { id, room, host }
-  LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}], phase, mapId }
+  LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}], phase, mapId, result:{winner}|null }
   STARTED: 'started', // { mapId, props:[{id,type,x,z,rot}] }
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state (see Room.buildSnapshot)

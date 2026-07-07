@@ -36,20 +36,33 @@ the folder locally (see below).
 
 In one browser: **Create room** — you get a 4-letter code and become the host,
 and can **Copy invite link** to share. In the others: enter the code and **Join**
-(or just click the invite link). The host presses **Start match** (needs at least
-2 players).
+(or just click the invite link). The host presses **Start match** — you can start
+**solo** and friends can **join mid-round** via the code / invite link (they drop
+straight into the running game). The lobby **persists across rounds**, so a group
+can run back-to-back rounds on one room code.
 
 > Two tabs on one machine connect via loopback and always work — the real test is
 > two *different* homes (see the playtest note in `memory/project-state.md`).
 
 ### Controls
 
+**Desktop (keyboard + mouse):**
+
 - **WASD / arrows** — move
 - **Mouse** — look (click the view to lock the pointer)
 - **E** or **left-click** (as a Prop) — disguise as the nearest object
 - **F / Space** or **left-click** (as a Hunter) — tag what you're aiming at
 
-Desktop-only: controls are keyboard + mouse-look (touch controls are out of scope).
+**Phone / touch (portrait or landscape):**
+
+- **Virtual joystick** (bottom-left) — move
+- **Drag anywhere else on the screen** — look (phones have no pointer lock)
+- **ACTION button** (bottom-right) — disguise (Prop) / tag (Hunter)
+- Tap **"Tap to play"** to start (also unlocks audio on iOS)
+
+Touch controls appear only on touch devices; desktop is unchanged. If you **host
+on a phone**, keep the screen awake — the referee lives in your tab, so if it
+sleeps the match ends for everyone (the game holds a wake lock and warns you).
 
 ### How a round goes
 
@@ -97,7 +110,7 @@ index.html         screens: menu / lobby / game (served at the site root)
 js/                browser game (no build step; Three.js + PeerJS via CDN)
   main.js          glue + render loop + client-side prediction
   net.js           PeerJS network layer (broker signaling + WebRTC + host loopback)
-  input.js         keyboard + pointer-lock mouse look
+  input.js         all input: desktop keyboard + mouse-look, and touch (joystick/drag/buttons)
   scene.js         all Three.js rendering
   ui.js            DOM screens / HUD / feed
   config.js        fetches the static config JSON
