@@ -8,7 +8,34 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: MULTIPLAYER + MOBILE UPDATE BUILT (this session, on `vrmike/dev`). Not yet playtested.
+## Status: THIRD-PERSON CAMERA BUILT (this session, on `vrmike/dev`). Not yet playtested.
+
+The local player is now **third-person by default** (was first-person). A camera
+orbits behind + slightly above them off the existing yaw/pitch; they now see their
+OWN model/prop (built via the same disguise/role path other peers are drawn with).
+**Camera/view change only** — movement, roles, collision, networking, and the
+referee are untouched.
+
+- **Aim decision (the one gotcha):** the referee's tag cone / disguise still
+  compute from yaw-forward — NOT touched. Since the third-person eye is off the
+  player, the reticle is now driven off that yaw-forward vector
+  (`scene.aimScreenPoint` → `ui.setCrosshair`), not screen center, so tag/disguise
+  land where the reticle points. First-person recenters the reticle.
+- **Collision-aware:** the engine already exposes `THREE.Raycaster` (so pass two
+  was cheap). Walls + static props go into `scene.colliders`; a per-frame ray from
+  the player pulls the camera in on a hit (min dist 1.2, 0.3 skin). Ground and
+  avatars are excluded on purpose. Snap-in / ease-out (0.12) smoothing.
+- **Own model:** `syncPlayers` no longer skips self — `_syncSelf` builds the local
+  avatar via `meshForPlayer`; positioned each frame from the PREDICTED pos/yaw so
+  it tracks the camera without snapshot lag.
+- **First-person toggle kept** (it was clean): desktop **V** flips camera +
+  own-model + reticle behind one `scene.setThirdPerson()` flag. No touch button.
+- Files: `js/scene.js`, `js/main.js`, `js/input.js`, `js/ui.js`. No CSS/HTML/
+  referee/protocol/net changes, no new deps. Full detail:
+  `memory/notes/third-person-camera.md`. **Playtest owed** (orbit, wall pull-in,
+  tag/disguise-under-reticle, V toggle; desktop + phone).
+
+## Status: MULTIPLAYER + MOBILE UPDATE BUILT (earlier session, on `vrmike/dev`). Not yet playtested.
 
 Four things landed together, all against the seams the notes already named:
 
@@ -226,8 +253,9 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
 Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
 Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Input (all
-schemes, incl. touch): `js/input.js`. Tunables: `shared/config/rules.json`. Notes:
-`memory/notes/` (netcode, game-loop, input-mouselook, map-selection,
-touch-controls). Dead code awaiting `git rm`: `client/`, `server/`.
+schemes, incl. touch): `js/input.js`. Rendering + **third-person camera**:
+`js/scene.js`. Tunables: `shared/config/rules.json`. Notes: `memory/notes/`
+(netcode, game-loop, input-mouselook, map-selection, touch-controls,
+third-person-camera). Dead code awaiting `git rm`: `client/`, `server/`.
 
 - The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)
