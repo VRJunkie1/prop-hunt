@@ -40,6 +40,30 @@ picker with no new wiring.
   existing **primitive shapes** themed as restaurant items. Attribution + the
   shape→model mapping + the follow-up (add a lazy `GLTFLoader`, keep it firing only
   at match start) are in `/CREDITS.md` and `assets/restaurant/README.md`.
+- **[2026-07-09] GLB fetch RE-ATTEMPTED (attempt #2) — STILL BLOCKED, same wall.**
+  VRmike believed the binary-fetch capability was now fixed; it is NOT, in this
+  sandbox. Ran the make-or-break capability gate (download ONE real GLB before
+  touching anything). Precise findings, so nobody re-runs this blind:
+  - `Bash` tool → `Error: No such tool available: Bash. Bash exists but is not
+    enabled in this context.` (present in the registry but disabled here).
+  - `Monitor` (the only other command-shaped tool) → every invocation, both from
+    the main loop and a subagent, fails at the permission step with
+    `Tool permission request failed: Error: Stream closed` — the command never
+    executes (no stdout/stderr/exit code).
+  - No web-fetch / HTTP / download tool exists in the tool set (verified by
+    multiple `ToolSearch` passes: only `Monitor`/`NotebookEdit` are command-shaped,
+    neither does HTTP). `Write` is text/UTF-8 only — cannot reproduce binary bytes.
+  - Conclusion: **shell = NO, network = NO, binary-write = NO.** Per the approved
+    plan's step 2, STOPPED here — did NOT fake or create placeholder `.glb` files,
+    did NOT touch `assets/`. The wiring in step 3 (point `maps.json` fixtures +
+    `props.json` props at GLB paths, add a lazy `GLTFLoader` off `S2C.STARTED` with
+    primitive fallback) is READY to do the instant real `.glb` files exist — the
+    fixtures-vs-props split, the lazy `ensureScene()`/`S2C.STARTED` seam, and the
+    attribution docs are all already in place (see Explore map below / notes).
+  - **UNBLOCK PATH:** this must run in an environment where either `Bash` is
+    enabled OR `Monitor`'s permission stream works, so `curl`/`wget` can pull the
+    GLBs. Nothing in the client code needs to change first — only the assets are
+    missing.
 - **Playtest owed:** pick `restaurant` in lobby → everyone spawns in it; enclosed
   kitchen+dining reads right; disguise into a chair/crate/burger; tag works;
   camera pulls in on fixtures; circus_lot + toy_workshop still load unchanged.
@@ -295,3 +319,16 @@ schemes, incl. touch): `js/input.js`. Rendering + **third-person camera**:
 third-person-camera). Dead code awaiting `git rm`: `client/`, `server/`.
 
 - The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)
+
+- prop-hunt physics WIP — LATER/suggestion (not v1): "fake nudge" for disguised players. When a hunter shoves a disguised player, play a scripted cosmetic reaction so it mimics a real dynamic prop and preserves the disguise (instead of a hard 100% tell). CONSTRAINT (VRmike): the fake nudge may ONLY translate and rotate on the vertical (yaw) axis — it must NEVER tip over (no pitch/roll). Players stay kinematic and un-knockable; this is purely a visual mimic. The genuine tell then becomes subtle (real dynamic props tumble/settle differently) rather than binary. To be written into the game repo's WIP notes when the physics build runs. (noted 2026-07-09 by VRmike)
+
+- prop-hunt PHYSICS + MULTIPLAYER architecture — DECIDED with VRmike, for the big single-pass "yolo" build (do it all at once; roll back if it fails):
+- ENGINE: Rapier (rapier3d, WASM). Lazy-load at match start like three.js/PeerJS — ZERO boot-time network fetch (headless load check must stay clean).
+- COLLIDERS: static fixtures (walls/floor/counters/stove/oven/fridge/cabinets/sinks/large tables) = fixed colliders (box/trimesh). Dynamic props (chairs/stools/crates/pots/pans/plates/bowls/cutting boards/food) = dynamic rigid bodies with per-mesh CONVEX HULL colliders (convex decomposition only if a hull isn't enough). Reuse the existing map.fixtures[] vs map.props[] split already in the engine.
+- PLAYERS: KINEMATIC character bodies via Rapier KinematicCharacterController. Have colliders; run + jump (manual gravity/vertical velocity); collide-and-slide vs walls/fixtures (FIXES the current pass-through-everything gap); shove dynamic props (applyImpulsesToDynamicBodies); but CANNOT be knocked/tipped over.
+- NETWORKING: host-authoritative. TARGET for the yolo build = full client-side PREDICTION + server RECONCILIATION — every client runs a local Rapier sim for instant response; host streams authoritative transforms; clients blend/reconcile toward host (smooth, no hard pops). FALLBACK if that's too much in one pass: host-only sim + guest interpolation (guests don't sim, just interpolate received transforms).
+- BANDWIDTH: only sync AWAKE bodies (Rapier sleeping = ~0 traffic when still); quantize transforms (~16 bytes); traffic is bursty. Rapier is NOT a networked engine — all netcode is hand-written.
+- DETERMINISM: Rapier deterministic only given identical inputs/order/build; cross-browser drift is expected → reconciliation corrects it. Don't rely on determinism alone to stay synced.
+- TELL MECHANIC: real props are physics-driven (get shoved), disguised players are kinematic (don't) = the tell. Fake-nudge softener already noted (later; yaw+translate only, never tip).
+- CONSTRAINTS: static site, no build step, P2P WebRTC via PeerJS broker, referee stays authoritative & transport-agnostic, flat repo-root layout, lazy CDN. Build on vrmike/dev.
+- VERIFICATION CAVEAT: bot auto-check is a headless LOAD test only — it CANNOT feel-test physics/netcode. This build needs a live multiplayer playtest as real QA. (noted 2026-07-09 by VRmike)
