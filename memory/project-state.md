@@ -295,3 +295,16 @@ schemes, incl. touch): `js/input.js`. Rendering + **third-person camera**:
 third-person-camera). Dead code awaiting `git rm`: `client/`, `server/`.
 
 - The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)
+
+- prop-hunt physics WIP — LATER/suggestion (not v1): "fake nudge" for disguised players. When a hunter shoves a disguised player, play a scripted cosmetic reaction so it mimics a real dynamic prop and preserves the disguise (instead of a hard 100% tell). CONSTRAINT (VRmike): the fake nudge may ONLY translate and rotate on the vertical (yaw) axis — it must NEVER tip over (no pitch/roll). Players stay kinematic and un-knockable; this is purely a visual mimic. The genuine tell then becomes subtle (real dynamic props tumble/settle differently) rather than binary. To be written into the game repo's WIP notes when the physics build runs. (noted 2026-07-09 by VRmike)
+
+- prop-hunt PHYSICS + MULTIPLAYER architecture — DECIDED with VRmike, for the big single-pass "yolo" build (do it all at once; roll back if it fails):
+- ENGINE: Rapier (rapier3d, WASM). Lazy-load at match start like three.js/PeerJS — ZERO boot-time network fetch (headless load check must stay clean).
+- COLLIDERS: static fixtures (walls/floor/counters/stove/oven/fridge/cabinets/sinks/large tables) = fixed colliders (box/trimesh). Dynamic props (chairs/stools/crates/pots/pans/plates/bowls/cutting boards/food) = dynamic rigid bodies with per-mesh CONVEX HULL colliders (convex decomposition only if a hull isn't enough). Reuse the existing map.fixtures[] vs map.props[] split already in the engine.
+- PLAYERS: KINEMATIC character bodies via Rapier KinematicCharacterController. Have colliders; run + jump (manual gravity/vertical velocity); collide-and-slide vs walls/fixtures (FIXES the current pass-through-everything gap); shove dynamic props (applyImpulsesToDynamicBodies); but CANNOT be knocked/tipped over.
+- NETWORKING: host-authoritative. TARGET for the yolo build = full client-side PREDICTION + server RECONCILIATION — every client runs a local Rapier sim for instant response; host streams authoritative transforms; clients blend/reconcile toward host (smooth, no hard pops). FALLBACK if that's too much in one pass: host-only sim + guest interpolation (guests don't sim, just interpolate received transforms).
+- BANDWIDTH: only sync AWAKE bodies (Rapier sleeping = ~0 traffic when still); quantize transforms (~16 bytes); traffic is bursty. Rapier is NOT a networked engine — all netcode is hand-written.
+- DETERMINISM: Rapier deterministic only given identical inputs/order/build; cross-browser drift is expected → reconciliation corrects it. Don't rely on determinism alone to stay synced.
+- TELL MECHANIC: real props are physics-driven (get shoved), disguised players are kinematic (don't) = the tell. Fake-nudge softener already noted (later; yaw+translate only, never tip).
+- CONSTRAINTS: static site, no build step, P2P WebRTC via PeerJS broker, referee stays authoritative & transport-agnostic, flat repo-root layout, lazy CDN. Build on vrmike/dev.
+- VERIFICATION CAVEAT: bot auto-check is a headless LOAD test only — it CANNOT feel-test physics/netcode. This build needs a live multiplayer playtest as real QA. (noted 2026-07-09 by VRmike)
