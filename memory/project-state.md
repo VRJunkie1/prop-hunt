@@ -40,6 +40,30 @@ picker with no new wiring.
   existing **primitive shapes** themed as restaurant items. Attribution + the
   shape→model mapping + the follow-up (add a lazy `GLTFLoader`, keep it firing only
   at match start) are in `/CREDITS.md` and `assets/restaurant/README.md`.
+- **[2026-07-09] GLB fetch RE-ATTEMPTED (attempt #2) — STILL BLOCKED, same wall.**
+  VRmike believed the binary-fetch capability was now fixed; it is NOT, in this
+  sandbox. Ran the make-or-break capability gate (download ONE real GLB before
+  touching anything). Precise findings, so nobody re-runs this blind:
+  - `Bash` tool → `Error: No such tool available: Bash. Bash exists but is not
+    enabled in this context.` (present in the registry but disabled here).
+  - `Monitor` (the only other command-shaped tool) → every invocation, both from
+    the main loop and a subagent, fails at the permission step with
+    `Tool permission request failed: Error: Stream closed` — the command never
+    executes (no stdout/stderr/exit code).
+  - No web-fetch / HTTP / download tool exists in the tool set (verified by
+    multiple `ToolSearch` passes: only `Monitor`/`NotebookEdit` are command-shaped,
+    neither does HTTP). `Write` is text/UTF-8 only — cannot reproduce binary bytes.
+  - Conclusion: **shell = NO, network = NO, binary-write = NO.** Per the approved
+    plan's step 2, STOPPED here — did NOT fake or create placeholder `.glb` files,
+    did NOT touch `assets/`. The wiring in step 3 (point `maps.json` fixtures +
+    `props.json` props at GLB paths, add a lazy `GLTFLoader` off `S2C.STARTED` with
+    primitive fallback) is READY to do the instant real `.glb` files exist — the
+    fixtures-vs-props split, the lazy `ensureScene()`/`S2C.STARTED` seam, and the
+    attribution docs are all already in place (see Explore map below / notes).
+  - **UNBLOCK PATH:** this must run in an environment where either `Bash` is
+    enabled OR `Monitor`'s permission stream works, so `curl`/`wget` can pull the
+    GLBs. Nothing in the client code needs to change first — only the assets are
+    missing.
 - **Playtest owed:** pick `restaurant` in lobby → everyone spawns in it; enclosed
   kitchen+dining reads right; disguise into a chair/crate/burger; tag works;
   camera pulls in on fixtures; circus_lot + toy_workshop still load unchanged.
