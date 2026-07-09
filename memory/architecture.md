@@ -160,9 +160,21 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
 - `referee.js` — the authoritative referee (see above). Browser-only, transport-
   agnostic (unchanged by the PeerJS swap — it only ever saw `send` callbacks).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
-  `maps.json` (size, colors, spawns, prop placements — currently `circus_lot` +
-  `toy_workshop`), `props.json` (prop-type catalog). Adding maps/props needs no
+  `maps.json` (size, colors, spawns, prop placements — `circus_lot`,
+  `toy_workshop`, `restaurant`), `props.json` (shape catalog: box/cylinder/cone/
+  sphere + color, used for both props and fixtures). Adding maps/props needs no
   engine change; the lobby map picker renders any new map automatically.
+- **Static vs dynamic in a map** (added with the `restaurant` map): a map may
+  carry an optional **`fixtures[]`** array (immovable building pieces — walls,
+  counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable
+  disguise pool). Fixtures render + go into `scene.colliders` (client-side, from
+  local map data) but the referee never sees them, so they're never disguisable;
+  props stay the disguise pool. This is the honest mapping of "world colliders vs
+  disguise props" onto an engine with **no rigid-body physics** — the only
+  collision primitive is the third-person camera's `scene.colliders` raycast, and
+  player movement is still bound only by the map-edge clamp (players pass through
+  objects; adding real player collision would be a separate lockstep change to
+  referee `integrate` + client prediction). Detail: `notes/restaurant-map.md`.
 
 ## Movement convention (must stay in sync between referee & client prediction)
 
