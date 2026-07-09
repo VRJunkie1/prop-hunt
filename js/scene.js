@@ -143,7 +143,25 @@ export class Scene3D {
       this.colliders.push(wall); // camera pulls in against the arena walls
     }
 
-    // Static props.
+    // Static world fixtures (immovable building pieces: kitchen appliances,
+    // counters, sinks, interior walls, large/anchored tables). These come from
+    // the LOCAL map data (`map.fixtures`), NOT from the referee's prop list, so
+    // the referee never treats them as disguisable — they are pure scenery +
+    // world collision. Every client has maps.json, so they render identically on
+    // host and guests with no protocol change. Older maps have no `fixtures` key
+    // and are unaffected. See memory/notes/restaurant-map.md.
+    for (const f of map.fixtures || []) {
+      const built = makePropMesh(f.type, catalog);
+      if (!built) continue;
+      built.mesh.position.set(f.x, built.baseY, f.z);
+      built.mesh.rotation.y = f.rot || 0;
+      this.scene.add(built.mesh);
+      this.colliders.push(built.mesh); // camera pulls in against fixtures too
+    }
+
+    // Dynamic props (the disguise pool — chairs, stools, crates, dishes, food).
+    // Built from the referee's authoritative prop instances; these are the
+    // objects props can morph into.
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;

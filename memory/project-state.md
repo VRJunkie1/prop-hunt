@@ -8,7 +8,43 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: THIRD-PERSON CAMERA BUILT (this session, on `vrmike/dev`). Not yet playtested.
+## Status: RESTAURANT MAP BUILT (this session, on `vrmike/dev`). Not yet playtested.
+
+A third selectable map (`restaurant`) + the small engine seam for STEP 3's
+static/dynamic split. Data-driven, so it's host-selectable through the existing
+picker with no new wiring.
+
+- **New `map.fixtures[]` seam** — maps can now carry immovable **fixtures**
+  (walls, counters, stove, oven, fridge, cabinets, sinks, large/anchored tables)
+  separately from **props** (the movable disguise pool: chairs, stools, crates,
+  pots, pans, plates, bowls, cutting boards, food/burgers). Fixtures render +
+  join `scene.colliders` client-side but the referee never treats them as
+  disguisable (it still builds the pool from `map.props` only). ONE engine change:
+  a `for (const f of map.fixtures || [])` loop in `js/scene.js buildWorld` — older
+  maps (no `fixtures` key) are untouched. No protocol/referee change (every client
+  has maps.json locally). Files: `shared/config/props.json` (restaurant shape
+  catalog), `shared/config/maps.json` (`restaurant` map), `js/scene.js` (fixtures
+  loop). Full detail: `memory/notes/restaurant-map.md`.
+- **Honest mapping of "collision + static/dynamic":** this engine has NO
+  rigid-body physics and NO player-vs-object collision (players pass through
+  everything — documented gap). Its only collision primitive is the third-person
+  camera's `scene.colliders` raycast; "give everything collision" = adding it to
+  that set, which both fixtures and props now do. Real player collision would be a
+  separate, bigger lockstep change (referee `integrate` + client prediction).
+- **GLB assets were NOT fetched — reported honestly, not faked.** The task wanted
+  the 111 CC0 "Restaurant Bits" GLB meshes (Kay Lousberg,
+  https://poly.pizza/bundle/Restaurant-Bits-ejkcnWf78Q). This sandbox has no
+  working network/shell tool (shell permission stream fails — same wall prior
+  sessions hit; the write tool is text-only), so binary download was impossible.
+  No empty/placeholder `.glb` files were created. The map runs on the engine's
+  existing **primitive shapes** themed as restaurant items. Attribution + the
+  shape→model mapping + the follow-up (add a lazy `GLTFLoader`, keep it firing only
+  at match start) are in `/CREDITS.md` and `assets/restaurant/README.md`.
+- **Playtest owed:** pick `restaurant` in lobby → everyone spawns in it; enclosed
+  kitchen+dining reads right; disguise into a chair/crate/burger; tag works;
+  camera pulls in on fixtures; circus_lot + toy_workshop still load unchanged.
+
+## Status: THIRD-PERSON CAMERA BUILT (earlier session, on `vrmike/dev`). Not yet playtested.
 
 The local player is now **third-person by default** (was first-person). A camera
 orbits behind + slightly above them off the existing yaw/pitch; they now see their

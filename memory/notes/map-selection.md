@@ -44,8 +44,11 @@ so the last-picked map stays selected for the next round. This is a documented
 exception to "fresh lobby", not a silent branch.
 
 ## Maps present
-`circus_lot` (default) and `toy_workshop`. Both reference only existing prop types
-from `props.json`, so no `props.json`/engine change was needed to add the second.
+`circus_lot` (default), `toy_workshop`, and `restaurant`. The first two reference
+only existing prop types from `props.json`. `restaurant` added new restaurant-
+themed prop types AND introduced the optional `map.fixtures[]` array (static world
+pieces, separate from the disguise `props`) — one small `js/scene.js` change; see
+`restaurant-map.md`. Picker still renders every map in `maps.json` automatically.
 
 ## History (why this was a "finish", not a "start")
 An earlier map-selection build happened on the `jie/dev` branch (commits
