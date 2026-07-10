@@ -2,6 +2,11 @@
 // it builds the map + props from config, and each frame reconciles player
 // meshes against the latest authoritative snapshot. No game rules here.
 import * as THREE from 'three';
+// The SAME static/dynamic classifier the physics + referee use, so a fixture that
+// became a knockable rigid body isn't ALSO drawn as immovable scenery here (it would
+// double-render and leave a ghost collider). Importing the constant does not load
+// Rapier — physics.js only fetches the WASM inside loadRapier().
+import { isStaticEntry } from '/shared/physics.js';
 
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
@@ -187,6 +192,8 @@ export class Scene3D {
     // host and guests with no protocol change. Older maps have no `fixtures` key
     // and are unaffected. See memory/notes/restaurant-map.md.
     for (const f of map.fixtures || []) {
+      const c = catalog[f.type];
+      if (!c || !isStaticEntry(c)) continue; // knockable fixtures render via propInstances (below)
       const built = makePropMesh(f.type, catalog);
       if (!built) continue;
       built.mesh.position.set(f.x, built.baseY + (f.y || 0), f.z);
@@ -210,8 +217,16 @@ export class Scene3D {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
       const container = new THREE.Group();
-      container.position.set(p.x, built.baseY + (p.y || 0), p.z);
-      container.rotation.y = p.rot || 0;
+      // A mid-round joiner's props carry a live transform (centre + quaternion) so a
+      // shoved chair arrives where it actually rests; a fresh match's props carry
+      // spawn semantics (floor x/z, surface y-offset, yaw). `moved` picks between them.
+      if (Number.isFinite(p.qx)) {
+        container.position.set(p.x, p.y, p.z);
+        container.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+      } else {
+        container.position.set(p.x, built.baseY + (p.y || 0), p.z);
+        container.rotation.y = p.rot || 0;
+      }
       built.mesh.position.set(0, 0, 0); // centred on the container origin
       container.add(built.mesh);
       this.scene.add(container);

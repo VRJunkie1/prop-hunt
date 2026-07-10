@@ -22,6 +22,25 @@ const RAPIER_URL = 'https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.14.
 let _RAPIER = null; // cached, inited Rapier module
 let _loadPromise = null;
 
+// Tiny clearance so a body that spawns flush on a surface never begins the match
+// interpenetrating its neighbour/surface (which the solver would "recover" from as
+// a violent shove). Bodies spawn this far above their rest height and settle onto
+// it in the first few frames. See fix #3 (calm match start).
+const SPAWN_EPS = 0.02;
+
+// THE static/dynamic split (fix #2). A world object is a fixed, immovable collider
+// only if its catalog entry is flagged `static` (genuinely bolted-in: floor, walls,
+// pillars, doors, the vent/hood, and the big built-ins — counters, cabinets, oven,
+// fridge, sinks, shelves) or `decor` (tiny fixed dressing — thin cut-food/garnish
+// that would otherwise form unstable micro-stacks; kept static on purpose and
+// flagged in the summary). EVERYTHING ELSE — tables, chairs, stools, crates, pots,
+// pans, plates, dishes, whole food, condiments — is a dynamic, knockable rigid body.
+// scene.js and referee.js read this SAME flag so collider, mesh, and disguise pool
+// stay in lockstep. Absent flag => dynamic (the world defaults to knockable now).
+export function isStaticEntry(c) {
+  return !!(c && (c.static || c.decor));
+}
+
 // Load + init Rapier exactly once. Returns the ready RAPIER namespace, or throws
 // if the CDN is unreachable (callers fall back to the non-physics path).
 export async function loadRapier() {
@@ -92,7 +111,14 @@ export class PhysicsWorld {
 
     const g = this.rules.gravity != null ? this.rules.gravity : 22;
     this.world = new RAPIER.World({ x: 0, y: -g, z: 0 });
-    this.world.timestep = 1 / 60;
+    // FIXED physics timestep. step(dt) banks real elapsed time in _acc and runs
+    // whole _fixedDt steps only — never a variable partial step — so the sim is
+    // frame-rate independent and reconciliation replay is deterministic. Render
+    // smoothing to the display rate is done by the callers (scene.interpolate for
+    // remote bodies; the local predicted pose is read fresh each frame).
+    this._fixedDt = 1 / 60;
+    this.world.timestep = this._fixedDt;
+    this._acc = 0;
 
     this.players = new Map(); // id -> { body, collider, vy, grounded }
     this.propBodies = []; // { id, body } for dynamic props (host only)
@@ -130,11 +156,15 @@ export class PhysicsWorld {
       this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z));
     }
 
-    // Static fixtures (walls, counters, appliances, tables) — immovable colliders
-    // from the LOCAL map data. Cheap: fixed colliders don't simulate.
+    // Static fixtures — ONLY the genuinely bolted-in pieces (`static`). Knockable
+    // fixtures are promoted into the dynamic prop stream by the referee (fix #2), so
+    // they're not built here. `decor` pieces (tiny garnish) are visual-only: NO
+    // collider — otherwise, once a dynamic table is knocked away, their fixed
+    // colliders would linger as invisible floating obstacles. Cheap: fixed colliders
+    // don't simulate.
     for (const f of map.fixtures || []) {
       const c = catalog[f.type];
-      if (!c) continue;
+      if (!c || !c.static) continue;
       const { desc, halfH } = shapeFor(R, c);
       desc.setTranslation(f.x, halfH + (f.y || 0), f.z);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
@@ -144,47 +174,77 @@ export class PhysicsWorld {
 
   _buildProps(propInstances, catalog) {
     const R = this.R;
-    // Phone-safety budget (plan step 5): cap how many props are DYNAMIC (real
-    // simulated rigid bodies). Past the cap, extra props still become solid static
-    // colliders — fully collidable, just not shovable — so a huge map degrades to
-    // "some props don't get knocked around" instead of tanking a phone's frame rate.
-    // Restaurant (~56 props) sits under the default 60, so nothing changes today.
-    const cap = this.rules.maxDynamicProps != null ? this.rules.maxDynamicProps : 60;
+    // Phone-safety budget: cap how many props are DYNAMIC (real simulated rigid
+    // bodies). Past the cap, extras become solid STATIC colliders — fully collidable,
+    // just not shovable — so a dense map degrades to "the smallest clutter doesn't
+    // get knocked around" instead of tanking a phone's frame rate. The referee lists
+    // props BIGGEST-FIRST after the disguise pool, so the cap spends its budget on
+    // furniture + substantial items and only the tiniest overflow goes static.
+    // Restaurant now runs ~136 dynamic candidates (56 disguise props + ~80 knockable
+    // fixtures) against rules.maxDynamicProps (130) — nearly everything is knockable;
+    // aggressive sleeping keeps the steady-state cost near zero. Phone HOSTS are the
+    // watch item (see notes/physics.md); lower the cap if a warm phone struggles.
+    const cap = this.rules.maxDynamicProps != null ? this.rules.maxDynamicProps : 80;
+    const dens = this.rules.propDensity != null ? this.rules.propDensity : 1.0;
     let dynCount = 0;
     for (const p of propInstances || []) {
       const c = catalog[p.type];
       if (!c) continue;
       const { desc, halfH } = shapeFor(R, c);
-      const y = halfH + (p.y || 0);
+      // A prop instance carries EITHER spawn semantics (x/z = floor position, y =
+      // rest offset above the surface, rot = yaw) OR — for a mid-round joiner's
+      // catch-up (fix #8) — a live transform: x/y/z = body CENTRE plus a full
+      // quaternion. `moved` distinguishes them so a late joiner sees the room as it
+      // actually is (a chair kicked across the room stays kicked).
+      const moved = Number.isFinite(p.qx);
+      const cy = moved ? p.y : halfH + (p.y || 0);
       if (this.dynamicProps && dynCount < cap) {
         // Host: a real rigid body that can be knocked around and settles to sleep.
+        // Spawn a hair above rest (SPAWN_EPS) so nothing starts interpenetrating.
         const bodyDesc = R.RigidBodyDesc.dynamic()
-          .setTranslation(p.x, y, p.z)
-          .setLinearDamping(0.4)
-          .setAngularDamping(0.6);
-        if (p.rot) bodyDesc.setRotation(yawQuat(p.rot));
+          .setTranslation(p.x, moved ? cy : cy + SPAWN_EPS, p.z)
+          .setLinearDamping(0.5)
+          .setAngularDamping(0.7);
+        if (moved) bodyDesc.setRotation({ x: p.qx, y: p.qy, z: p.qz, w: p.qw });
+        else if (p.rot) bodyDesc.setRotation(yawQuat(p.rot));
         const body = this.world.createRigidBody(bodyDesc);
-        this.world.createCollider(desc.setFriction(0.8).setRestitution(0.0).setDensity(0.6), body);
+        this.world.createCollider(desc.setFriction(0.8).setRestitution(0.0).setDensity(dens), body);
         this.propBodies.push({ id: p.id, body });
         dynCount++;
       } else {
-        // Fixed obstacle. Two cases land here:
+        // Fixed obstacle. Three cases land here:
         //  - Guest predictor: host owns all prop motion, so the local character just
-        //    collides against spawn positions; reconciliation corrects the rare case
+        //    collides against these positions; reconciliation corrects the rare case
         //    where a prop has actually been shoved elsewhere.
-        //  - Host past the dynamic cap: same solid collider, simply not simulated.
-        desc.setTranslation(p.x, y, p.z);
-        if (p.rot) desc.setRotation(yawQuat(p.rot));
+        //  - Host past the dynamic cap: same solid collider, simply not simulated
+        //    (phone-safety — still fully collidable, just not shovable).
+        desc.setTranslation(p.x, cy, p.z);
+        if (moved) desc.setRotation({ x: p.qx, y: p.qy, z: p.qz, w: p.qw });
+        else if (p.rot) desc.setRotation(yawQuat(p.rot));
         this.world.createCollider(desc);
       }
     }
   }
 
   _buildController() {
-    const c = this.world.createCharacterController(0.02);
-    c.enableAutostep(0.5, 0.2, true); // step up onto low ledges
-    c.enableSnapToGround(0.4); // stick to the floor going downhill / down steps
+    const r = this.rules;
+    // Small skin offset (0.01–0.05): the controller keeps the capsule this far off
+    // geometry so it never quite touches — the corrected-movement result is applied,
+    // so the capsule NEVER interpenetrates and there is nothing to "recover" from
+    // (no clip-then-eject). Tunable via rules.controllerOffset.
+    const offset = r.controllerOffset != null ? r.controllerOffset : 0.02;
+    const c = this.world.createCharacterController(offset);
+    c.enableAutostep(0.3, 0.15, true); // step up over small clutter (chairs' feet, low props)
+    // Snap-to-ground keeps the capsule glued when walking downhill / down steps, but
+    // it FIGHTS an ascending jump (the classic jitter). It is DEFAULT ON here and
+    // toggled OFF per-substep whenever vertical velocity is positive (see _substep).
+    this._snapDist = r.snapDistance != null ? r.snapDistance : 0.3;
+    c.enableSnapToGround(this._snapDist);
     c.setApplyImpulsesToDynamicBodies(true); // players shove dynamic props (the tell)
+    // Give the character a sane mass so walking into a chair SHOVES it naturally
+    // instead of nudging a near-massless body into orbit (props use rules.propDensity).
+    // Tune together with propDensity in a live feel-test.
+    if (c.setCharacterMass) c.setCharacterMass(r.characterMass != null ? r.characterMass : 3.0);
     c.setSlideEnabled(true);
     if (c.setMaxSlopeClimbAngle) c.setMaxSlopeClimbAngle((50 * Math.PI) / 180);
     if (c.setMinSlopeSlideAngle) c.setMinSlopeSlideAngle((40 * Math.PI) / 180);
@@ -241,19 +301,22 @@ export class PhysicsWorld {
   }
 
   // ---- step ----------------------------------------------------------------
-  // Advance the sim by dt (seconds), in fixed 1/60 substeps (capped so a slow
-  // phone / long stall degrades gracefully instead of spiralling). Each substep
-  // moves every player via the character controller, then steps the dynamics.
+  // Advance the sim by dt (seconds) in FIXED _fixedDt substeps only — never a
+  // variable partial step. Real elapsed time is banked in _acc and drained one
+  // whole substep at a time; the leftover (< _fixedDt) carries to the next call.
+  // A per-call guard caps substeps so a slow phone / long stall degrades gracefully
+  // instead of spiralling (backlog past the cap is dropped). Each substep moves
+  // every player via the character controller, then steps the dynamics.
   step(dt) {
-    const h = 1 / 60;
-    let remaining = Math.min(dt, 0.1); // cap accumulated time (mobile safety)
+    const h = this._fixedDt;
+    this._acc += Math.min(dt, 0.1); // cap the banked time (mobile spiral guard)
     let guard = 0;
-    while (remaining > 1e-4 && guard < 4) {
-      const sub = remaining > h ? h : remaining;
-      this._substep(sub);
-      remaining -= sub;
+    while (this._acc >= h && guard < 6) {
+      this._substep(h);
+      this._acc -= h;
       guard++;
     }
+    if (guard >= 6) this._acc = 0; // huge stall: drop the backlog rather than spiral
   }
 
   _substep(dt) {
@@ -281,6 +344,21 @@ export class PhysicsWorld {
         p.vy -= g * dt;
       }
 
+      // JUMP-JITTER FIX: snap-to-ground pulls the capsule back down and fights an
+      // ascending jump, which reads as jitter at takeoff. Enable snapping ONLY when
+      // not moving upward (vy <= 0 => falling / standing / walking down steps).
+      // Guarded so a build lacking disableSnapToGround can't throw mid-substep.
+      const ctl = this._controller;
+      if (p.vy > 0) {
+        if (ctl.disableSnapToGround) ctl.disableSnapToGround();
+      } else {
+        ctl.enableSnapToGround(this._snapDist);
+      }
+
+      // Resolve how far the capsule CAN move BEFORE moving it: computeCollider
+      // movement returns a corrected delta that never enters geometry, and we apply
+      // exactly that. The capsule therefore never interpenetrates and is never
+      // ejected by penetration recovery.
       const desired = { x: vx * moveSpeed * dt, y: p.vy * dt, z: vz * moveSpeed * dt };
       this._controller.computeColliderMovement(p.collider, desired);
       const mv = this._controller.computedMovement();
@@ -291,7 +369,8 @@ export class PhysicsWorld {
       p.body.setNextKinematicTranslation({ x: tr.x + mv.x, y: tr.y + mv.y, z: tr.z + mv.z });
     }
 
-    this.world.timestep = dt;
+    // Fixed substep — timestep is _fixedDt (set in the constructor); dt is always
+    // _fixedDt here, so the dynamics solver runs at a constant rate.
     this.world.step();
   }
 
@@ -302,6 +381,19 @@ export class PhysicsWorld {
     const out = [];
     for (const { id, body } of this.propBodies) {
       if (body.isSleeping()) continue;
+      const t = body.translation();
+      const r = body.rotation();
+      out.push({ id, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w });
+    }
+    return out;
+  }
+
+  // CURRENT transform of EVERY dynamic prop (awake OR asleep). Used to catch a
+  // mid-round joiner up to the world as it actually is — a knocked-over, now-resting
+  // chair must arrive at its resting place, not its spawn (fix #8). Host only.
+  allProps() {
+    const out = [];
+    for (const { id, body } of this.propBodies) {
       const t = body.translation();
       const r = body.rotation();
       out.push({ id, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w });

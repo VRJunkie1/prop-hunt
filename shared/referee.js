@@ -14,7 +14,7 @@
 // the only thing that moved. Authority now lives on the host, not a server; see
 // memory/architecture.md for why that trade was made.
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
-import { loadRapier, PhysicsWorld } from './physics.js';
+import { loadRapier, PhysicsWorld, isStaticEntry } from './physics.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -129,7 +129,11 @@ export class Referee {
     // (otherwise integrate() adds it on the next tick via the join-race guard).
     if (this.physics) this.physics.addPlayer(player.id, player.pos);
 
-    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this.props });
+    // Catch-up: with a knockable world, a late joiner must receive the CURRENT
+    // position of every prop that has moved (resting or not), or they'd see kicked
+    // chairs/tables back at their spawn — an instant desync (fix #8). Props that
+    // never moved (or are capped-static) fall back to their spawn entry.
+    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup() });
     send(player, { t: S2C.ROLE, role: player.role });
     const seconds = Math.max(0, (this.phaseEndsAt - Date.now()) / 1000);
     send(player, { t: S2C.EVENT, kind: 'phase', phase: this.phase, seconds });
@@ -218,9 +222,13 @@ export class Referee {
     if (player.role !== ROLE.PROP || !player.alive) return;
     if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
     const prop = this.props.find((p) => p.id === propId);
-    if (!prop) return;
-    const dx = prop.x - player.pos.x;
-    const dz = prop.z - player.pos.z;
+    if (!prop || prop.disguisable === false) return; // knockable fixtures aren't disguisable
+    // Read the prop's LIVE position (it may have been shoved across the room) so
+    // disguising as a kicked chair still works. Sleeping/never-moved props fall back
+    // to their spawn x/z. (fix #2: disguise/tag track live prop positions.)
+    const live = this._propPos(prop);
+    const dx = live.x - player.pos.x;
+    const dz = live.z - player.pos.z;
     if (Math.hypot(dx, dz) > this.rules.disguiseRange) return;
     player.disguise = prop.type;
     // Lock the disguise's facing to the player's current look direction. From here
@@ -292,19 +300,33 @@ export class Referee {
     this.lastResult = null; // a fresh round supersedes the previous result
 
     const map = this.maps[this.mapId];
-    // Build authoritative prop instances from map data.
-    this.props = (map.props || []).map((p) => ({
-      id: nextPropId++,
-      type: p.type,
-      x: p.x,
-      z: p.z,
-      // Optional y-offset so a disguise prop can rest ON a surface (e.g. a burger on
-      // a table) rather than only on the floor. Purely visual for the static
-      // instance; disguise range (applyDisguise) is computed from x/z only, so this
-      // never affects gameplay. Mirrors the existing `rot` pass-through.
-      y: p.y || 0,
-      rot: p.rot || 0,
+    // Build the authoritative prop instances (= every dynamic rigid body) from map
+    // data. TWO sources, ONE stream:
+    //   1. map.props  — the disguise pool (chairs, stools, crates, dishes, food a
+    //      player can hide as). disguisable: true.
+    //   2. map.fixtures that are NOT bolted-in/decor — tables, cookware, plates,
+    //      food, condiments. These are now knockable rigid bodies too (fix #2), but
+    //      NON-disguisable: they never enter the disguise pool. disguisable: false.
+    // Sharing one id-keyed stream means the existing prop machinery (physics bodies,
+    // scene containers, awake-sync, mid-join catch-up) covers both for free. The
+    // disguise/tag gates read the `disguisable` flag, so a table can be shoved but
+    // never worn. y = rest offset above a surface; rot = spawn yaw.
+    const catalog = { ...this.propCatalog, ...this.fixtureCatalog };
+    const disguiseProps = (map.props || []).map((p) => ({
+      id: nextPropId++, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0, disguisable: true,
     }));
+    // Bigger pieces first: the dynamic-body cap (rules.maxDynamicProps) spends its
+    // budget on furniture/large cookware; anything past the cap degrades to a solid
+    // STATIC collider (still collidable, just not shovable — phone safety).
+    const dynFixtures = (map.fixtures || [])
+      .filter((f) => { const c = catalog[f.type]; return c && !isStaticEntry(c); })
+      .map((f) => ({ type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 }))
+      .sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]))
+      .map((f) => ({ id: nextPropId++, ...f, disguisable: false }));
+    this.props = [...disguiseProps, ...dynFixtures];
+    // Live x/z per prop id, seeded at spawn and updated from awake transforms each
+    // tick (see integrate). Read by applyDisguise for range against the real position.
+    this.propLive = new Map(this.props.map((p) => [p.id, { x: p.x, z: p.z }]));
 
     // Randomly split into Hunters and Props (the host referee decides).
     shuffle(ids);
@@ -408,6 +430,7 @@ export class Referee {
       this.physics = null;
     }
     this.awakePropTransforms = [];
+    this.propLive = null;
     // DELIBERATE CARVE-OUT: this.mapId is NOT reset here. A reset-to-lobby clears
     // per-player round state (roles/alive/disguise/ready), but the chosen map is a
     // lobby *setting*, not per-player state — so the last-picked map stays selected
@@ -481,6 +504,15 @@ export class Referee {
         }
       }
       this.awakePropTransforms = this.physics.awakeProps();
+      // Track each moving prop's live x/z so disguise range (applyDisguise) measures
+      // against where a prop actually IS after being shoved. Sleeping props haven't
+      // moved, so their last recorded position persists — no need to touch them.
+      if (this.propLive) {
+        for (const q of this.awakePropTransforms) {
+          const l = this.propLive.get(q.id);
+          if (l) { l.x = q.x; l.z = q.z; }
+        }
+      }
       return;
     }
 
@@ -570,9 +602,49 @@ export class Referee {
       })),
     });
   }
+
+  // Live x/z of a prop (shoved position if it has moved, else spawn). See propLive.
+  _propPos(prop) {
+    const l = this.propLive && this.propLive.get(prop.id);
+    return l || { x: prop.x, z: prop.z };
+  }
+
+  // The prop list to hand a mid-round joiner: each prop carries its LIVE transform
+  // (centre + quaternion) when the physics world is up, so a knocked-about room
+  // arrives as it actually is. Props with no live body (capped-static, or physics
+  // not yet loaded) keep their spawn entry. Quantised like a snapshot.
+  _propsCatchup() {
+    if (!this.physics) return this.props;
+    const live = new Map(this.physics.allProps().map((q) => [q.id, q]));
+    return this.props.map((p) => {
+      const q = live.get(p.id);
+      if (!q) return p; // never simulated (capped-static) — spawn pose is correct
+      return {
+        id: p.id, type: p.type, disguisable: p.disguisable,
+        x: round2(q.x), y: round2(q.y), z: round2(q.z),
+        qx: round3(q.qx), qy: round3(q.qy), qz: round3(q.qz), qw: round3(q.qw),
+      };
+    });
+  }
 }
 
 // ---- helpers --------------------------------------------------------------
+// Rough footprint volume of a catalog entry, for prioritising which knockable
+// fixtures get a dynamic body when the cap is tight (bigger pieces win). Prefers
+// measured bounds when present, else the authored primitive.
+function footprint(c) {
+  if (!c) return 0;
+  const m = c.measured;
+  if (m && m.w > 0 && m.h > 0 && m.d > 0) return m.w * m.h * m.d;
+  switch (c.shape) {
+    case 'box': return (c.w || 1) * (c.h || 1) * (c.d || 1);
+    case 'cylinder':
+    case 'cone': return Math.PI * (c.r || 0.5) * (c.r || 0.5) * (c.h || 1);
+    case 'sphere': return (4 / 3) * Math.PI * (c.r || 0.5) ** 3;
+    default: return 1;
+  }
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

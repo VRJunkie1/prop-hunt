@@ -3,6 +3,77 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-10 FIX PASS (physics-net) — controller, knockable world, calm start
+Playtest-driven fixes. All in `shared/physics.js` + `shared/referee.js` + the two
+readers (`js/scene.js`, `js/main.js`) + catalog flags (`shared/config/*`).
+
+- **DIAGNOSIS CORRECTION (honest):** the "clips in then shoots off like a bullet"
+  hypothesis was *translate-first + penetration recovery*. The shipped branch code
+  did NOT do that — `_substep` already calls `computeColliderMovement()` and applies
+  the CORRECTED delta (never translates first). And prediction already uses the SAME
+  `PhysicsWorld` as the host (main.js `buildPredict`), so "one shared mover" was
+  already true. What WAS broken and is now fixed:
+  - **Jump jitter (real):** `enableSnapToGround` was always on, so snapping fought
+    every ascending jump. Now toggled per-substep: snap OFF while `vy > 0`, ON when
+    `vy <= 0`. (`_substep`.)
+  - **Shoving props:** added `setCharacterMass` (rules.characterMass 3.0) so walking
+    into a chair shoves it via `setApplyImpulsesToDynamicBodies` at a sane weight
+    instead of flinging a near-massless body. Prop density raised 0.6→1.0
+    (rules.propDensity). Both need a LIVE feel-test.
+  - **Fixed timestep:** `step(dt)` now banks time in `_acc` and runs ONLY whole
+    `_fixedDt` (1/60) substeps — no variable partial tail (was `world.timestep=sub`).
+    Deterministic replay; `world.timestep` is constant. Render interpolation of the
+    LOCAL predicted pose is NOT separately added (pose read fresh post-step; at
+    60/30 fps the substep count is stable, so no visible stepping) — feel-test item.
+  - Controller offset 0.02 (rules.controllerOffset), autostep 0.5→0.3, snap distance
+    0.3 (rules.snapDistance). `disableSnapToGround` call is method-guarded.
+- **STATIC/DYNAMIC FLIP (fix #2):** the world defaults to KNOCKABLE now. A single
+  classifier `isStaticEntry(catalogEntry)` (exported from physics.js) returns static
+  only for catalog entries flagged `"static"` (bolted built-ins: floor, walls,
+  pillars, doors, extractor/hood, counters, cabinets, oven, fridge, sinks, shelves)
+  or `"decor"` (tiny fixed dressing — thin cut-food/garnish, lids, the shelf paper
+  towel — kept static so they don't form unstable micro-stacks or spawn inside a tall
+  fixture's cuboid). EVERYTHING else — tables, cookware, plates, dishes, whole food,
+  condiments — is a dynamic rigid body. Flags live on the CATALOG entry
+  (`fixtures.json`), read identically by physics (`_buildStatic` skips non-static),
+  scene (`buildWorld` skips non-static; they render via the prop stream), and the
+  referee.
+  - **Decoupled dynamic-ness from the disguise pool.** The referee now builds ONE
+    prop stream = `map.props` (disguisable:true, the disguise pool — unchanged) PLUS
+    every non-static `map.fixtures` entry (disguisable:false — shovable but never
+    wearable). Both get ids + rigid bodies + scene containers + awake-sync for free.
+    `applyDisguise` (host) and `tryDisguise` (client) skip `disguisable:false`.
+  - Dynamic-body cap raised 60→130 (rules.maxDynamicProps). Restaurant ≈ 136 dynamic
+    candidates → ~6 smallest overflow to static. Props are listed biggest-first after
+    the disguise pool so the cap spends budget on furniture; overflow degrades to
+    solid static colliders (collidable, not shovable). **Phone HOST perf is the
+    flagged risk** — lean on aggressive sleeping; lower the cap if a warm phone hitches.
+- **DISGUISE READS LIVE POSITIONS (fix #2):** props move now, so `applyDisguise`
+  measures range against a prop's LIVE x/z (`referee.propLive`, seeded at spawn,
+  updated from awake transforms each tick), not its map position. Tag already used
+  live *player* positions, so it was unaffected. Disguised PLAYERS stay kinematic /
+  script-driven — never shoved.
+- **MID-JOIN CATCH-UP (fix #8):** a knockable world means a late joiner must get the
+  CURRENT prop transforms or they'd see kicked chairs back at spawn. `admitMidGame`
+  now sends `_propsCatchup()` — each prop's live centre + quaternion from
+  `PhysicsWorld.allProps()` (awake OR asleep). STARTED prop entries are spawn-form
+  `{id,type,disguisable,x,y,z,rot}` OR live-form `{…,x,y,z,qx,qy,qz,qw}` (presence of
+  `qx` marks live). scene.buildWorld + physics._buildProps both branch on it.
+- **CALM MATCH START (fix #3):** dynamic bodies spawn `SPAWN_EPS` (0.02) above their
+  rest height so nothing begins interpenetrating (which the solver would eject).
+  Bodies settle in the first frames, then sleep. Nothing overlaps at spawn by
+  construction (map places items apart; stacked items have increasing y). The
+  start-of-match settle of ~130 bodies is the perf/feel item to watch live.
+- **MERGE BLOCKER (honest):** the task asked to FIRST `git merge origin/main` for the
+  bbox-normalized layout + populated `asset-dims.json`. There is NO shell here (by
+  design), so I could not run the merge, and main's populated blobs are zlib git
+  objects the file tools can't inflate. BUT the measured-bounds CONSUMPTION path is
+  already wired on physics-net (`shapeFor`→`c.measured`, scene→`c.measured`, config.js
+  attaches it) with a graceful fallback to authored footprints. So once that data
+  lands via a shell-side merge, colliders bake from measured bounds automatically with
+  no further code change. `asset-dims.json` is still `dims:{}` here → authored
+  footprints in use. Someone with a shell must do the merge before/with this branch.
+
 ## Engine + where it runs
 - **Rapier** (`@dimforge/rapier3d-compat`, WASM) via `shared/physics.js`
   (`PhysicsWorld` + `loadRapier()`).

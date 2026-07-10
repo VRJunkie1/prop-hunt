@@ -15,5 +15,9 @@
   "jumpSpeed": 8,
   "playerRadius": 0.4,
   "playerHalfHeight": 0.5,
-  "maxDynamicProps": 60
+  "maxDynamicProps": 130,
+  "propDensity": 1.0,
+  "characterMass": 3.0,
+  "controllerOffset": 0.02,
+  "snapDistance": 0.3
 }

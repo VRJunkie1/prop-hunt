@@ -8,6 +8,51 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: PHYSICS FIX PASS — controller + knockable world + calm start (2026-07-10, on `physics-net`). NOT feel-tested.
+
+Playtest-driven fix pass on the ALREADY-BUILT physics/netcode. Full detail in
+`memory/notes/physics.md` (top section) + `netcode.md`. Honest summary:
+
+- **MERGE NOT DONE (blocked, honest).** Task said FIRST `git merge origin/main`
+  (bbox-normalized layout + populated `asset-dims.json`). No shell here by design →
+  can't run the merge; main's populated blobs are zlib git objects the file tools
+  can't inflate. The measured-bounds CONSUMPTION path is already wired on this branch
+  (`shapeFor`→`c.measured`, scene→`c.measured`) with a graceful fallback to authored
+  footprints, so colliders bake from measured bounds automatically once the data
+  lands. `asset-dims.json` is still `dims:{}` → authored footprints in use.
+  **OWED: someone with a shell must merge origin/main into physics-net.**
+- **Fix #1 controller** (`shared/physics.js`): diagnosis corrected — the branch code
+  was ALREADY compute-before-move (`computeColliderMovement` + apply corrected delta)
+  and prediction ALREADY shares the same `PhysicsWorld` as the host, so the
+  "translate-first eject" hypothesis didn't match. Real fixes: (a) **jump jitter** —
+  snap-to-ground toggled OFF while `vy>0`, ON otherwise; (b) **character mass** 3.0 +
+  **prop density** 1.0 so shoving a chair feels natural (needs feel-test); (c)
+  **fixed timestep** — `step()` runs whole 1/60 substeps via an accumulator, no
+  variable partial tail; (d) offset/autostep/slope/snap tunables in rules.json.
+- **Fix #2 flip static→dynamic** (`physics.js` `isStaticEntry` + catalog flags +
+  `referee.js`): world now defaults KNOCKABLE. Static only for `"static"`-flagged
+  built-ins (floor/walls/pillars/doors/hood/counters/cabinets/oven/fridge/sinks/
+  shelves) and `"decor"`-flagged tiny garnish. Tables, cookware, plates, dishes,
+  food, condiments → dynamic. Decoupled dynamic-ness from the disguise pool: referee
+  builds ONE prop stream = disguise props (disguisable) + non-static fixtures
+  (non-disguisable); disguise gates skip non-disguisable. Cap raised 60→130. Disguise
+  range now reads LIVE prop positions (`referee.propLive`).
+- **Fix #8 mid-join** (deliberate change): late joiners get CURRENT prop transforms
+  (centre+quaternion via `PhysicsWorld.allProps()`), not spawn — a kicked chair stays
+  kicked. STARTED prop entry gained `disguisable` + optional live quaternion form.
+- **Fix #3 calm start**: dynamic bodies spawn `SPAWN_EPS` (0.02) above rest so
+  nothing interpenetrates at match start; settle + sleep. Nothing overlaps at spawn
+  by construction.
+- **Files:** `shared/physics.js`, `shared/referee.js`, `shared/protocol.js` (doc),
+  `js/scene.js`, `js/main.js`, `shared/config/fixtures.json` (static/decor flags),
+  `shared/config/rules.json` (cap 130 + controller/prop tunables), notes.
+- **NEEDS A LIVE FEEL-TEST (can't be done headless):** does jumping feel smooth; does
+  shoving a chair/table feel natural (tune characterMass + propDensity); is the
+  match-start settle of ~130 bodies calm on all 3 maps; does a phone HOST hold frame
+  rate with the bigger dynamic set (lower `maxDynamicProps` if not); mid-join shows
+  the knocked-about room correctly; prediction/reconciliation still smooth with the
+  fixed-timestep mover.
+
 ## Status: MEASURED-BOUNDS COLLIDER SEAM + PROP CAP (2026-07-10, on `physics-net`). NOT playtested.
 
 Context correction first: the "big pass" below (Rapier physics + full prediction/
