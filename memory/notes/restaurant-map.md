@@ -1,5 +1,65 @@
 # Restaurant map + the static/dynamic (fixtures vs props) split
 
+## THIRD PASS — bounding-box normalization / measured scales (2026-07-10, vrmike)
+Stops guessing per-object scale. Every restaurant GLB is now sized from its MEASURED
+native bounding box instead of a hand-tuned `modelSize`. Prereq for the physics build
+(colliders bake from these bounds).
+
+**Measurement step (new, authoring-only).** `tools/measure-glbs.mjs` parses each GLB's
+JSON chunk and reads every mesh's POSITION accessor min/max, transformed by the node
+world matrix. THIS TRANSFORM MATTERS: FBX2glTF bakes `scale:[100,100,100]` onto each
+mesh node, so raw accessor numbers are 1/100 of real size (door accessor 0.016 wide →
+real 1.6). Output committed to `shared/config/asset-dims.json` (build-time reference
+only; the game never loads it, never measures at page boot — headless boot stays green).
+Run `node tools/measure-glbs.mjs` after changing any GLB. (The committed JSON holds the
+subset hand-verified from the JSON chunks this session; the tool regenerates the full
+set.)
+
+**The key finding: the pack is internally consistent.** Every KayKit "Restaurant Bits"
+model shares one native scale (~real metres after the baked ×100). So ONE uniform world
+scale normalises the whole pack. Derived from three refs vs the 1.8-unit player capsule:
+door 2.8h→2.10, fridge 2.5h→1.88, chair 1.21h→0.91 — all land on target at **0.75**.
+Baked as `restaurant.modelScale = 0.75` in maps.json.
+
+**Engine seam (small, in-lane):** `scene._instantiateModel(template, target, dims,
+scale)` gained a `scale` branch — when set it applies `inner.scale.setScalar(scale)`
+(native × scale, base rested flush at y=0) instead of the legacy fit-largest-dim-to-
+target. Source: per-catalog-entry `modelScale` ?? `map.modelScale` (stored as
+`scene.modelScale` in buildWorld). meshForPlayer wears disguises at the same scale, so
+a burger-disguised player is burger-sized. `dims` (floor) still wins; the legacy
+target/max-dim path is the untouched fallback for maps with no modelScale (circus/toy).
+
+**The two real bugs beyond scale — multi-module KITS.** `modular_kitchen_parts.glb` is
+12 counter modules spread across ~15 units; `modular_walls.glb` is several wall-panel
+variants. Placed as a SINGLE fixture and fit-to-target, the whole kit shrank to one
+~2-unit blob — that was the ankle-height counters and dollhouse walls. Fixes: `counter`
+now uses `kitchen_cabinet.glb` (a single hip-height base cabinet); `kitchen_wall` drops
+its model and renders a clean full-height primitive box (which already IS its collider).
+The two kit GLBs are now unreferenced (inert on disk). See `asset-dims.json` `_kits`.
+
+**Floor podium fixed for real.** Native tile = 4 × **0.5** × 4; the 0.5 native thickness
+(×scale) was the raised checkerboard podium. `floor_kitchen` modelDims → `8 × 0.06 × 8`
+and its primitive h → 0.06, so it's a near-flush walkable slab, collider included.
+
+**Physics bounds = measured.** Primitive w/h/d (which is what `shared/physics.js`
+`shapeFor` bakes colliders from — the future physics build's bounds) were reset to
+native×0.75 for every MEASURED fixture/prop (appliances, sinks, tables, chairs, crates,
+pot, board, burger). Unmeasured small food/cookware keep proportionate estimates and
+inherit the 0.75 visual scale — a follow-up can measure the long tail via the tool.
+
+**Chairs face inward.** The pass-2 note (below) predicted it: chairs sat with backs to
+the table (front is +z at rot 0, not −z as assumed). Fixed by +π on every `diner_chair`
+rot (0↔π, ±π/2 swapped). Stools are radially symmetric — left as-is.
+
+**Y-offsets re-derived.** All food/cookware `y` recomputed from the NEW surface tops:
+counters/dining tables 0.75, stoves 0.9, sinks ~0.7, dishrack ~0.5, the two TALL bar
+tables (large_table/small_table, native ~1.93/1.8) 1.45/1.35; extractor hoods 1.9.
+
+Files: `tools/measure-glbs.mjs` (new), `shared/config/asset-dims.json` (new), `js/scene.js`
+(scale branch), `fixtures.json` + `props.json` (measured dims, counter/wall swap, thin
+floor), `maps.json`→restaurant (modelScale, y retune, chair flip). circus_lot/
+toy_workshop, loader, fallback, referee, protocol all untouched.
+
 ## SECOND PASS — layout fix (2026-07-09, vrmike/dev)
 The first pass wired the real GLBs correctly but the LAYOUT was sparse/buggy. This
 pass fixed layout + density on the SAME footprint (size 36 unchanged — density comes

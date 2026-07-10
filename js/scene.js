@@ -68,6 +68,13 @@ export class Scene3D {
 
     this.selfId = null;
     this.catalog = null;
+    // Uniform world scale applied to every GLB this map references (map.modelScale).
+    // The KayKit pack is internally consistent, so ONE measured factor normalises
+    // all of it (see shared/config/asset-dims.json). null => no scale set (older
+    // maps / primitive-only maps), in which case models fall back to the legacy
+    // fit-largest-dimension-to-target behaviour. A per-catalog-entry `modelScale`
+    // overrides this for a single asset.
+    this.modelScale = null;
     this.players = new Map(); // id -> { mesh, target:{x,z,yaw}, kind }
 
     // ---- lazy GLB meshes (real Restaurant Bits models) ----------------------
@@ -131,6 +138,8 @@ export class Scene3D {
   // Rebuild the world for a new match.
   buildWorld(map, propInstances, catalog) {
     this.catalog = catalog;
+    // Measured uniform scale for this map's real meshes (see shared/config/asset-dims.json).
+    this.modelScale = typeof map.modelScale === 'number' ? map.modelScale : null;
     // A new match: invalidate any in-flight GLB loads from a previous build and
     // start a fresh slot list (the primitives queued for a real-mesh swap).
     this._buildToken++;
@@ -247,6 +256,11 @@ export class Scene3D {
       baseY,
       path: '/assets/' + c.model,
       target: targetSizeForEntry(c),
+      // Uniform baked scale (measured): per-entry override, else this map's scale.
+      // When set, the GLB is scaled by this factor directly (native * scale) rather
+      // than fit-to-target — keeping the whole pack proportionate. `dims` still wins
+      // when present (the floor tile's forced-thin non-uniform case).
+      scale: typeof c.modelScale === 'number' ? c.modelScale : this.modelScale,
       // Optional non-uniform target dims {w,h,d}. When present the GLB is scaled per
       // axis to these exact world sizes instead of uniformly by its largest
       // dimension — the reliable fix for pieces whose native proportions don't match
@@ -274,7 +288,10 @@ export class Scene3D {
       if (c.model) {
         const tmpl = this._modelCache.get('/assets/' + c.model);
         if (tmpl && tmpl !== 'failed') {
-          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.modelDims || null);
+          // Wear the disguise at the SAME measured scale it renders as world decor,
+          // so a player disguised as a burger is burger-sized, not player-sized.
+          const scale = typeof c.modelScale === 'number' ? c.modelScale : this.modelScale;
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.modelDims || null, scale);
           inst.userData.baseY = 0;
           return inst;
         }
@@ -553,7 +570,7 @@ export class Scene3D {
   // Place a loaded model into a slot and hide (but keep) its primitive.
   _applyModel(template, slot, token) {
     if (token !== this._buildToken) return; // match ended / restarted; drop it
-    const inst = this._instantiateModel(template, slot.target, slot.dims);
+    const inst = this._instantiateModel(template, slot.target, slot.dims, slot.scale);
     if (slot.container) {
       // Dynamic prop: parent the GLB to the prop's container (origin == body centre)
       // and drop it by baseY so its base rests on the floor. The container is what
@@ -576,7 +593,7 @@ export class Scene3D {
   // Clone a loaded GLB, scale it so its largest dimension == `target` world units,
   // then centre it in x/z and rest its base on y=0. Wrapped in a group so the caller
   // can position/rotate it freely regardless of the model's internal origin.
-  _instantiateModel(template, target, dims) {
+  _instantiateModel(template, target, dims, scale) {
     const inner = template.clone(true);
     const box = new THREE.Box3().setFromObject(inner);
     const size = new THREE.Vector3();
@@ -590,6 +607,11 @@ export class Scene3D {
         dims.h / (size.y || 1),
         dims.d / (size.z || 1)
       );
+    } else if (typeof scale === 'number' && scale > 0) {
+      // Measured uniform scale (native * scale). The GLB's real native bbox was
+      // measured at authoring time (asset-dims.json); one factor sizes the whole
+      // pack proportionately to the player. No per-object guesswork, no distortion.
+      inner.scale.setScalar(scale);
     } else {
       const maxDim = Math.max(size.x, size.y, size.z) || 1;
       inner.scale.setScalar(target / maxDim);

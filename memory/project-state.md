@@ -8,6 +8,34 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: RESTAURANT BOUNDING-BOX NORMALIZATION — measured scales (2026-07-10, vrmike). Not playtested (headless).
+
+Stops guessing per-object scales; every restaurant GLB is sized from its MEASURED
+native bounding box. Prereq for the physics build (colliders bake from these bounds).
+Full detail: `memory/notes/restaurant-map.md` (top "THIRD PASS"). Highlights:
+- **Measurement step** `tools/measure-glbs.mjs` (authoring-only, never shipped/imported):
+  parses each GLB's JSON chunk, transforms POSITION accessor min/max by node world
+  matrices (FBX2glTF bakes ×100 on the mesh node — must apply it). Output committed to
+  `shared/config/asset-dims.json` (build-time reference; NOT fetched at page boot →
+  headless load stays green).
+- **One measured scale.** The KayKit pack is internally consistent, so a single world
+  scale normalises all of it: `restaurant.modelScale = 0.75` (door 2.8→2.1, fridge
+  2.5→1.88, chair 1.21→0.9, counters/tables→0.75). scene.js `_instantiateModel` gained a
+  `scale` branch (native×scale, base flush at y=0); `map.modelScale`/per-entry
+  `modelScale` feed it; disguises worn at the same scale (burger-sized, not player-sized).
+- **Fixed the actual bugs:** floor podium (native tile 0.5 thick → modelDims `8×0.06×8`,
+  flush); ankle-height counters + dollhouse walls were multi-module KITS
+  (`modular_kitchen_parts` = 12 modules across ~15u; `modular_walls` = panel variants)
+  fit-to-target into one tiny blob → `counter` now uses `kitchen_cabinet.glb`,
+  `kitchen_wall` is a primitive box. Chairs flipped +π to face inward (pass-2 note
+  predicted the +z front). Food `y` re-derived from new surface tops.
+- **Physics bounds** (primitive w/h/d — what `physics.shapeFor` bakes colliders from) set
+  to native×0.75 for measured items. Loader/fallback/referee/protocol untouched;
+  circus_lot/toy_workshop untouched (no modelScale key → legacy path).
+- **Playtest owed:** pick restaurant → floor at ground level, full-height walls,
+  hip-height counters/sinks, player-scale door/fridge, chairs facing tables, food ON
+  surfaces. Verify the two kit GLBs no longer appear. circus/toy still load.
+
 ## Status: PHYSICS + MULTIPLAYER NETCODE — THE BIG PASS (2026-07-09, on `physics-net`). NOT playtested (can't be, headless).
 
 The single-pass "yolo" build VRmike approved: Rapier physics + host-authoritative
