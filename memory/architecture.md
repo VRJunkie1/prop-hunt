@@ -197,7 +197,13 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   slide vs walls/fixtures — FIXES the old pass-through gap — shove dynamic props,
   can never be knocked over). **Map fixtures/walls/ground** are static colliders.
   **Dynamic props** are rigid bodies that get shoved (the TELL: real props tumble,
-  a kinematic disguised player doesn't).
+  a kinematic disguised player doesn't). A phone-safety cap
+  (`rules.maxDynamicProps`, default 60) keeps extra props as static colliders.
+- **Collider sizes** come from `shared/config/asset-dims.json` (measured normalized
+  world-space bounds → cuboid) when populated, else from the hand-authored primitive
+  footprints in `props.json`/`fixtures.json`. The measured file is the output of the
+  bounding-box normalization build; it currently ships EMPTY (footprint fallback
+  everywhere) with the wiring ready. Detail: `notes/asset-dims.md`.
 - **Host** runs the one authoritative world; broadcasts player transforms + AWAKE
   prop transforms at 15 Hz with an `ack` seq per player. **Guests + host** each run
   a local prediction world for their OWN player and reconcile (rewind to the

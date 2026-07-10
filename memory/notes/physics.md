@@ -35,12 +35,24 @@ before touching movement, collision, or the disguise orientation lock.
 - **Dynamic props**: `dynamic` rigid bodies (host only) with damping so they
   settle + sleep. Small props are light (density × small volume) so they fly;
   big props resist — a free lean toward the roadmap's size/damage idea.
-- **Colliders are cuboid/cylinder/cone/ball approximations of the catalog
-  primitive** (`shapeFor`), NOT convex hulls baked from the GLBs. Deliberate: the
-  GLBs load async and can fail, so hull-from-mesh would make the collision shape
-  non-deterministic and race the sim. The primitive footprint is already the
-  design's size target, so the box is faithful enough. Upgrading dynamic props to
-  convex hulls (once their GLB is cached) is a future refinement, not v1.
+  **Phone-safety cap** (`rules.maxDynamicProps`, default 60): only the first N
+  props become dynamic rigid bodies; extras become solid STATIC colliders (still
+  collidable, just not shovable). Restaurant (~56 props) is under the cap → no
+  change today; protects future dense maps + phone hosts. Guests build ALL props
+  static regardless (they don't own prop motion). See `_buildProps`.
+- **Collider source — measured bounds first, primitive footprint fallback**
+  (`shapeFor`):
+  1. If `c.measured` (a normalized world-space `{w,h,d}` box from
+     `shared/config/asset-dims.json`, attached by `config.js`) is present, bake a
+     **cuboid from the measured bounds** — the design intent, real sizes not
+     guessed. See `notes/asset-dims.md`.
+  2. Else fall back to the **catalog primitive** cuboid/cylinder/cone/ball
+     (hand-authored `w/h/d/r`). This is what ships until the bounding-box build
+     populates `asset-dims.json` (currently EMPTY → fallback path everywhere).
+  NOT convex hulls baked from the GLBs — deliberate: GLBs load async and can fail,
+  so hull-from-mesh would make the collision shape non-deterministic and race the
+  sim. Upgrading dynamic props to convex hulls (once their GLB is cached) is a
+  future refinement, not v1.
 
 ## Movement / jump
 - Same forward/right formula as the referee + client (`architecture.md` Movement

@@ -252,7 +252,9 @@ export class Scene3D {
       // dimension — the reliable fix for pieces whose native proportions don't match
       // the intended footprint (e.g. a floor tile that must stay thin however thick
       // its GLB is). Uniform max-dim scaling inflated the kitchen floor's thickness.
-      dims: c.modelDims || null,
+      // MEASURED bounds win when present so the mesh matches the physics collider
+      // (both baked from asset-dims.json); else the ad-hoc modelDims override.
+      dims: c.measured || c.modelDims || null,
       x: entry.x,
       y: entry.y || 0,
       z: entry.z,
@@ -274,7 +276,7 @@ export class Scene3D {
       if (c.model) {
         const tmpl = this._modelCache.get('/assets/' + c.model);
         if (tmpl && tmpl !== 'failed') {
-          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.modelDims || null);
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.measured || c.modelDims || null);
           inst.userData.baseY = 0;
           return inst;
         }

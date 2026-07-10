@@ -14,5 +14,6 @@
   "gravity": 22,
   "jumpSpeed": 8,
   "playerRadius": 0.4,
-  "playerHalfHeight": 0.5
+  "playerHalfHeight": 0.5,
+  "maxDynamicProps": 60
 }

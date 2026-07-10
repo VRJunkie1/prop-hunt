@@ -41,13 +41,27 @@ export async function loadRapier() {
   return _loadPromise;
 }
 
-// Half-extents / radii for a catalog entry's primitive shape. Physics colliders
-// are cuboid/cylinder/cone/ball approximations of the primitive footprint (the
-// same box the renderer draws before a GLB swaps in) — robust and synchronous.
+// Half-extents / radii for a catalog entry's collider.
+//
+// PREFERENCE ORDER:
+//   1. MEASURED bounds — if config.js attached `c.measured` (a normalized
+//      world-space {w,h,d} box from shared/config/asset-dims.json, the output of
+//      the bounding-box normalization build), bake a cuboid straight from it. This
+//      is the design intent: "cuboid approximations from the measured bounds
+//      (trimesh only where a cuboid is clearly wrong)" — real measurements, never
+//      guessed sizes. A measured box supersedes the primitive shape entirely.
+//   2. FALLBACK — the hand-authored primitive footprint (box/cylinder/cone/ball
+//      from the catalog w/h/d/r). Robust and synchronous, but eyeballed. This is
+//      what ships until the measured file is populated.
+//
 // Convex hulls baked from the GLB meshes were considered but rejected for a blind
 // one-pass build: the GLBs load async and can fail, so coupling collision to them
 // would make the world non-deterministic in shape. Documented in notes/physics.md.
 function shapeFor(RAPIER, c) {
+  const m = c.measured;
+  if (m && m.w > 0 && m.h > 0 && m.d > 0) {
+    return { desc: RAPIER.ColliderDesc.cuboid(m.w / 2, m.h / 2, m.d / 2), halfH: m.h / 2 };
+  }
   switch (c.shape) {
     case 'box':
       return { desc: RAPIER.ColliderDesc.cuboid((c.w || 1) / 2, (c.h || 1) / 2, (c.d || 1) / 2), halfH: (c.h || 1) / 2 };
@@ -130,12 +144,19 @@ export class PhysicsWorld {
 
   _buildProps(propInstances, catalog) {
     const R = this.R;
+    // Phone-safety budget (plan step 5): cap how many props are DYNAMIC (real
+    // simulated rigid bodies). Past the cap, extra props still become solid static
+    // colliders — fully collidable, just not shovable — so a huge map degrades to
+    // "some props don't get knocked around" instead of tanking a phone's frame rate.
+    // Restaurant (~56 props) sits under the default 60, so nothing changes today.
+    const cap = this.rules.maxDynamicProps != null ? this.rules.maxDynamicProps : 60;
+    let dynCount = 0;
     for (const p of propInstances || []) {
       const c = catalog[p.type];
       if (!c) continue;
       const { desc, halfH } = shapeFor(R, c);
       const y = halfH + (p.y || 0);
-      if (this.dynamicProps) {
+      if (this.dynamicProps && dynCount < cap) {
         // Host: a real rigid body that can be knocked around and settles to sleep.
         const bodyDesc = R.RigidBodyDesc.dynamic()
           .setTranslation(p.x, y, p.z)
@@ -145,10 +166,13 @@ export class PhysicsWorld {
         const body = this.world.createRigidBody(bodyDesc);
         this.world.createCollider(desc.setFriction(0.8).setRestitution(0.0).setDensity(0.6), body);
         this.propBodies.push({ id: p.id, body });
+        dynCount++;
       } else {
-        // Guest predictor: props are fixed obstacles (host owns their motion). The
-        // local character still collides against their spawn positions; reconciliation
-        // corrects the rare case where a prop has actually been shoved elsewhere.
+        // Fixed obstacle. Two cases land here:
+        //  - Guest predictor: host owns all prop motion, so the local character just
+        //    collides against spawn positions; reconciliation corrects the rare case
+        //    where a prop has actually been shoved elsewhere.
+        //  - Host past the dynamic cap: same solid collider, simply not simulated.
         desc.setTranslation(p.x, y, p.z);
         if (p.rot) desc.setRotation(yawQuat(p.rot));
         this.world.createCollider(desc);

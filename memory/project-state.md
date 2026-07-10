@@ -8,6 +8,49 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: MEASURED-BOUNDS COLLIDER SEAM + PROP CAP (2026-07-10, on `physics-net`). NOT playtested.
+
+Context correction first: the "big pass" below (Rapier physics + full prediction/
+reconciliation netcode) was **already built and wired** on this branch by the
+2026-07-09 session — it is NOT re-done here. This follow-up task assumed two things
+that were both FALSE on disk: (a) that physics still needed implementing, and (b)
+that a measured `shared/config/asset-dims.*` file from a bounding-box normalization
+build already existed. It did **not** — colliders were (and by default still are)
+baked from the hand-authored primitive footprints in `props.json`/`fixtures.json`.
+
+I could NOT produce measured GLB bounds here (no shell; `Write` is text-only, can't
+decode binary `.glb` to compute a bbox — that measurement IS the "prior build" that
+never landed its output). Rather than **guess sizes** (explicitly forbidden) or
+silently declare victory, I wired the **drop-in seam** so measured bounds bake
+automatically the moment they exist, and shipped the file EMPTY (zero behavior
+change today). Asked VRmike which path to take; got no answer, took the
+non-destructive recommended one.
+
+- **`shared/config/asset-dims.json`** (NEW, ships empty `dims:{}`): the output slot
+  for the bounding-box build — per catalog type, the normalized **world-space**
+  `{w,h,d}` box. Documented contract in the file + `memory/notes/asset-dims.md`.
+- **`js/config.js`**: `loadConfig` fetches it (tolerant of absence) and attaches
+  `entry.measured` onto the matching catalog entry. One mutation reaches all three
+  consumers via the shared `cfg` object: host referee's `PhysicsWorld`, each
+  client's prediction `PhysicsWorld`, and the renderer.
+- **`shared/physics.js` `shapeFor`**: if `c.measured` present → bake a **cuboid from
+  the measured bounds** ("cuboid from measured bounds; trimesh only where clearly
+  wrong"); else fall back to the primitive footprint. Also added the plan's
+  **phone-safety cap** (`rules.maxDynamicProps`, default 60): props past the cap are
+  solid STATIC colliders (collidable, not shovable). Restaurant (~56) is under it →
+  inert today.
+- **`js/scene.js`**: GLB mesh scale now prefers `c.measured` over `modelDims`, so
+  mesh and collider stay in lockstep once measurements land (all 3 scale paths).
+- **Regression**: with `dims:{}` empty, every `c.measured` is `undefined` → all `||`
+  chains fall through to the exact pre-seam path. Byte-for-byte prior behavior;
+  verified by inspection (headless can't runtime-test). Files: `shared/config/
+  asset-dims.json` (new), `js/config.js`, `shared/physics.js`, `js/scene.js`,
+  `shared/config/rules.json`, `memory/notes/asset-dims.md` (new), `physics.md`.
+- **STILL OWED**: run the bounding-box normalization build and populate
+  `asset-dims.json` so colliders bake from real measurements instead of the
+  eyeballed footprint fallback. Until then, collider sizes = the same footprints the
+  big pass shipped. Live multiplayer playtest still the only real QA for netcode.
+
 ## Status: PHYSICS + MULTIPLAYER NETCODE — THE BIG PASS (2026-07-09, on `physics-net`). NOT playtested (can't be, headless).
 
 The single-pass "yolo" build VRmike approved: Rapier physics + host-authoritative
