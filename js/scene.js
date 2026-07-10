@@ -47,8 +47,9 @@ export function makePropMesh(type, catalog) {
 // from the catalog entry's primitive footprint so a real mesh lands at roughly the
 // intended size regardless of the GLB's native units — or from an explicit
 // `modelSize` override for pieces whose primitive box doesn't match (floors, walls,
-// pillars, door). See Scene3D._instantiateModel.
-function targetSizeForEntry(c) {
+// pillars, door). See Scene3D._instantiateModel. Exported so the level editor
+// sizes spawned meshes exactly the way the game does.
+export function targetSizeForEntry(c) {
   if (typeof c.modelSize === 'number') return c.modelSize;
   switch (c.shape) {
     case 'box':
@@ -63,6 +64,40 @@ function targetSizeForEntry(c) {
   }
 }
 
+// Clone a loaded GLB, size it (per-axis `dims` to exact world sizes, a uniform
+// measured `scale` = native × scale, or fit-largest-dimension-to-`target`), then
+// centre it in x/z and rest its base on y=0. Wrapped in a group so the caller can
+// position/rotate/scale it freely regardless of the model's internal origin.
+// Module-level + exported so both the game renderer (Scene3D) and the level editor
+// build meshes identically — a spawned/edited mesh matches what the game draws.
+export function instantiateModel(template, target, dims, scale) {
+  const inner = template.clone(true);
+  const box = new THREE.Box3().setFromObject(inner);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  if (dims) {
+    // Non-uniform: scale each axis to an exact world size. Guards a zero native
+    // extent (a perfectly flat mesh) so a floor keeps its intended thickness.
+    inner.scale.set(dims.w / (size.x || 1), dims.h / (size.y || 1), dims.d / (size.z || 1));
+  } else if (typeof scale === 'number' && scale > 0) {
+    // Measured uniform scale (native * scale) — one factor sizes the whole pack.
+    inner.scale.setScalar(scale);
+  } else {
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    inner.scale.setScalar(target / maxDim);
+  }
+  const box2 = new THREE.Box3().setFromObject(inner);
+  const center = new THREE.Vector3();
+  box2.getCenter(center);
+  inner.position.set(-center.x, -box2.min.y, -center.z);
+  inner.traverse((o) => {
+    if (o.isMesh) o.castShadow = true;
+  });
+  const holder = new THREE.Group();
+  holder.add(inner);
+  return holder;
+}
+
 export class Scene3D {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -73,6 +108,13 @@ export class Scene3D {
 
     this.selfId = null;
     this.catalog = null;
+    // Uniform world scale applied to every GLB this map references (map.modelScale).
+    // The KayKit pack is internally consistent, so ONE measured factor normalises
+    // all of it (see shared/config/asset-dims.json). null => no scale set (older
+    // maps / primitive-only maps), in which case models fall back to the legacy
+    // fit-largest-dimension-to-target behaviour. A per-catalog-entry `modelScale`
+    // overrides this for a single asset.
+    this.modelScale = null;
     this.players = new Map(); // id -> { mesh, target:{x,z,yaw}, kind }
 
     // ---- lazy GLB meshes (real Restaurant Bits models) ----------------------
@@ -136,6 +178,8 @@ export class Scene3D {
   // Rebuild the world for a new match.
   buildWorld(map, propInstances, catalog) {
     this.catalog = catalog;
+    // Measured uniform scale for this map's real meshes (see shared/config/asset-dims.json).
+    this.modelScale = typeof map.modelScale === 'number' ? map.modelScale : null;
     // A new match: invalidate any in-flight GLB loads from a previous build and
     // start a fresh slot list (the primitives queued for a real-mesh swap).
     this._buildToken++;
@@ -196,11 +240,17 @@ export class Scene3D {
       if (!c || !isStaticEntry(c)) continue; // knockable fixtures render via propInstances (below)
       const built = makePropMesh(f.type, catalog);
       if (!built) continue;
-      built.mesh.position.set(f.x, built.baseY + (f.y || 0), f.z);
+      // Optional per-object uniform scale (default 1) — authored by the level editor.
+      // The primitive geometry is centred at its own origin, so scaling then resting
+      // the centre at baseY*s keeps the base flush on the floor. `f.y` is a world
+      // offset (unscaled) so a scaled item still sits on the same surface height.
+      const s = f.scale || 1;
+      built.mesh.scale.setScalar(s);
+      built.mesh.position.set(f.x, built.baseY * s + (f.y || 0), f.z);
       built.mesh.rotation.y = f.rot || 0;
       this.scene.add(built.mesh);
       this.colliders.push(built.mesh); // camera pulls in against fixtures too
-      this._queueModel(f, built.mesh, catalog); // swap in the real GLB if any
+      this._queueModel(f, built.mesh, catalog, null, 0, s); // swap in the real GLB if any
     }
 
     // Dynamic props (the disguise pool — chairs, stools, crates, dishes, food).
@@ -216,6 +266,11 @@ export class Scene3D {
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
+      // Optional per-object uniform scale (default 1) — authored by the level editor.
+      // The container origin stays the body CENTRE (== physics translation, what the
+      // awake snapshot moves); at rest it sits at baseY*s so the scaled primitive's
+      // base rests flush on the floor.
+      const s = p.scale || 1;
       const container = new THREE.Group();
       // A mid-round joiner's props carry a live transform (centre + quaternion) so a
       // shoved chair arrives where it actually rests; a fresh match's props carry
@@ -227,6 +282,7 @@ export class Scene3D {
         container.position.set(p.x, built.baseY + (p.y || 0), p.z);
         container.rotation.y = p.rot || 0;
       }
+      built.mesh.scale.setScalar(s);
       built.mesh.position.set(0, 0, 0); // centred on the container origin
       container.add(built.mesh);
       this.scene.add(container);
@@ -234,11 +290,11 @@ export class Scene3D {
       this.propMeshes.set(p.id, {
         container,
         primitive: built.mesh,
-        baseY: built.baseY,
+        baseY: built.baseY * s,
         target: null, // set once the prop first appears AWAKE in a snapshot
         awake: false,
       });
-      this._queueModel(p, built.mesh, catalog, container, built.baseY); // swap in the real GLB if any
+      this._queueModel(p, built.mesh, catalog, container, built.baseY * s, s); // swap in the real GLB if any
     }
 
     // Kick off the real-mesh load for everything queued above. Fire-and-forget:
@@ -250,7 +306,7 @@ export class Scene3D {
   // Record a primitive that has a real GLB to swap in later. `entry` is the map's
   // fixture/prop record (carries type/x/z and optional y/rot); `holder` is the
   // primitive mesh already added to the scene. Called for both fixtures and props.
-  _queueModel(entry, holder, catalog, container = null, baseY = 0) {
+  _queueModel(entry, holder, catalog, container = null, baseY = 0, objScale = 1) {
     const c = catalog[entry.type];
     if (!c || !c.model) return;
     this._modelSlots.push({
@@ -260,8 +316,17 @@ export class Scene3D {
       // is placed once in world space. container == null => fixture path.
       container,
       baseY,
+      // Per-object uniform scale (default 1) applied ON TOP of the measured/target
+      // sizing below — the editor's "scale" field. Kept separate so the base
+      // measured size is unchanged when objScale == 1 (every existing map).
+      objScale,
       path: '/assets/' + c.model,
       target: targetSizeForEntry(c),
+      // Uniform baked scale (measured): per-entry override, else this map's scale.
+      // When set, the GLB is scaled by this factor directly (native * scale) rather
+      // than fit-to-target — keeping the whole pack proportionate. `dims` still wins
+      // when present (the floor tile's forced-thin non-uniform case).
+      scale: typeof c.modelScale === 'number' ? c.modelScale : this.modelScale,
       // Optional non-uniform target dims {w,h,d}. When present the GLB is scaled per
       // axis to these exact world sizes instead of uniformly by its largest
       // dimension — the reliable fix for pieces whose native proportions don't match
@@ -291,7 +356,9 @@ export class Scene3D {
       if (c.model) {
         const tmpl = this._modelCache.get('/assets/' + c.model);
         if (tmpl && tmpl !== 'failed') {
-          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.measured || c.modelDims || null);
+          // Disguise renders at the same measured scale as world decor.
+          const scale = typeof c.modelScale === 'number' ? c.modelScale : this.modelScale;
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.measured || c.modelDims || null, scale);
           inst.userData.baseY = 0;
           return inst;
         }
@@ -570,7 +637,11 @@ export class Scene3D {
   // Place a loaded model into a slot and hide (but keep) its primitive.
   _applyModel(template, slot, token) {
     if (token !== this._buildToken) return; // match ended / restarted; drop it
-    const inst = this._instantiateModel(template, slot.target, slot.dims);
+    const inst = this._instantiateModel(template, slot.target, slot.dims, slot.scale);
+    // Per-object editor scale multiplies the measured/target sizing. instantiateModel
+    // rests the model's base at the group origin, so scaling about that origin keeps
+    // the base flush; the container/world offsets below already account for baseY*s.
+    if (slot.objScale && slot.objScale !== 1) inst.scale.multiplyScalar(slot.objScale);
     if (slot.container) {
       // Dynamic prop: parent the GLB to the prop's container (origin == body centre)
       // and drop it by baseY so its base rests on the floor. The container is what
@@ -590,37 +661,10 @@ export class Scene3D {
     slot.holder.visible = false;
   }
 
-  // Clone a loaded GLB, scale it so its largest dimension == `target` world units,
-  // then centre it in x/z and rest its base on y=0. Wrapped in a group so the caller
-  // can position/rotate it freely regardless of the model's internal origin.
-  _instantiateModel(template, target, dims) {
-    const inner = template.clone(true);
-    const box = new THREE.Box3().setFromObject(inner);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    if (dims) {
-      // Non-uniform: scale each axis to an exact world size. Guards against a zero
-      // native extent (a perfectly flat mesh) so a floor stays the intended thickness
-      // no matter how thick or thin the source GLB is.
-      inner.scale.set(
-        dims.w / (size.x || 1),
-        dims.h / (size.y || 1),
-        dims.d / (size.z || 1)
-      );
-    } else {
-      const maxDim = Math.max(size.x, size.y, size.z) || 1;
-      inner.scale.setScalar(target / maxDim);
-    }
-    const box2 = new THREE.Box3().setFromObject(inner);
-    const center = new THREE.Vector3();
-    box2.getCenter(center);
-    inner.position.set(-center.x, -box2.min.y, -center.z);
-    inner.traverse((o) => {
-      if (o.isMesh) o.castShadow = true;
-    });
-    const holder = new THREE.Group();
-    holder.add(inner);
-    return holder;
+  // Thin wrapper around the shared module-level instantiateModel (kept as a method
+  // so existing call sites are unchanged). See instantiateModel above.
+  _instantiateModel(template, target, dims, scale) {
+    return instantiateModel(template, target, dims, scale);
   }
 
   render() {

@@ -67,6 +67,7 @@ export class Input {
     this.onLockError = () => {}; // (reason: string) => void    (desktop pointer lock)
     this.onTouchPlay = () => {}; // () => void  fired when a touch player taps the overlay
     this.onToggleView = () => {}; // () => void  V key: third-person <-> first-person
+    this.onToggleEdit = () => {}; // () => void  Ctrl/Cmd+E: toggle the level editor (desktop)
 
     // Touch state.
     this.touch = isTouchDevice();
@@ -289,6 +290,16 @@ export class Input {
   }
 
   onKeyDown(e) {
+    // Ctrl/Cmd+E toggles the in-game level editor (a desktop debug tool). Handled
+    // FIRST — before the pointer-lock gate (so it works from the lobby, uncaptured)
+    // and before KeyE's disguise action (so edit-toggle never doubles as a disguise).
+    // The editor reads movement keys straight off `this.keys`; it does NOT use
+    // pointer lock, so it never contends with the desktop mouse-look path.
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyE') {
+      e.preventDefault();
+      this.onToggleEdit();
+      return;
+    }
     this.keys.add(e.code);
     if (e.code === 'Space') {
       this.jump = true; // held; physics only jumps when grounded

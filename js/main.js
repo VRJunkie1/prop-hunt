@@ -19,6 +19,7 @@ import { loadRapier, PhysicsWorld } from '/shared/physics.js';
 
 const ui = new UI();
 let session = null; // created in boot() once config is loaded
+let editor = null; // lazily created on the first Ctrl+E (see editor.js)
 const canvas = document.getElementById('view');
 // scene.js pulls Three.js from a CDN, so it is imported LAZILY (built on the
 // first match start, not at page load). That keeps a bare landing page free of
@@ -44,6 +45,10 @@ const state = {
   phase: PHASE.LOBBY,
   cfg: null,
   map: null,
+  mapId: null, // id of the active match's map (for the level editor default)
+  lobbyMapId: null, // id currently picked in the lobby (editor default before a match)
+  editing: false, // level editor open (gameplay render/predict stepped aside; see editor.js)
+  editorPrevScreen: null, // screen to restore when the editor closes
   props: [], // authoritative prop instances for the active match
   self: { x: 0, y: 0, z: 0 }, // predicted local position (physics truth or 2D fallback)
   serverSelf: { x: 0, y: 0, z: 0 }, // last authoritative position for reconciliation
@@ -86,10 +91,12 @@ input.onAction = (name) => {
 // events), so it hides only once capture is confirmed and comes back on its
 // own when the mouse is released (Esc, alt-tab) — clickable to re-capture.
 input.onLockChange = (locked) => {
+  if (state.editing) return; // editor owns the view; no "click to play" overlay
   const inGame = !ui.el.game.classList.contains('hidden');
   ui.setClickToPlay(inGame && !locked);
 };
 input.onLockError = (reason) => {
+  if (state.editing) return;
   const inGame = !ui.el.game.classList.contains('hidden');
   if (inGame) ui.setClickToPlay(true, reason);
 };
@@ -107,6 +114,15 @@ input.onTouchPlay = () => {
 // behaviour together behind the scene's one flag.
 input.onToggleView = () => {
   if (scene) scene.setThirdPerson(!scene.thirdPerson);
+};
+
+// Ctrl+E: toggle the in-game level editor (desktop debug tool). Available only in
+// solo/local play — never mid-multiplayer (see canEnterEditor). Entering steps the
+// client OUT of the game loop into a client-local sandbox that loads the map fresh;
+// the referee/netcode are never touched. See editor.js.
+input.onToggleEdit = () => {
+  if (state.editing) exitEditor();
+  else enterEditor();
 };
 
 // ---- screen wake lock ------------------------------------------------------
@@ -181,6 +197,7 @@ function handleGameMessage(msg) {
 
     case S2C.LOBBY:
       state.room = msg.room;
+      state.lobbyMapId = msg.mapId; // editor default target before a match starts
       ui.renderLobby(msg, state.selfId);
       if (msg.phase === PHASE.LOBBY) {
         // Persistent lobby: a round just ended (or we're joining fresh). If we were
@@ -203,8 +220,22 @@ function handleGameMessage(msg) {
       break;
 
     case S2C.STARTED: {
+      state.mapId = msg.mapId;
       state.map = state.cfg.maps[msg.mapId];
       state.props = msg.props;
+      // Client-side merge of any authored per-object prop `scale` onto the referee's
+      // prop instances. The referee builds this.props by mapping map.props in order
+      // (see referee.js), so msg.props[i] corresponds to state.map.props[i] on every
+      // client — we zip the scale back on without any referee/protocol change. Inert
+      // for every current map (none carry a scale); it lets an edited map's scaled
+      // props RENDER at the authored scale once committed (scale is visual-only —
+      // colliders stay base-size; shared/ is untouched). Fixtures read scale straight
+      // from local map data in scene.js and need no merge.
+      const mapProps = (state.map && state.map.props) || [];
+      state.props.forEach((pi, i) => {
+        const src = mapProps[i];
+        if (src && src.scale) pi.scale = src.scale;
+      });
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
       // First time we need Three.js: build the renderer now (lazy CDN load). The
@@ -472,6 +503,14 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
+  // Level editor owns the frame while open: it renders its own sandbox scene through
+  // the shared renderer and ignores gameplay entirely (no predict, no game render).
+  if (state.editing) {
+    if (editor) editor.frame(dt);
+    requestAnimationFrame(frame);
+    return;
+  }
+
   if (state.predict) {
     // Physics prediction: step our own body through the local Rapier world for this
     // frame's input, recording it for reconciliation. Real collide-and-slide against
@@ -537,6 +576,7 @@ function frame(now) {
 // Send movement intent to the referee at a fixed rate.
 function startInputLoop() {
   setInterval(() => {
+    if (state.editing) return; // editor sandbox: stay detached from the match loop
     if (!session || !session.ready) return;
     if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
     const { mx, mz } = input.moveVector();
@@ -557,6 +597,81 @@ function startInputLoop() {
 }
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+// ---- level editor (desktop debug tool) ------------------------------------
+// The editor is a client-local sandbox: it never touches the referee, netcode, or
+// match flow. It's gated to solo/local play so it can't disturb a live match, and
+// entering steps the render loop out of gameplay into editor.frame() (see frame()).
+
+// Only in solo/local play — never mid-multiplayer, never on touch (desktop tool).
+function canEnterEditor() {
+  if (input.touch) return false; // desktop-only debug tool
+  if (!session) return true; // pre-session (landing) — a pure local sandbox
+  if (!session.isHost && session.conn) return false; // we're a guest in someone's match
+  if (session.isHost && session.conns && session.conns.size > 0) return false; // host WITH guests
+  return true; // menu, solo host lobby, or a solo host match
+}
+
+// Which map the editor opens on: the active match's map, else the lobby's current
+// pick, else the first map in the catalog.
+function editorTargetMap() {
+  const id = state.mapId || state.lobbyMapId || Object.keys(state.cfg.maps)[0];
+  return { id, map: state.cfg.maps[id] };
+}
+
+function currentScreen() {
+  for (const s of ['menu', 'lobby', 'game']) if (!ui.el[s].classList.contains('hidden')) return s;
+  return 'menu';
+}
+
+async function enterEditor() {
+  if (state.editing || state._enteringEditor || !state.cfg) return; // busy / not ready
+  if (!canEnterEditor()) {
+    ui.feed('Level editor is available only in solo/local play — not during a multiplayer match.');
+    return;
+  }
+  state._enteringEditor = true; // guard the async gap (import + build) against double-enter
+  try {
+    await _enterEditorInner();
+  } finally {
+    state._enteringEditor = false;
+  }
+}
+
+async function _enterEditorInner() {
+  // ensureScene() guarantees the single WebGLRenderer exists (the editor renders its
+  // own scene through it). Cheap no-op if a match already built the scene.
+  const s = await ensureScene();
+  if (!editor) {
+    const { Editor } = await import('./editor.js');
+    editor = new Editor(canvas, s.renderer, state.cfg);
+    editor.setKeySource(() => input.keys); // fly camera reads the shared key set
+    editor.onExit = () => exitEditor();
+  }
+  state.editorPrevScreen = currentScreen();
+  const { id, map } = editorTargetMap();
+  // Release any active pointer lock — the editor uses a free cursor (drag-to-look),
+  // so a locked pointer from a solo match would leave no cursor for the editor UI.
+  if (document.pointerLockElement) document.exitPointerLock();
+  // Reveal the canvas; suppress the gameplay overlay/HUD (the editor has its own UI).
+  input.exitGame(); // release touch controls (no-op on desktop)
+  ui.setClickToPlay(false);
+  ui.show('game');
+  ui.el.hud.classList.add('hidden');
+  ui.el.crosshair.classList.add('hidden');
+  await editor.enter(id, map);
+  state.editing = true;
+}
+
+function exitEditor() {
+  if (!state.editing) return;
+  state.editing = false;
+  if (editor) editor.exit();
+  // Restore whatever screen we came from (menu / lobby / game). We never stopped the
+  // underlying solo match, so returning to 'game' simply resumes it.
+  ui.show(state.editorPrevScreen || 'menu');
+  if (state.editorPrevScreen === 'game') ui.setClickToPlay(!input.locked);
+}
 
 // ---- menu wiring ----------------------------------------------------------
 // create()/join() hand off to PeerJS (the free public broker introduces the two

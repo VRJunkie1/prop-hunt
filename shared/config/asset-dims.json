@@ -1,5 +1,27 @@
 {
-  "_comment": "MEASURED asset dimensions — the drop-in source of truth for collider baking. This is the output slot for the bounding-box normalization build: it must contain, per catalog type (keys match props.json / fixtures.json entry names), the item's NORMALIZED WORLD-SPACE bounding box as actually placed in the map — { w, h, d } in world units (the same units maps.json positions use). NOT the GLB's raw native bbox: store the final rendered/placed size so physics and rendering consume it directly with no scale inference. When a type has an entry here, shared/physics.js bakes its collider as a cuboid from these exact bounds (per the design: 'cuboid from the measured bounds; trimesh only where a cuboid is clearly wrong'), and js/scene.js scales the GLB mesh to the same box so collider and mesh stay in lockstep. Types with NO entry here fall back to the hand-authored primitive footprint in props.json/fixtures.json (w/h/d/r) — never a hard failure. SHIPPED EMPTY on purpose: until the bounding-box build populates `dims`, behavior is byte-for-byte the pre-seam build (zero regression). See memory/notes/asset-dims.md for the wiring and memory/notes/physics.md for how colliders consume it.",
-  "_schema": { "dims": { "<catalogType>": { "w": "world-space width (x)", "h": "world-space height (y)", "d": "world-space depth (z)" } } },
-  "dims": {}
+  "_comment": "MEASURED native bounding boxes (w=x, h=y, d=z) of the restaurant GLBs, in each model's own world units. Produced by tools/measure-glbs.mjs, which reads each GLB's JSON chunk and transforms every mesh's POSITION accessor min/max by its node world matrix (FBX2glTF bakes scale:[100,100,100] onto the mesh node, so raw accessor numbers are 1/100 of the real size — see the tool header). This file is BUILD-TIME REFERENCE + derivation source only; the game never loads it and never measures at page boot. Applied world size = native * map.modelScale (restaurant modelScale = 0.75, derived below). Re-run `node tools/measure-glbs.mjs` after adding/replacing any GLB to regenerate the full set.",
+  "_derivation": "The whole KayKit 'Restaurant Bits' pack is internally consistent — every model shares the same native scale (real-world-ish metres after the baked x100 node scale). So ONE uniform world scale normalises the entire pack. Chosen from three references against the 1.8-unit player capsule: door 2.8h -> 2.10, fridge 2.5h -> 1.88, chair 1.21h -> 0.91. All land on target at scale 0.75, which is therefore baked as restaurant map.modelScale. Because the pack is uniform, per-asset scale == the map scale for every asset (no per-asset divergence); a per-entry `modelScale` override remains available in fixtures.json/props.json if a future non-pack asset needs a different factor.",
+  "_kits": "modular_kitchen_parts.glb and modular_walls.glb are NOT single objects — they are multi-module kits (12 counter modules spread across ~15 units; several wall-panel variants). Their whole-kit AABB is recorded below for completeness but they must NOT be placed as a single fixture (doing so scaled the entire kit down to one 2-unit blob — the ankle-height-counter bug). 'counter' now uses kitchen_cabinet.glb; 'kitchen_wall' uses a primitive box.",
+
+  "restaurant/door.glb": { "w": 1.6, "h": 2.8, "d": 0.7714 },
+  "restaurant/fridge.glb": { "w": 2.0, "h": 2.5, "d": 1.51 },
+  "restaurant/floor_kitchen.glb": { "w": 4.0, "h": 0.5, "d": 4.0 },
+  "restaurant/chair.glb": { "w": 0.75, "h": 1.2081, "d": 0.7961 },
+  "restaurant/chair_stool.glb": { "w": 0.75, "h": 0.5, "d": 0.75 },
+  "restaurant/oven.glb": { "w": 2.0, "h": 2.02, "d": 2.348 },
+  "restaurant/stove_with_multi_burner.glb": { "w": 2.0, "h": 1.2, "d": 2.2879 },
+  "restaurant/kitchen_cabinet.glb": { "w": 2.0, "h": 1.0, "d": 1.0419 },
+  "restaurant/kitchentable_sink.glb": { "w": 2.0, "h": 1.8016, "d": 2.0 },
+  "restaurant/table_with_sink.glb": { "w": 3.0, "h": 1.8016, "d": 2.0 },
+  "restaurant/round_table.glb": { "w": 1.5, "h": 1.0, "d": 1.5 },
+  "restaurant/kitchen_table.glb": { "w": 3.0, "h": 1.0, "d": 2.0 },
+  "restaurant/table.glb": { "w": 3.0, "h": 1.928, "d": 2.0 },
+  "restaurant/table_round_a_small.glb": { "w": 1.5, "h": 1.8, "d": 1.5 },
+  "restaurant/crate_of_potatoes.glb": { "w": 2.0, "h": 0.9658, "d": 2.0 },
+  "restaurant/pot.glb": { "w": 1.4, "h": 0.5, "d": 1.0 },
+  "restaurant/cutting_board.glb": { "w": 1.5, "h": 0.15, "d": 1.0 },
+  "restaurant/burger.glb": { "w": 0.95, "h": 0.8572, "d": 0.95 },
+
+  "restaurant/modular_kitchen_parts.glb": { "w": 15.6, "h": 1.9, "d": 5.0, "_kit": true },
+  "restaurant/modular_walls.glb": { "w": 12.0, "h": 4.0, "d": 0.5, "_kit": true }
 }
