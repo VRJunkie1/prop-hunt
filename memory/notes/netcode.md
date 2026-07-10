@@ -1,5 +1,35 @@
 # netcode
 
+## PHYSICS PASS UPDATE (2026-07-09, `physics-net`) — prediction + reconciliation
+The netcode grew from "predict the local player's flat 2D position" to full
+**client-side prediction + server reconciliation over a Rapier sim**. Architecture
+that SHIPPED (the target, not the interpolation-only fallback), stated honestly:
+
+- **Host** runs the one authoritative Rapier world (see physics.md). Each snapshot
+  (15 Hz) now also carries: per-player `y` (jump height) + `ack` (the last
+  `INPUT.seq` the host consumed from that player), and a `props[]` array of the
+  transforms of **awake** dynamic props only (`{id,x,y,z,qx,qy,qz,qw}` quantised) —
+  sleeping props are omitted (they haven't moved).
+- **Guests (and the host)** predict the LOCAL player with their own Rapier world
+  (`main.buildPredict`, `{dynamicProps:false}`): real collide-and-slide vs walls /
+  fixtures, instant response. Every predicted frame gets a `seq`, stored with its
+  input in `state.pending`, and the current `seq` rides each `C2S.INPUT`.
+- **Reconcile** (`reconcilePredict`, per snapshot): drop `pending` with
+  `seq <= ack`, teleport the predict body to the authoritative pose, **replay** the
+  remaining inputs, then fold the residual into a decaying `corr` offset (eased over
+  a few frames; SNAP if > 2.5 m — teleport/tag/hard desync). This is the
+  rewind/replay loop, not a smoothing-only nudge.
+- **Remote players + awake props** interpolate toward the latest snapshot in
+  `scene.interpolate` / `scene.syncProps` (props move a container Group whose origin
+  is the body centre; a swapped GLB is offset to sit on the floor).
+- **Input** now carries `seq, jump, rotUnlock` too. `jump` → physics jump (grounded
+  only); `rotUnlock` → disguise yaw-rotate (orientation lock, see physics.md).
+- **Graceful degrade:** if Rapier can't load, both sides revert to the pre-physics
+  flat 2D prediction (the code branches on `state.predict` / `referee.physics`).
+  The old 0.08/frame reconcile-toward-serverSelf lives on in that fallback branch.
+- **CANNOT be verified headless** — the auto-check is a load test. Prediction feel,
+  rubber-band on prop shoves, and jitter under real ping need a live playtest.
+
 ## Two layers (since the static-Pages fix, on PeerJS)
 1. **Signaling** — a **PeerJS `Peer`** talks to PeerJS's **free public broker**
    only to find the other browser and pass the WebRTC handshake. No gameplay ever

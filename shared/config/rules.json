@@ -10,5 +10,9 @@
   "tagRange": 4.5,
   "tagAngleDeg": 22,
   "disguiseRange": 4.5,
-  "mapMargin": 1.5
+  "mapMargin": 1.5,
+  "gravity": 22,
+  "jumpSpeed": 8,
+  "playerRadius": 0.4,
+  "playerHalfHeight": 0.5
 }

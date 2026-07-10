@@ -12,6 +12,10 @@ import { Session } from './net.js';
 import { Input } from './input.js';
 import { UI } from './ui.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
+// Physics is imported LAZILY (loadRapier pulls WASM from a CDN) — only referenced
+// inside buildPredict(), which runs at match start, so a bare landing page still
+// makes zero external requests (headless load check stays clean).
+import { loadRapier, PhysicsWorld } from '/shared/physics.js';
 
 const ui = new UI();
 let session = null; // created in boot() once config is loaded
@@ -41,11 +45,33 @@ const state = {
   cfg: null,
   map: null,
   props: [], // authoritative prop instances for the active match
-  self: { x: 0, z: 0 }, // predicted local position
-  serverSelf: { x: 0, z: 0 }, // last authoritative position for reconciliation
+  self: { x: 0, y: 0, z: 0 }, // predicted local position (physics truth or 2D fallback)
+  serverSelf: { x: 0, y: 0, z: 0 }, // last authoritative position for reconciliation
   movable: false,
   spawned: false, // snap to the authoritative spawn on the first snapshot
   bounds: 18,
+
+  // ---- client-side prediction + reconciliation ----------------------------
+  // predict: a LOCAL Rapier world holding just this player against the map's static
+  //   geometry (walls/fixtures/props), so local movement predicts real collisions
+  //   instantly. Null => Rapier unavailable => fall back to the flat 2D prediction.
+  // seq/pending: an input history. Each predicted frame gets a seq; the host echoes
+  //   the last seq it consumed as `ack`, and on each snapshot we rewind the local
+  //   body to the authoritative state and REPLAY every unacked input — the textbook
+  //   server-reconciliation loop. corr is a decaying visual offset so a correction
+  //   eases in (small) or snaps (large) instead of popping.
+  predict: null,
+  seq: 0,
+  pending: [], // [{ seq, mx, mz, yaw, jump, rotUnlock, dt }]
+  corr: { x: 0, y: 0, z: 0 },
+  SELF_ID: 'self', // stable id for the local player in the predict world
+
+  // Disguise orientation lock (local view of our own model). While disguised, the
+  // prop keeps the facing it had at disguise time unless right-click (rotUnlock) is
+  // held. The referee is authoritative (it broadcasts our locked yaw to others);
+  // this is just so our OWN third-person model matches instead of spinning.
+  selfDisguised: false,
+  selfDispYaw: 0,
 };
 
 // ---- action routing -------------------------------------------------------
@@ -152,6 +178,7 @@ function handleGameMessage(msg) {
           releaseWakeLock();
           ui.setClickToPlay(false);
           resetReadyButton();
+          destroyPredict();
           state.role = null;
           state.movable = false;
           state.spawned = false;
@@ -170,9 +197,12 @@ function handleGameMessage(msg) {
       // (kept in separate files so fixtures can't leak into the disguise pool) into
       // one type→shape/model lookup for scene.js. Fixture types are only ever
       // referenced by map.fixtures, so this merge never widens the disguise pool.
-      ensureScene().then((s) =>
-        s.buildWorld(state.map, state.props, { ...state.cfg.props, ...state.cfg.fixtures })
-      );
+      const catalog = { ...state.cfg.props, ...state.cfg.fixtures };
+      ensureScene().then((s) => s.buildWorld(state.map, state.props, catalog));
+      // Stand up the local prediction world (real wall/prop collision for our own
+      // movement). Fire-and-forget: until it resolves — or forever, if Rapier can't
+      // load — the frame loop uses the flat 2D prediction. See buildPredict().
+      buildPredict(state.map, state.props, catalog);
       ui.show('game');
       // Entering the game uncaptured. Desktop waits for the pointer-lock click;
       // touch shows a "Tap to play" prompt (dismissed by input.onTouchPlay) and
@@ -240,6 +270,7 @@ function backToMenu(msg) {
   state.spawned = false;
   input.exitGame();
   releaseWakeLock();
+  destroyPredict();
   resetReadyButton();
   ui.show('menu');
   if (msg) ui.menuError(msg);
@@ -257,21 +288,59 @@ function resetReadyButton() {
 function onSnapshot(msg) {
   state.phase = msg.phase;
   ui.setHud(msg);
-  if (scene) scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
+  if (scene) {
+    scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
+    if (msg.props) scene.syncProps(msg.props); // awake dynamic-prop transforms
+  }
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
     state.serverSelf.x = me.x;
+    state.serverSelf.y = me.y || 0;
     state.serverSelf.z = me.z;
-    if (!state.spawned) {
-      state.self.x = me.x;
-      state.self.z = me.z;
-      state.spawned = true;
-    }
+    // Freeze the disguise facing at the moment we become disguised; after that the
+    // frame loop holds it (or follows look while right-click is held).
+    const nowDisguised = !!me.disguise;
+    if (nowDisguised && !state.selfDisguised) state.selfDispYaw = input.yaw;
+    state.selfDisguised = nowDisguised;
     const frozenHunter = state.role === ROLE.HUNTER && msg.phase === PHASE.HIDING;
     state.movable = me.alive && !frozenHunter && (msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING);
-    if (!state.movable) {
-      state.self.x = me.x;
-      state.self.z = me.z;
+
+    if (state.predict) {
+      // Physics prediction path.
+      if (!state.spawned) {
+        // First snapshot of the match: hard-place the local body at spawn.
+        state.predict.setPlayerPosition(state.SELF_ID, { x: me.x, y: me.y || 0, z: me.z });
+        state.self.x = me.x;
+        state.self.y = me.y || 0;
+        state.self.z = me.z;
+        state.pending = [];
+        state.corr.x = state.corr.y = state.corr.z = 0;
+        state.spawned = true;
+      } else if (state.movable) {
+        reconcilePredict(me); // rewind to authoritative + replay unacked inputs
+      } else {
+        // Frozen hunter / dead / between phases: pin to the authoritative pose, no
+        // prediction to reconcile.
+        state.predict.setPlayerPosition(state.SELF_ID, { x: me.x, y: me.y || 0, z: me.z });
+        state.self.x = me.x;
+        state.self.y = me.y || 0;
+        state.self.z = me.z;
+        state.pending = [];
+        state.corr.x = state.corr.y = state.corr.z = 0;
+      }
+    } else {
+      // 2D fallback: snap on spawn / when immovable; the frame loop nudges otherwise.
+      if (!state.spawned) {
+        state.self.x = me.x;
+        state.self.z = me.z;
+        state.self.y = 0;
+        state.spawned = true;
+      }
+      if (!state.movable) {
+        state.self.x = me.x;
+        state.self.z = me.z;
+        state.self.y = me.y || 0;
+      }
     }
   }
 }
@@ -302,13 +371,112 @@ function onEvent(msg) {
   }
 }
 
+// ---- client-side prediction world -----------------------------------------
+// Build the local prediction world for this match: the map's static geometry plus
+// this one player, so our own movement collides for real and responds instantly.
+// Async (Rapier WASM loads on demand). Guarded by a token so a match that ends
+// mid-load is discarded. Any failure leaves state.predict null → 2D fallback.
+let _predictToken = 0;
+async function buildPredict(map, props, catalog) {
+  destroyPredict(); // tears down any prior world and bumps _predictToken
+  const token = _predictToken; // capture the post-teardown token to detect supersession
+  let RAPIER;
+  try {
+    RAPIER = await loadRapier();
+  } catch {
+    return; // Rapier unavailable — the frame loop uses flat 2D prediction
+  }
+  if (token !== _predictToken) return; // superseded (match ended / new match)
+  try {
+    const world = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: false, rules: state.cfg.rules });
+    world.addPlayer(state.SELF_ID, { x: state.self.x, y: state.self.y, z: state.self.z });
+    state.predict = world;
+  } catch {
+    state.predict = null;
+  }
+}
+
+function destroyPredict() {
+  _predictToken++; // invalidate any buildPredict still awaiting Rapier
+  if (state.predict) {
+    state.predict.destroy();
+    state.predict = null;
+  }
+  state.pending = [];
+  state.corr.x = state.corr.y = state.corr.z = 0;
+}
+
+// Rewind + replay: on each authoritative snapshot, drop inputs the host has already
+// applied (seq <= ack), teleport the local body to the authoritative state, then
+// re-simulate every remaining input. The result is where our prediction SHOULD be
+// given the host's truth — small residual eases in via corr, a big one snaps.
+function reconcilePredict(me) {
+  const w = state.predict;
+  if (!w) return false;
+  // Capture the CURRENTLY displayed position before the replay overwrites state.self,
+  // so the correction offset preserves on-screen continuity (no visible pop).
+  const dispX = state.self.x + state.corr.x;
+  const dispY = state.self.y + state.corr.y;
+  const dispZ = state.self.z + state.corr.z;
+  const ack = Number.isFinite(me.ack) ? me.ack : 0;
+  state.pending = state.pending.filter((p) => p.seq > ack);
+  w.setPlayerPosition(state.SELF_ID, { x: me.x, y: me.y || 0, z: me.z });
+  for (const p of state.pending) predictStep(p, p.dt);
+  const now = w.getPlayer(state.SELF_ID);
+  if (!now) return false;
+  state.self.x = now.x;
+  state.self.y = now.y;
+  state.self.z = now.z;
+  state.corr.x = dispX - now.x;
+  state.corr.y = dispY - now.y;
+  state.corr.z = dispZ - now.z;
+  // Big correction (teleport, tag, hard desync): snap rather than slide across the map.
+  if (Math.hypot(state.corr.x, state.corr.z) > 2.5 || Math.abs(state.corr.y) > 2.5) {
+    state.corr.x = state.corr.y = state.corr.z = 0;
+  }
+  return true;
+}
+
+// Advance the prediction world by one input over dt and read back the local body.
+function predictStep(input, dt) {
+  const w = state.predict;
+  if (!w) return;
+  w.setPlayerInput(state.SELF_ID, { mx: input.mx, mz: input.mz, yaw: input.yaw, jump: input.jump });
+  w.step(dt);
+  const p = w.getPlayer(state.SELF_ID);
+  if (p) {
+    state.self.x = p.x;
+    state.self.y = p.y;
+    state.self.z = p.z;
+  }
+}
+
 // ---- prediction + render loop ---------------------------------------------
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
-  if (state.movable) {
+  if (state.predict) {
+    // Physics prediction: step our own body through the local Rapier world for this
+    // frame's input, recording it for reconciliation. Real collide-and-slide against
+    // walls/fixtures happens right here, with zero network latency.
+    if (state.movable) {
+      state.seq++;
+      const { mx, mz } = input.moveVector();
+      const inp = { seq: state.seq, mx, mz, yaw: input.yaw, jump: input.jump, rotUnlock: input.rotUnlock, dt };
+      state.pending.push(inp);
+      if (state.pending.length > 300) state.pending.shift(); // safety cap on the history
+      predictStep(inp, dt); // advances state.self
+    }
+    // Decay the visual correction offset so a reconciliation eases out over a few
+    // frames (y a touch faster so landings don't float).
+    state.corr.x *= 0.85;
+    state.corr.y *= 0.75;
+    state.corr.z *= 0.85;
+  } else if (state.movable) {
+    // Flat 2D fallback prediction (Rapier not loaded): integrate + nudge toward the
+    // authoritative position. Identical to the pre-physics behaviour.
     const { mx, mz } = input.moveVector();
     const sin = Math.sin(input.yaw);
     const cos = Math.cos(input.yaw);
@@ -324,19 +492,28 @@ function frame(now) {
     state.self.z += vz * speed * dt;
     state.self.x = clamp(state.self.x, -state.bounds, state.bounds);
     state.self.z = clamp(state.self.z, -state.bounds, state.bounds);
-    // Gentle reconciliation toward the authoritative position.
     state.self.x += (state.serverSelf.x - state.self.x) * 0.08;
     state.self.z += (state.serverSelf.z - state.self.z) * 0.08;
+    state.self.y = 0;
   }
 
+  // Disguise orientation lock: keep the frozen facing unless right-click is held.
+  if (!state.selfDisguised || input.rotUnlock) state.selfDispYaw = input.yaw;
+
   if (scene) {
-    scene.setCamera(state.self, input.yaw, input.pitch);
+    // Displayed position = predicted truth + the decaying correction offset.
+    const disp = {
+      x: state.self.x + state.corr.x,
+      y: state.self.y + state.corr.y,
+      z: state.self.z + state.corr.z,
+    };
+    scene.setCamera(disp, input.yaw, input.pitch, state.selfDispYaw);
     scene.interpolate(0.25);
     scene.render();
     // Drive the aim reticle off the referee's yaw-forward vector (where the tag
     // cone actually swings), not screen center — the third-person eye sits off the
     // player. Null => first-person, reticle stays centered.
-    ui.setCrosshair(scene.aimScreenPoint(state.self, input.yaw));
+    ui.setCrosshair(scene.aimScreenPoint(disp, input.yaw));
   }
 
   requestAnimationFrame(frame);
@@ -348,7 +525,19 @@ function startInputLoop() {
     if (!session || !session.ready) return;
     if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
     const { mx, mz } = input.moveVector();
-    session.send({ t: C2S.INPUT, mx, mz, yaw: input.yaw, pitch: input.pitch });
+    // seq = the latest predicted-frame id; the host echoes it back as `ack` so we
+    // know which inputs it has applied. jump/rotUnlock drive physics + the disguise
+    // orientation lock.
+    session.send({
+      t: C2S.INPUT,
+      seq: state.seq,
+      mx,
+      mz,
+      yaw: input.yaw,
+      pitch: input.pitch,
+      jump: input.jump,
+      rotUnlock: input.rotUnlock,
+    });
   }, 1000 / 20);
 }
 

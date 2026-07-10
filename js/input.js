@@ -58,6 +58,9 @@ export class Input {
     this.pitch = 0;
     this.locked = false;
     this.sensitivity = 0.0022;
+    this.jump = false; // held: Space (desktop) / jump button (touch)
+    this.rotUnlock = false; // held: right-click (desktop) / rotate button (touch) —
+    //   lets a disguised prop rotate on yaw only (never tips)
 
     this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag' | 'primary'
     this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
@@ -78,7 +81,7 @@ export class Input {
     // Keyboard is always live (a hybrid laptop still has it; a pure phone won't
     // fire these). Action keys are gated on pointer lock below.
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => this.onKeyUp(e));
 
     if (this.touch) this._wireTouch(lockTrigger);
     else this._wireDesktop(lockTrigger);
@@ -108,8 +111,16 @@ export class Input {
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch));
     });
     canvas.addEventListener('mousedown', (e) => {
-      if (this.locked && e.button === 0) this.onAction('primary');
+      if (!this.locked) return;
+      if (e.button === 0) this.onAction('primary'); // left: tag / disguise
+      if (e.button === 2) this.rotUnlock = true; // right: unlock disguise yaw rotation
     });
+    // Right-click is held to rotate a disguise; catch the release even off-canvas,
+    // and stop the browser context menu from popping over the captured game.
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 2) this.rotUnlock = false;
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   // ---- touch --------------------------------------------------------------
@@ -171,6 +182,8 @@ export class Input {
     this.touchMove = { mx: 0, mz: 0 };
     this._lookPointerId = null;
     this._lookLast = null;
+    this.jump = false;
+    this.rotUnlock = false;
   }
 
   // Build the on-screen controls once: a joystick zone (bottom-left) and an action
@@ -201,7 +214,46 @@ export class Input {
       this.onAction('primary'); // main.js maps 'primary' to tag/disguise by role
     });
 
-    root.append(stick, action);
+    // Jump button (held): sets the same jump flag Space does on desktop.
+    const jump = document.createElement('button');
+    jump.id = 'touchJump';
+    jump.type = 'button';
+    jump.className = 'touch-btn touch-btn-sm';
+    jump.textContent = 'JUMP';
+    const jumpDown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.jump = true;
+    };
+    const jumpUp = () => {
+      this.jump = false;
+    };
+    jump.addEventListener('pointerdown', jumpDown);
+    jump.addEventListener('pointerup', jumpUp);
+    jump.addEventListener('pointercancel', jumpUp);
+    jump.addEventListener('pointerleave', jumpUp);
+
+    // Rotate button (held): the touch equivalent of holding right-click — lets a
+    // disguised prop turn on yaw while pressed (never tips).
+    const rotate = document.createElement('button');
+    rotate.id = 'touchRotate';
+    rotate.type = 'button';
+    rotate.className = 'touch-btn touch-btn-sm';
+    rotate.textContent = 'ROTATE';
+    const rotDown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.rotUnlock = true;
+    };
+    const rotUp = () => {
+      this.rotUnlock = false;
+    };
+    rotate.addEventListener('pointerdown', rotDown);
+    rotate.addEventListener('pointerup', rotUp);
+    rotate.addEventListener('pointercancel', rotUp);
+    rotate.addEventListener('pointerleave', rotUp);
+
+    root.append(stick, action, jump, rotate);
     (this.canvas.parentElement || document.body).appendChild(root);
     this._touchRoot = root;
     this._stickZone = stick;
@@ -238,10 +290,19 @@ export class Input {
 
   onKeyDown(e) {
     this.keys.add(e.code);
+    if (e.code === 'Space') {
+      this.jump = true; // held; physics only jumps when grounded
+      e.preventDefault(); // don't scroll the page
+    }
     if (!this.locked) return;
     if (e.code === 'KeyE') this.onAction('disguise');
-    if (e.code === 'KeyF' || e.code === 'Space') this.onAction('tag');
+    if (e.code === 'KeyF') this.onAction('tag');
     if (e.code === 'KeyV') this.onToggleView();
+  }
+
+  onKeyUp(e) {
+    this.keys.delete(e.code);
+    if (e.code === 'Space') this.jump = false;
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).

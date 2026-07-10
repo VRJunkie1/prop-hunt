@@ -14,6 +14,7 @@
 // the only thing that moved. Authority now lives on the host, not a server; see
 // memory/architecture.md for why that trade was made.
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
+import { loadRapier, PhysicsWorld } from './physics.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -33,6 +34,12 @@ export class Referee {
   constructor(config, code) {
     this.rules = config.rules;
     this.maps = config.maps;
+    // Shape catalogs (props = disguise pool, fixtures = static scenery). The referee
+    // never uses these to build the disguise pool (that's map.props only) — it needs
+    // them purely to hand the physics world collider dimensions for each type. Kept
+    // as separate merged lookups so a fixture still can't leak into the disguise pool.
+    this.propCatalog = config.props || {};
+    this.fixtureCatalog = config.fixtures || {};
     // DEFAULT_MAP_ID: the first map in maps.json until the host picks another via
     // setMapId(). This is the ONLY place the map choice lives; startMatch/integrate
     // read it without re-validating (see setMapId for why the id is trusted).
@@ -44,6 +51,16 @@ export class Referee {
 
     this.phase = PHASE.LOBBY;
     this.props = []; // authoritative prop instances for the active map
+    // ---- physics (Rapier) ----------------------------------------------------
+    // The authoritative simulation. Built LAZILY at match start (loadRapier pulls
+    // the WASM from a CDN on demand — never at boot, so the headless load check
+    // stays clean). Until it resolves, integrate() falls back to the old flat 2D
+    // movement so a match is never stalled by a slow/failed physics load. If Rapier
+    // can't load at all, the whole match just runs on the 2D fallback (no wall
+    // collision / props, but fully playable) — an honest graceful degrade.
+    this.physics = null;
+    this._physicsToken = 0; // bumped per match so a stale async build is discarded
+    this.awakePropTransforms = []; // set each tick from physics; broadcast to clients
     this.phaseEndsAt = 0;
     // Result of the most recent round, carried into the persistent lobby so a
     // group running back-to-back rounds sees who won without a page reload.
@@ -64,9 +81,12 @@ export class Referee {
     player.ready = false;
     player.disguise = null;
     player.pos = { x: 0, y: 0, z: 0 };
-    player.yaw = 0;
+    player.yaw = 0; // look yaw (drives movement + the tag/aim cone)
     player.pitch = 0;
-    player.input = { mx: 0, mz: 0 };
+    player.dispYaw = 0; // display yaw for a disguised prop (orientation lock)
+    player.rotUnlock = false; // right-click held: a disguise may rotate on yaw
+    player.lastInputSeq = 0; // echoed as `ack` for client reconciliation
+    player.input = { mx: 0, mz: 0, jump: false };
 
     this.players.set(player.id, player);
     if (!this.hostId) this.hostId = player.id; // host adds itself first
@@ -102,8 +122,12 @@ export class Referee {
     player.role = ROLE.HUNTER;
     player.alive = true;
     player.disguise = null;
-    player.input = { mx: 0, mz: 0 };
+    player.input = { mx: 0, mz: 0, jump: false };
     player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
+    player.dispYaw = player.yaw;
+    // If the world's physics is already up, give the newcomer a body immediately
+    // (otherwise integrate() adds it on the next tick via the join-race guard).
+    if (this.physics) this.physics.addPlayer(player.id, player.pos);
 
     send(player, { t: S2C.STARTED, mapId: this.mapId, props: this.props });
     send(player, { t: S2C.ROLE, role: player.role });
@@ -117,6 +141,7 @@ export class Referee {
   removePlayer(id) {
     if (!this.players.has(id)) return;
     this.players.delete(id);
+    if (this.physics) this.physics.removePlayer(id);
 
     // The host is the referee: if it leaves, the whole match is torn down by the
     // network layer and this instance is destroyed, so this reassignment only
@@ -133,6 +158,11 @@ export class Referee {
 
   destroy() {
     clearInterval(this.interval);
+    this._physicsToken++;
+    if (this.physics) {
+      this.physics.destroy();
+      this.physics = null;
+    }
   }
 
   // ---- messaging ----------------------------------------------------------
@@ -169,8 +199,19 @@ export class Referee {
     // still judges every guest's input; guests are not trusted with outcomes.)
     player.input.mx = Math.max(-1, Math.min(1, Number(msg.mx) || 0));
     player.input.mz = Math.max(-1, Math.min(1, Number(msg.mz) || 0));
+    player.input.jump = !!msg.jump;
+    player.rotUnlock = !!msg.rotUnlock;
     if (Number.isFinite(msg.yaw)) player.yaw = msg.yaw;
     if (Number.isFinite(msg.pitch)) player.pitch = Math.max(-1.5, Math.min(1.5, msg.pitch));
+    // Track the newest input id so each snapshot can tell this player which of its
+    // inputs the host has already applied (its reconciliation ack). Guard against a
+    // reordered/duplicate packet lowering the ack.
+    if (Number.isFinite(msg.seq) && msg.seq > player.lastInputSeq) player.lastInputSeq = msg.seq;
+
+    // Orientation lock: a disguised prop keeps its facing while moving (dispYaw
+    // frozen at disguise time) UNLESS right-click is held (rotUnlock), which lets it
+    // rotate on yaw only. Anyone not disguised simply faces where they look.
+    if (!player.disguise || player.rotUnlock) player.dispYaw = player.yaw;
   }
 
   applyDisguise(player, propId) {
@@ -182,6 +223,11 @@ export class Referee {
     const dz = prop.z - player.pos.z;
     if (Math.hypot(dx, dz) > this.rules.disguiseRange) return;
     player.disguise = prop.type;
+    // Lock the disguise's facing to the player's current look direction. From here
+    // it stays fixed while they move (a real prop doesn't spin as it slides) UNLESS
+    // right-click is held (rotUnlock), which lets them re-aim it on yaw only — never
+    // tipping. Updated in integrate(). See notes/physics.md (orientation lock).
+    player.dispYaw = player.yaw;
     send(player, { t: S2C.EVENT, kind: 'disguised', type: prop.type });
   }
 
@@ -277,7 +323,8 @@ export class Referee {
       const player = this.players.get(id);
       player.alive = true;
       player.disguise = null;
-      player.input = { mx: 0, mz: 0 };
+      player.input = { mx: 0, mz: 0, jump: false };
+      player.dispYaw = player.yaw;
       if (i < hunterCount) {
         player.role = ROLE.HUNTER;
         player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
@@ -291,6 +338,42 @@ export class Referee {
 
     this.broadcast({ t: S2C.STARTED, mapId: this.mapId, props: this.props });
     this.setPhase(PHASE.HIDING, this.rules.hidingSeconds);
+
+    // Spin up the authoritative Rapier world for this match (async: WASM loads from
+    // a CDN on demand). integrate() uses the flat 2D fallback until it's ready.
+    this._buildPhysics(map);
+  }
+
+  // Build (or rebuild) the authoritative physics world for the active map, then
+  // add every current player's kinematic body. Fully async + guarded by a token so
+  // a match that ends mid-load discards the stale world. On any failure the match
+  // simply keeps running on the 2D fallback — never a hard stop.
+  async _buildPhysics(map) {
+    const token = ++this._physicsToken;
+    if (this.physics) {
+      this.physics.destroy();
+      this.physics = null;
+    }
+    let RAPIER;
+    try {
+      RAPIER = await loadRapier();
+    } catch (e) {
+      // CDN unreachable / WASM blocked: stay on the 2D fallback for this match.
+      return;
+    }
+    if (token !== this._physicsToken) return; // a newer match (or reset) superseded us
+    try {
+      const world = new PhysicsWorld(RAPIER, map, this.props, { ...this.propCatalog, ...this.fixtureCatalog }, {
+        dynamicProps: true,
+        rules: this.rules,
+      });
+      for (const p of this.players.values()) {
+        if (p.alive && (p.role === ROLE.HUNTER || p.role === ROLE.PROP)) world.addPlayer(p.id, p.pos);
+      }
+      this.physics = world;
+    } catch (e) {
+      this.physics = null; // build blew up — 2D fallback carries the round
+    }
   }
 
   setPhase(phase, seconds) {
@@ -317,6 +400,14 @@ export class Referee {
   resetToLobby() {
     this.phase = PHASE.LOBBY;
     this.props = [];
+    // Tear down the match's physics world (bump the token so any still-in-flight
+    // async build from this match is discarded rather than adopted next round).
+    this._physicsToken++;
+    if (this.physics) {
+      this.physics.destroy();
+      this.physics = null;
+    }
+    this.awakePropTransforms = [];
     // DELIBERATE CARVE-OUT: this.mapId is NOT reset here. A reset-to-lobby clears
     // per-player round state (roles/alive/disguise/ready), but the chosen map is a
     // lobby *setting*, not per-player state — so the last-picked map stays selected
@@ -327,7 +418,8 @@ export class Referee {
       p.alive = true;
       p.disguise = null;
       p.ready = false;
-      p.input = { mx: 0, mz: 0 };
+      p.input = { mx: 0, mz: 0, jump: false };
+      p.rotUnlock = false;
     }
     this.broadcastLobby();
   }
@@ -363,6 +455,37 @@ export class Referee {
   integrate(dt) {
     const map = this.maps[this.mapId];
     const bound = map.size / 2 - this.rules.mapMargin;
+
+    // Physics path: real collide-and-slide vs walls/fixtures, jump, prop shoving.
+    if (this.physics) {
+      for (const p of this.players.values()) {
+        if (!p.alive) continue;
+        if (!this.physics.hasPlayer(p.id)) this.physics.addPlayer(p.id, p.pos); // join race
+        const frozen = p.role === ROLE.HUNTER && this.phase === PHASE.HIDING;
+        this.physics.setPlayerInput(
+          p.id,
+          frozen
+            ? { mx: 0, mz: 0, yaw: p.yaw, jump: false }
+            : { mx: p.input.mx, mz: p.input.mz, yaw: p.yaw, jump: p.input.jump }
+        );
+      }
+      this.physics.step(dt);
+      for (const p of this.players.values()) {
+        if (!p.alive) continue;
+        const t = this.physics.getPlayer(p.id);
+        if (t) {
+          // Keep the arena-edge clamp as a cheap backstop behind the wall colliders.
+          p.pos.x = clamp(t.x, -bound, bound);
+          p.pos.y = t.y;
+          p.pos.z = clamp(t.z, -bound, bound);
+        }
+      }
+      this.awakePropTransforms = this.physics.awakeProps();
+      return;
+    }
+
+    // 2D fallback (physics not loaded yet, or Rapier unavailable): flat movement,
+    // no vertical, no collision — playable, matches the pre-physics behaviour.
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       // Hunters are frozen during the hiding period.
@@ -380,6 +503,7 @@ export class Referee {
       }
       p.pos.x = clamp(p.pos.x + vx * this.rules.moveSpeed * dt, -bound, bound);
       p.pos.z = clamp(p.pos.z + vz * this.rules.moveSpeed * dt, -bound, bound);
+      p.pos.y = 0;
     }
   }
 
@@ -402,8 +526,14 @@ export class Referee {
       id: p.id,
       name: p.name,
       x: round2(p.pos.x),
+      y: round2(p.pos.y || 0), // jump height (0 on the flat fallback)
       z: round2(p.pos.z),
-      yaw: round3(p.yaw),
+      // Display yaw: a disguised prop broadcasts its LOCKED facing (dispYaw), so it
+      // won't spin as it slides; everyone else faces where they look. dispYaw tracks
+      // yaw for the unlocked/undisguised case (see applyInput).
+      yaw: round3(p.disguise ? p.dispYaw : p.yaw),
+      // Reconciliation ack: the last INPUT.seq the host consumed from this player.
+      ack: p.lastInputSeq,
       alive: p.alive,
       // Roles are hidden: we expose that hunters are hunters (they are the
       // visible seekers) and props only via their chosen disguise. We never
@@ -426,6 +556,18 @@ export class Referee {
       propsAlive,
       propsTotal,
       players,
+      // Only AWAKE dynamic props ride each snapshot (sleeping ones haven't moved, so
+      // there's nothing to send — the bandwidth win). Empty on the 2D fallback.
+      props: this.awakePropTransforms.map((q) => ({
+        id: q.id,
+        x: round2(q.x),
+        y: round2(q.y),
+        z: round2(q.z),
+        qx: round3(q.qx),
+        qy: round3(q.qy),
+        qz: round3(q.qz),
+        qw: round3(q.qw),
+      })),
     });
   }
 }

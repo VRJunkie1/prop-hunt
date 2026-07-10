@@ -179,24 +179,56 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
 - **Static vs dynamic in a map** (added with the `restaurant` map): a map may
   carry an optional **`fixtures[]`** array (immovable building pieces — walls,
   counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable
-  disguise pool). Fixtures render + go into `scene.colliders` (client-side, from
-  local map data) but the referee never sees them, so they're never disguisable;
-  props stay the disguise pool. This is the honest mapping of "world colliders vs
-  disguise props" onto an engine with **no rigid-body physics** — the only
-  collision primitive is the third-person camera's `scene.colliders` raycast, and
-  player movement is still bound only by the map-edge clamp (players pass through
-  objects; adding real player collision would be a separate lockstep change to
-  referee `integrate` + client prediction). Detail: `notes/restaurant-map.md`.
+  disguise pool). Fixtures render + go into `scene.colliders` (camera raycast) but
+  the referee never treats them as disguisable; props stay the disguise pool.
+  **As of the 2026-07 physics pass this split also drives the Rapier world:**
+  fixtures + walls + ground become STATIC colliders; props become DYNAMIC rigid
+  bodies. See the Physics + netcode section below. Detail: `notes/restaurant-map.md`.
 
-## Movement convention (must stay in sync between referee & client prediction)
+## Physics + netcode (Rapier, host-authoritative prediction) — 2026-07 `physics-net`
+
+Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
+
+- **Engine:** Rapier (`@dimforge/rapier3d-compat`, WASM), in `shared/physics.js`.
+  Lazy-loaded at match start only (headless load check stays clean). NOT
+  cross-platform deterministic — which is exactly why netcode is host-authoritative
+  with reconciliation, not lockstep.
+- **Players** are kinematic capsule character bodies (run/jump, real collide-and-
+  slide vs walls/fixtures — FIXES the old pass-through gap — shove dynamic props,
+  can never be knocked over). **Map fixtures/walls/ground** are static colliders.
+  **Dynamic props** are rigid bodies that get shoved (the TELL: real props tumble,
+  a kinematic disguised player doesn't).
+- **Host** runs the one authoritative world; broadcasts player transforms + AWAKE
+  prop transforms at 15 Hz with an `ack` seq per player. **Guests + host** each run
+  a local prediction world for their OWN player and reconcile (rewind to the
+  authoritative pose, replay unacked inputs, ease/snap the residual) — this is full
+  prediction + reconciliation, the target design, NOT the interpolation-only
+  fallback. Remote players + awake props interpolate.
+- **Disguise orientation lock:** a disguised prop keeps a fixed facing while moving
+  unless right-click / ROTATE is held (yaw-only, never tips). Referee-authoritative
+  via `dispYaw` in the snapshot.
+- **Graceful degrade:** if Rapier fails to load, both host and client revert to the
+  pre-physics flat 2D movement (no collision/jump/props) — playable, never a hard
+  stop. The old map-edge clamp survives as a backstop behind the wall colliders.
+- **Unverifiable headless:** the bot check is a load test. Netcode/physics FEEL
+  needs a live multiplayer playtest (real people, real pings). Do not call it done
+  until then.
+
+## Movement convention (must stay in sync EVERYWHERE it's duplicated)
 
 yaw about Y. forward = (-sin yaw, -cos yaw), right = (cos yaw, -sin yaw).
 `vx = -sin*mz + cos*mx`, `vz = -cos*mz - sin*mx`, normalized if len>1, then
 `pos += v * moveSpeed * dt`, clamped to `±(map.size/2 - mapMargin)`. Three.js
-camera uses `YXZ` rotation order (yaw then pitch). Both `Referee.integrate` and
-`main.js` frame loop use this exact formula — change both together. For the host,
-reconciliation is a near-no-op (its authoritative pos tracks its prediction with
-no round trip); guests still predict against real latency.
+camera uses `YXZ` rotation order (yaw then pitch).
+
+This exact horizontal formula now appears in THREE places and must stay identical:
+`Referee.integrate` (2D fallback), `main.js` frame loop (2D fallback), and
+`PhysicsWorld._substep` (the Rapier path both host + client use). Change all three
+together. With physics active the horizontal displacement is fed to the character
+controller (collide-and-slide) instead of applied raw, and a vertical `vy`
+(gravity/jump) is added — but the input→direction mapping is the same. For the
+host, reconciliation is near-a-no-op (authoritative pos tracks its prediction via
+instant loopback); guests predict + reconcile against real latency.
 
 ## Phase state machine (referee-owned, in `shared/referee.js`)
 
