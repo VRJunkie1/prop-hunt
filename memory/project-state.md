@@ -8,7 +8,31 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: RESTAURANT REAL GLB MESHES WIRED IN (2026-07-09, on `vrmike/dev`). Not yet playtested.
+## Status: RESTAURANT MAP — SECOND PASS / LAYOUT FIX (2026-07-09, on `vrmike/dev`). Not yet playtested.
+
+The `restaurant` map got a full layout rework on the SAME footprint (size 36 — density
+by ADDING objects, never shrinking bounds). Full detail: `memory/notes/restaurant-map.md`
+(top "SECOND PASS" section). Highlights:
+- **Floor slab clipping FIXED** via a new non-uniform `modelDims:{w,h,d}` scale path in
+  `js/scene.js _instantiateModel` — the floor was scaling uniformly to width 8, which
+  inflated its thickness into a ~2-foot checkerboard slab. `floor_kitchen` now forces
+  8×0.2×8 (flush, thin) regardless of the GLB's native proportions.
+- **Prop `y` offset** added (referee `this.props` build → `STARTED` → scene props loop),
+  mirroring the existing `rot` pass-through, so a disguisable food item can sit ON a
+  table. Disguise range is x/z-only, so y is purely visual.
+- **Kitchen/dining split** by a divider counter line at z=−4.5 (two walkways). Kitchen
+  gear along the back + a prep row; dining = 6 round tables (chairs each rotated to face
+  their table via `rot=atan2(dx,dz)`) + large/small tables. ~90 fixtures, ~56 props.
+- **Food on surfaces** (fixtures with y), most decorative food is fixed (non-disguisable,
+  zero bandwidth); only ~6 disguisable food props remain, on tables.
+- **All pack assets now referenced** (menu, knife, planks, towels, jars, dinner, extra
+  stoves/crates/dishes/raw+cut foods). New catalog entries in fixtures.json + props.json.
+- ONLY three tiny engine changes (`modelDims` non-uniform scale, prop `y` thread, dims
+  pass-through); circus_lot/toy_workshop untouched (no `fixtures`/`modelDims`/prop-`y`
+  keys → same code paths as before). ⚠️ Playtest note: if chairs face OUTWARD, chair
+  GLB native front is +z not −z → add π to every chair `rot`. See restaurant-map.md.
+
+## Status: RESTAURANT REAL GLB MESHES WIRED IN (first pass, 2026-07-09, on `vrmike/dev`). Superseded by the layout fix above.
 
 The `restaurant` map now renders the real CC0 "Restaurant Bits" GLB meshes (Kay
 Lousberg) instead of primitive boxes. An earlier bulk fetch had downloaded the GLBs

@@ -1,5 +1,66 @@
 # Restaurant map + the static/dynamic (fixtures vs props) split
 
+## SECOND PASS — layout fix (2026-07-09, vrmike/dev)
+The first pass wired the real GLBs correctly but the LAYOUT was sparse/buggy. This
+pass fixed layout + density on the SAME footprint (size 36 unchanged — density comes
+from ADDING objects, never from shrinking bounds). Netcode gate confirmed first:
+fixtures are already excluded from the referee's prop build (`this.props =
+(map.props||[]).map(...)` reads map.props only; `STARTED{props}` carries props only;
+fixtures render from each client's LOCAL `map.fixtures`). So adding hundreds of
+fixtures costs ZERO bandwidth and can't widen the disguise pool — no referee change
+was needed for density.
+
+Three tiny, symmetric engine changes (all in lane):
+1. **Floor scale bug → `modelDims`.** Root cause was NOT a hardcoded 2.0 scale: it
+   was `_instantiateModel` scaling the GLB *uniformly* so its largest dim ==
+   `modelSize` (8). If a tile's native proportions aren't razor-thin, forcing width→8
+   inflates thickness too (the ~0.6-unit "2-foot checkerboard slab"). Fix: a new
+   optional `modelDims:{w,h,d}` scales the GLB PER-AXIS to exact world sizes
+   (non-uniform), guarded against a zero native extent. `floor_kitchen` now uses
+   `modelDims:{8,0.2,8}` → always a thin flush slab regardless of the source GLB.
+   Uniform `modelSize`/max-dim path is unchanged for everything else.
+2. **Prop `y` offset.** Props now honour an optional `y` (like fixtures already did),
+   threaded referee (`this.props` build) → `STARTED` → `scene.buildWorld` props loop
+   → `_queueModel`. Lets a *disguisable* food item rest ON a table instead of the
+   floor. Disguise range is x/z-only so y is purely visual; mirrors the existing
+   `rot` pass-through.
+3. No other engine change. `_applyModel`/`meshForPlayer` pass `slot.dims`/`c.modelDims`
+   through to `_instantiateModel`.
+
+Layout (all data in `maps.json` → `restaurant`, catalogs in fixtures/props.json):
+- **Two zones, same bounds.** KITCHEN across the back (z≤−6), DINING across the front
+  (z≥0), split by a **divider** counter/cabinet line at z=−4.5 with two clear
+  walkways (~x=−7.5 and ~x=+7.5). Kitchen gear along the back wall (fridges, ovens,
+  stove+extractors, cabinets, sinks, shelf) + a mid-kitchen PREP ROW of
+  counters/kitchen_tables/table_with_food/table_with_sink/dishrack.
+- **Density.** 6 round_tables (each ringed with 4 chairs) + a large_table (4 chairs) +
+  a small_table (4 stools), ~12 crates (many goods types) along the walls, floor pots,
+  ~90 fixtures total incl. food/cookware/dishes sitting ON surfaces via `y`.
+- **Chairs face their table.** Each chair's `rot = atan2(dx,dz)` of its offset from
+  that table's centre (three.js forward is −z, matching the referee aim vector), so
+  chairs point INWARD per-table — not one global rotation like pass 1. ⚠️ ASSUMES
+  `chair.glb`/`chair_stool.glb` native front is −z. If a playtest shows chairs facing
+  OUTWARD (backs to tables), the whole set is 180° off: add π to every chair `rot`
+  (or introduce a `modelYaw` catalog field). The radial arrangement itself is correct
+  either way.
+- **Food on surfaces, not floor.** Burgers/steak/cut-veg/plates/bowls/dinners/jars/
+  menus placed as FIXTURES with `y≈1.0` on counters/tables (non-disguisable, zero
+  bandwidth). Only a **handful** of disguisable food props remain (6: burger/veg_burger/
+  tomato/cheese/burger/bowl), now on tables via prop-`y`. Disguise pool = chairs,
+  stools, crates, pots + those 6 (~56 props total).
+- **All assets used.** Previously-unplaced GLBs are now referenced: menu, chef_knife,
+  planks, paper_towel, towel_rail, jars, dinner, plain crate, table_with_food,
+  table_with_sink, single/plain stoves, pot_a/pan_a/lids, small/dirty dishes, raw &
+  cut foods (steaks, hams, buns, patties, cut tomato/carrot/onion/potato/lettuce,
+  onion_rings, cheese slices), extra crate goods (onions/carrots/ham/steaks/lettuce).
+  New catalog entries: many in `fixtures.json` (decor/food) + 7 crate types in
+  `props.json`.
+
+Everything below documents the FIRST pass and the fixtures/props seam (still current).
+
+---
+
+
 Built on `vrmike/dev`. A third selectable map (`restaurant`) themed on Kay
 Lousberg's CC0 "Restaurant Bits" pack, plus the small engine seam that lets a map
 carry **immovable world fixtures** separately from its **movable disguise props**.

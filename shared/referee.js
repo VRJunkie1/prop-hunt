@@ -252,6 +252,11 @@ export class Referee {
       type: p.type,
       x: p.x,
       z: p.z,
+      // Optional y-offset so a disguise prop can rest ON a surface (e.g. a burger on
+      // a table) rather than only on the floor. Purely visual for the static
+      // instance; disguise range (applyDisguise) is computed from x/z only, so this
+      // never affects gameplay. Mirrors the existing `rot` pass-through.
+      y: p.y || 0,
       rot: p.rot || 0,
     }));
 

@@ -78,9 +78,15 @@ disguisable):
 | `small_table`    | `table_round_a_small.glb`      |
 | `door`           | `door.glb`                     |
 
-The pack ships many more food/cookware variants (steaks, hams, onions rings, buns,
-sauces, lids, jars, …) not yet placed in the map — they're available to reference
-from `props.json`/`maps.json` with no engine change.
+**Second pass (layout fix)** added catalog entries + placements for the rest of the
+pack: `menu`, `chef_knife`, `planks`, `paper_towel`, `towel_rail`, `jars`, `dinner`,
+plain `crate`, `table_with_food`, `table_with_sink`, single/plain stoves, `pot_a`/
+`pan_a`/lids, small & dirty dishes, and the raw/cut foods (steaks, hams, buns,
+patties, cut tomato/carrot/onion/potato/lettuce, onion rings, cheese slices), plus
+extra crate goods (onions/carrots/ham/steaks/lettuce). Decorative food/cookware went
+into `fixtures.json` (placed ON surfaces via a `y` offset, non-disguisable); new crate
+goods went into `props.json` (floor disguise pool). Essentially the whole pack is now
+referenced. See `memory/notes/restaurant-map.md` (SECOND PASS section).
 
 ## Duplicate files awaiting removal
 

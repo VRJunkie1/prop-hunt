@@ -200,7 +200,11 @@ export class Scene3D {
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
-      built.mesh.position.set(p.x, built.baseY, p.z);
+      // Props may carry an optional `y` (like fixtures) so a disguise item can sit
+      // ON a surface (e.g. a burger on a table) instead of only on the floor. The
+      // y-offset applies to the static world instance only; when a player disguises
+      // as this type, meshForPlayer positions it at the player's own feet.
+      built.mesh.position.set(p.x, built.baseY + (p.y || 0), p.z);
       built.mesh.rotation.y = p.rot || 0;
       this.scene.add(built.mesh);
       this.colliders.push(built.mesh); // ...and against static props
@@ -223,6 +227,12 @@ export class Scene3D {
       holder,
       path: '/assets/' + c.model,
       target: targetSizeForEntry(c),
+      // Optional non-uniform target dims {w,h,d}. When present the GLB is scaled per
+      // axis to these exact world sizes instead of uniformly by its largest
+      // dimension — the reliable fix for pieces whose native proportions don't match
+      // the intended footprint (e.g. a floor tile that must stay thin however thick
+      // its GLB is). Uniform max-dim scaling inflated the kitchen floor's thickness.
+      dims: c.modelDims || null,
       x: entry.x,
       y: entry.y || 0,
       z: entry.z,
@@ -244,7 +254,7 @@ export class Scene3D {
       if (c.model) {
         const tmpl = this._modelCache.get('/assets/' + c.model);
         if (tmpl && tmpl !== 'failed') {
-          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c));
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.modelDims || null);
           inst.userData.baseY = 0;
           return inst;
         }
@@ -478,7 +488,7 @@ export class Scene3D {
   // Place a loaded model into a slot and hide (but keep) its primitive.
   _applyModel(template, slot, token) {
     if (token !== this._buildToken) return; // match ended / restarted; drop it
-    const inst = this._instantiateModel(template, slot.target);
+    const inst = this._instantiateModel(template, slot.target, slot.dims);
     inst.position.set(slot.x, slot.y || 0, slot.z);
     inst.rotation.y = slot.rot || 0;
     this.scene.add(inst);
@@ -492,13 +502,24 @@ export class Scene3D {
   // Clone a loaded GLB, scale it so its largest dimension == `target` world units,
   // then centre it in x/z and rest its base on y=0. Wrapped in a group so the caller
   // can position/rotate it freely regardless of the model's internal origin.
-  _instantiateModel(template, target) {
+  _instantiateModel(template, target, dims) {
     const inner = template.clone(true);
     const box = new THREE.Box3().setFromObject(inner);
     const size = new THREE.Vector3();
     box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    inner.scale.setScalar(target / maxDim);
+    if (dims) {
+      // Non-uniform: scale each axis to an exact world size. Guards against a zero
+      // native extent (a perfectly flat mesh) so a floor stays the intended thickness
+      // no matter how thick or thin the source GLB is.
+      inner.scale.set(
+        dims.w / (size.x || 1),
+        dims.h / (size.y || 1),
+        dims.d / (size.z || 1)
+      );
+    } else {
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      inner.scale.setScalar(target / maxDim);
+    }
     const box2 = new THREE.Box3().setFromObject(inner);
     const center = new THREE.Vector3();
     box2.getCenter(center);
