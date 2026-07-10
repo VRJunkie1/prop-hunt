@@ -332,3 +332,5 @@ third-person-camera). Dead code awaiting `git rm`: `client/`, `server/`.
 - TELL MECHANIC: real props are physics-driven (get shoved), disguised players are kinematic (don't) = the tell. Fake-nudge softener already noted (later; yaw+translate only, never tip).
 - CONSTRAINTS: static site, no build step, P2P WebRTC via PeerJS broker, referee stays authoritative & transport-agnostic, flat repo-root layout, lazy CDN. Build on vrmike/dev.
 - VERIFICATION CAVEAT: bot auto-check is a headless LOAD test only — it CANNOT feel-test physics/netcode. This build needs a live multiplayer playtest as real QA. (noted 2026-07-09 by VRmike)
+
+- prop-hunt FEATURE ROADMAP (VRmike's high-level todo list) lives in the prop-hunt repo at memory/notes/roadmap.md — NOT kept in main context. LOAD it (read the repo / read_project_state) whenever discussing prop-hunt plans, and be ready to post it on request and edit it. Written 2026-07-09. (noted 2026-07-09 by VRmike)
