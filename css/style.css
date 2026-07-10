@@ -237,6 +237,21 @@ button.ghost:hover { background: #3d2a66; }
 }
 .touch-btn:active { transform: scale(0.94); background: #ff4fa3; }
 
+/* Secondary action buttons (jump, rotate): smaller, stacked above the main ACTION
+   button. IDs are used for size/anchor so they beat the .touch-btn portrait/landscape
+   media rules below (equal-class specificity would otherwise let those win). */
+#touchJump, #touchRotate {
+  width: 66px;
+  height: 66px;
+  font-size: 12px;
+  background: #6f4fd0cc;
+  border-color: #ffffff55;
+  right: calc(24px + env(safe-area-inset-right, 0px));
+}
+#touchJump { bottom: calc(138px + env(safe-area-inset-bottom, 0px)); }
+#touchRotate { bottom: calc(214px + env(safe-area-inset-bottom, 0px)); }
+#touchJump:active, #touchRotate:active { transform: scale(0.94); background: #6f4fd0; }
+
 /* Landscape: shorter screen, so keep the stick zone lower and tighter and lift the
    action button clear of the thumb resting spot. */
 @media (orientation: landscape) {

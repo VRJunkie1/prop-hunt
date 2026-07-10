@@ -103,6 +103,8 @@ export class Scene3D {
     this._vDesired = new THREE.Vector3();
     this._vDir = new THREE.Vector3();
     this._vAim = new THREE.Vector3();
+    this._qScratch = new THREE.Quaternion(); // reused for awake-prop orientation
+    this.propMeshes = new Map(); // id -> dynamic-prop render record (rebuilt per match)
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -195,20 +197,33 @@ export class Scene3D {
     }
 
     // Dynamic props (the disguise pool — chairs, stools, crates, dishes, food).
-    // Built from the referee's authoritative prop instances; these are the
-    // objects props can morph into.
+    // Built from the referee's authoritative prop instances; these are the objects
+    // props can morph into AND real dynamic rigid bodies the host can shove around.
+    //
+    // Each prop lives in a CONTAINER Group whose origin is the body CENTRE (== the
+    // physics body's translation), so an awake prop's snapshot transform {x,y,z +
+    // quaternion} maps straight onto the container. The primitive sits centred at the
+    // container origin; a swapped-in GLB is offset down by baseY so its base rests on
+    // the floor — both then rotate about the centre exactly as the rigid body does.
+    this.propMeshes = new Map(); // id -> { container, primitive, baseY, target, awake }
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
-      // Props may carry an optional `y` (like fixtures) so a disguise item can sit
-      // ON a surface (e.g. a burger on a table) instead of only on the floor. The
-      // y-offset applies to the static world instance only; when a player disguises
-      // as this type, meshForPlayer positions it at the player's own feet.
-      built.mesh.position.set(p.x, built.baseY + (p.y || 0), p.z);
-      built.mesh.rotation.y = p.rot || 0;
-      this.scene.add(built.mesh);
-      this.colliders.push(built.mesh); // ...and against static props
-      this._queueModel(p, built.mesh, catalog); // swap in the real GLB if any
+      const container = new THREE.Group();
+      container.position.set(p.x, built.baseY + (p.y || 0), p.z);
+      container.rotation.y = p.rot || 0;
+      built.mesh.position.set(0, 0, 0); // centred on the container origin
+      container.add(built.mesh);
+      this.scene.add(container);
+      this.colliders.push(built.mesh); // camera pulls in against props too
+      this.propMeshes.set(p.id, {
+        container,
+        primitive: built.mesh,
+        baseY: built.baseY,
+        target: null, // set once the prop first appears AWAKE in a snapshot
+        awake: false,
+      });
+      this._queueModel(p, built.mesh, catalog, container, built.baseY); // swap in the real GLB if any
     }
 
     // Kick off the real-mesh load for everything queued above. Fire-and-forget:
@@ -220,11 +235,16 @@ export class Scene3D {
   // Record a primitive that has a real GLB to swap in later. `entry` is the map's
   // fixture/prop record (carries type/x/z and optional y/rot); `holder` is the
   // primitive mesh already added to the scene. Called for both fixtures and props.
-  _queueModel(entry, holder, catalog) {
+  _queueModel(entry, holder, catalog, container = null, baseY = 0) {
     const c = catalog[entry.type];
     if (!c || !c.model) return;
     this._modelSlots.push({
       holder,
+      // For a dynamic prop the GLB is parented to the prop's container (which the
+      // snapshot moves) and offset so its base rests on the floor; for a fixture it
+      // is placed once in world space. container == null => fixture path.
+      container,
+      baseY,
       path: '/assets/' + c.model,
       target: targetSizeForEntry(c),
       // Optional non-uniform target dims {w,h,d}. When present the GLB is scaled per
@@ -291,12 +311,13 @@ export class Scene3D {
         // New player, or appearance changed (disguised / role) -> rebuild mesh.
         if (entry) this.scene.remove(entry.mesh);
         const mesh = this.meshForPlayer(p);
-        mesh.position.set(p.x, mesh.userData.baseY, p.z);
+        mesh.position.set(p.x, mesh.userData.baseY + (p.y || 0), p.z);
         this.scene.add(mesh);
-        entry = { mesh, kind, target: { x: p.x, z: p.z, yaw: p.yaw } };
+        entry = { mesh, kind, target: { x: p.x, y: p.y || 0, z: p.z, yaw: p.yaw } };
         this.players.set(p.id, entry);
       }
       entry.target.x = p.x;
+      entry.target.y = p.y || 0;
       entry.target.z = p.z;
       entry.target.yaw = p.yaw;
       entry.mesh.visible = p.alive;
@@ -310,13 +331,50 @@ export class Scene3D {
     }
   }
 
-  // Smoothly move other players toward their latest snapshot position.
+  // Apply the awake dynamic-prop transforms from a snapshot. Only props the host
+  // reported as awake (moving) are here; sleeping props keep their built pose, so
+  // most props never touch this. A prop first seen awake starts interpolating from
+  // wherever it was built. This is the visible half of the physics TELL — real props
+  // get shoved and tumble; a disguised player (kinematic) never does.
+  syncProps(awake) {
+    if (!this.propMeshes || !awake) return;
+    for (const q of awake) {
+      const rec = this.propMeshes.get(q.id);
+      if (!rec) continue;
+      if (!rec.target) rec.target = { x: q.x, y: q.y, z: q.z, qx: q.qx, qy: q.qy, qz: q.qz, qw: q.qw };
+      else {
+        rec.target.x = q.x;
+        rec.target.y = q.y;
+        rec.target.z = q.z;
+        rec.target.qx = q.qx;
+        rec.target.qy = q.qy;
+        rec.target.qz = q.qz;
+        rec.target.qw = q.qw;
+      }
+      rec.awake = true;
+    }
+  }
+
+  // Smoothly move other players + awake props toward their latest snapshot pose.
   interpolate(alpha) {
     for (const entry of this.players.values()) {
       const m = entry.mesh;
       m.position.x += (entry.target.x - m.position.x) * alpha;
       m.position.z += (entry.target.z - m.position.z) * alpha;
+      const yTarget = (m.userData.baseY || 0) + (entry.target.y || 0);
+      m.position.y += (yTarget - m.position.y) * alpha;
       m.rotation.y = entry.target.yaw;
+    }
+    if (this.propMeshes) {
+      for (const rec of this.propMeshes.values()) {
+        if (!rec.awake || !rec.target) continue;
+        const c = rec.container;
+        c.position.x += (rec.target.x - c.position.x) * alpha;
+        c.position.y += (rec.target.y - c.position.y) * alpha;
+        c.position.z += (rec.target.z - c.position.z) * alpha;
+        this._qScratch.set(rec.target.qx, rec.target.qy, rec.target.qz, rec.target.qw);
+        c.quaternion.slerp(this._qScratch, alpha);
+      }
     }
   }
 
@@ -356,9 +414,13 @@ export class Scene3D {
   // Place the camera. Third-person = orbit behind/above the player (collision-aware,
   // smoothed); first-person = classic eye view. yaw/pitch come from the same
   // mouse-look / touch-drag inputs either way — only their interpretation changes.
-  setCamera(pos, yaw, pitch) {
+  // selfYaw (optional) is the facing of the local player's OWN model. It differs
+  // from `yaw` (the look/camera yaw) only while disguised with the orientation lock
+  // engaged — then the prop stays fixed even as the camera orbits. Defaults to yaw.
+  setCamera(pos, yaw, pitch, selfYaw = yaw) {
+    const py = pos.y || 0; // jump height
     if (!this.thirdPerson) {
-      this.camera.position.set(pos.x, 1.6, pos.z);
+      this.camera.position.set(pos.x, 1.6 + py, pos.z);
       this.camera.rotation.set(0, 0, 0, 'YXZ');
       this.camera.rotation.order = 'YXZ';
       this.camera.rotation.y = yaw;
@@ -374,10 +436,13 @@ export class Scene3D {
 
     // Look-at point on the player; keep the own avatar glued to the predicted
     // position/yaw so it tracks the camera without snapshot lag.
-    const target = this._vTarget.set(pos.x, this._camHeadY, pos.z);
+    const target = this._vTarget.set(pos.x, this._camHeadY + py, pos.z);
     if (this.selfMesh) {
-      this.selfMesh.position.set(pos.x, this.selfMesh.userData.baseY, pos.z);
-      this.selfMesh.rotation.y = yaw;
+      this.selfMesh.position.set(pos.x, this.selfMesh.userData.baseY + py, pos.z);
+      // Own model faces selfYaw (== look yaw normally; the frozen disguise facing
+      // while the orientation lock is on) so a locked disguise doesn't spin as you
+      // turn the camera — matching what other players see of you.
+      this.selfMesh.rotation.y = selfYaw;
       this.selfMesh.visible = this.selfAlive;
     }
 
@@ -489,9 +554,18 @@ export class Scene3D {
   _applyModel(template, slot, token) {
     if (token !== this._buildToken) return; // match ended / restarted; drop it
     const inst = this._instantiateModel(template, slot.target, slot.dims);
-    inst.position.set(slot.x, slot.y || 0, slot.z);
-    inst.rotation.y = slot.rot || 0;
-    this.scene.add(inst);
+    if (slot.container) {
+      // Dynamic prop: parent the GLB to the prop's container (origin == body centre)
+      // and drop it by baseY so its base rests on the floor. The container is what
+      // the snapshot moves/rotates, so the GLB follows the physics body for free.
+      inst.position.set(0, -slot.baseY, 0);
+      slot.container.add(inst);
+    } else {
+      // Fixture: place once in world space.
+      inst.position.set(slot.x, slot.y || 0, slot.z);
+      inst.rotation.y = slot.rot || 0;
+      this.scene.add(inst);
+    }
     // Keep the primitive as the (now invisible) camera-collision proxy so the
     // third-person pull-in behaves identically whatever the GLB's real silhouette
     // is — the raycaster still hits it (invisible objects are not skipped). If the

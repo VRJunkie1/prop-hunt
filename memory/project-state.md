@@ -8,6 +8,45 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: PHYSICS + MULTIPLAYER NETCODE — THE BIG PASS (2026-07-09, on `physics-net`). NOT playtested (can't be, headless).
+
+The single-pass "yolo" build VRmike approved: Rapier physics + host-authoritative
+netcode with full client-side prediction + reconciliation, all at once. Full detail
+in `memory/notes/physics.md` + `netcode.md`. **Which architecture shipped: the
+TARGET** (prediction + rewind/replay reconciliation for the local player), NOT the
+interpolation-only fallback. Honest status below.
+
+- **Rapier engine** (`shared/physics.js`, `PhysicsWorld` + `loadRapier`): WASM,
+  lazy-loaded at match start (zero boot fetch — headless load check stays green).
+  Cuboid/cyl/cone/ball colliders from the catalog primitive footprint (NOT convex
+  hulls from the GLBs — deliberate: GLBs load async/can fail; documented).
+- **Players** = kinematic capsule character bodies (run, JUMP, real collide-and-
+  slide vs walls/fixtures — fixes the old clip-through-everything gap — shove
+  dynamic props, never knocked over). **Fixtures/walls/ground** = static colliders.
+  **Props** = dynamic rigid bodies that get shoved (the TELL vs kinematic disguises).
+- **Host** runs the one authoritative world (`referee.integrate` → physics.step),
+  broadcasts player transforms + AWAKE-only prop transforms at 15 Hz with per-player
+  `ack` seq. **Guests + host** predict their own player in a local Rapier world and
+  reconcile (rewind to authoritative + replay unacked inputs + ease/snap residual).
+  Remote players + awake props interpolate.
+- **Disguise orientation lock**: disguised prop keeps a fixed facing while moving;
+  hold right-click (desktop) / ROTATE (touch) to yaw-rotate — never tips. This is
+  the roadmap "locked orientation" + the fake-nudge precursor.
+- **Jump**: Space / JUMP button. Input protocol gained `seq, jump, rotUnlock`;
+  snapshot gained `y, ack` per player + `props[]`.
+- **GRACEFUL DEGRADE**: if Rapier can't load, BOTH sides fall back to the old flat
+  2D movement (no collision/jump/props) — playable, never a hard stop.
+- **Regression-safe**: circus_lot/toy_workshop (no fixtures) build ground+walls+
+  dynamic props only; solo play = host-only physics (no netcode); mid-game join adds
+  a physics body; persistent lobby tears the world down on reset. Rules/referee phase
+  machine unchanged. 2D fallback preserves exact prior behaviour.
+- **UNTESTED — the load-bearing caveat**: the bot check is a headless LOAD test; it
+  CANNOT feel-test physics/netcode. Prediction jitter, prop-shove rubber-band, jump
+  smoothness, and the reconcile snap threshold all need a LIVE multiplayer playtest
+  with real people + real pings. Expect a tuning pass. Files: `shared/physics.js`
+  (new), `shared/referee.js`, `shared/protocol.js`, `js/main.js`, `js/scene.js`,
+  `js/input.js`, `css/style.css`, `shared/config/rules.json`.
+
 ## Status: RESTAURANT MAP — SECOND PASS / LAYOUT FIX (2026-07-09, on `vrmike/dev`). Not yet playtested.
 
 The `restaurant` map got a full layout rework on the SAME footprint (size 36 — density
@@ -354,7 +393,11 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       referee. See architecture.md.
 - **Undisguised props are visible** (render as neutral capsules and move). Fine
       for skeleton; future: auto-disguise at hunt start, or hide undisguised props.
-- No client-side prediction of collisions; players can overlap props/walls.
+- ~~No client-side prediction of collisions; players can overlap props/walls.~~
+  RESOLVED by the physics pass (`physics-net`): players now collide-and-slide vs
+  walls/fixtures/props via a local Rapier prediction world, reconciled to the host.
+  (Prediction of DYNAMIC prop motion is host-authoritative only — guests treat props
+  as fixed obstacles and reconcile; a guest shoving a prop can rubber-band slightly.)
 - `ready` flag exists in lobby but host can start regardless — intentional.
 - **Map selection: BUILT this session** (host picks from the lobby; `circus_lot`
   + `toy_workshop`). Adding more maps stays data-only. **Playtest still owed:**
