@@ -27,6 +27,15 @@ by ADDING objects, never shrinking bounds). Full detail: `memory/notes/restauran
   zero bandwidth); only ~6 disguisable food props remain, on tables.
 - **All pack assets now referenced** (menu, knife, planks, towels, jars, dinner, extra
   stoves/crates/dishes/raw+cut foods). New catalog entries in fixtures.json + props.json.
+- **Pass-2 FINISH (this session):** every remaining catalog GLB that was defined-but-
+  never-placed (~27) is now instanced as a decorative FIXTURE — side cook-line
+  (stove_plain/stove_single), a modular_walls panel per kitchen side, all leftover
+  prepped/raw food + whole produce on kitchen surfaces, and ketchup+mustard PAIRS on
+  every dining table. Props-catalog keys (ketchup, mustard, pan, plate, whole veg)
+  referenced from fixtures[] render via the merged catalog but never join the disguise
+  pool (built from props[] only) — zero bandwidth, non-disguisable. DATA-ONLY append to
+  the restaurant map object; no engine change; other two maps untouched. Req 3 (use ALL
+  assets) now fully closed. Detail: `memory/notes/restaurant-map.md` (pass-2 finish).
 - ONLY three tiny engine changes (`modelDims` non-uniform scale, prop `y` thread, dims
   pass-through); circus_lot/toy_workshop untouched (no `fixtures`/`modelDims`/prop-`y`
   keys → same code paths as before). ⚠️ Playtest note: if chairs face OUTWARD, chair

@@ -56,6 +56,29 @@ Layout (all data in `maps.json` → `restaurant`, catalogs in fixtures/props.jso
   New catalog entries: many in `fixtures.json` (decor/food) + 7 crate types in
   `props.json`.
 
+### Pass-2 finish: EVERY pack GLB is now instanced (req 3 fully closed)
+The prior pass-2 session added all the catalog entries but left ~27 GLBs defined-
+but-never-placed. This follow-up instanced every remaining one as a DECORATIVE
+FIXTURE (appended block in `maps.json`→restaurant.fixtures, plus a
+`_pass2_completion` note key). Now placed: `kitchen_wall` (a modular_walls panel on
+each kitchen side wall), `stove_plain`/`stove_single` (a side cook-line with
+`stew_pot`+`stew`/`pan` on top), the remaining prepped/raw food on kitchen surfaces
+(`raw_steak_cubes`, `raw_ham`, `cooked_ham`, `burnt_ham`, `cut_carrots`,
+`carrot_cut`, `potato_cut`, `onion_cut`, `burnt_burger`, `cooked_vegie_burger`,
+`vegie_burger_patty`, `burger_bun_top`, `stew`, `lid_b`), whole produce
+(`lettuce`/`onion`/`potato`/`carrot`), extra dishes (`plate`, `stew_bowl`), and
+**ketchup+mustard condiment PAIRS on every dining table** (7 of each — a strong
+"real restaurant" tell). KEY POINT: several of these keys live in `props.json`
+(ketchup, mustard, pan, plate, stew_pot, stew_bowl, whole veg) but are referenced
+from `fixtures[]`. That renders them via the merged `{...props,...fixtures}` catalog
+WITHOUT adding them to the disguise pool — the referee builds the pool from
+`map.props` only, so a props-catalog key placed in `fixtures[]` is fixed scenery,
+zero bandwidth, non-disguisable (honours req 5's "keep loose disguisable items
+minimal"). No engine change this session — data-only append to one map object;
+circus_lot/toy_workshop untouched. All coords were bounds/overlap/table-radius
+checked; food-on-surface y≈1.0-1.35 matches existing surface heights. ~27 more
+unique GLBs now download lazily at match start (deduped by path, tiny food meshes).
+
 Everything below documents the FIRST pass and the fixtures/props seam (still current).
 
 ---
