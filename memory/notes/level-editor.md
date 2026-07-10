@@ -3,7 +3,14 @@
 A desktop-only debug tool baked into the client: press **Ctrl+E** to walk around
 inside a map and fix fixture/prop placement, rotation and scale by eye, then export
 the result back to `maps.json`. Built 2026-07-10. Files: `js/editor.js` (new, the whole
-tool), `js/main.js`, `js/input.js`, `js/scene.js`, `shared/physics.js`, `css/style.css`.
+tool), `js/main.js`, `js/input.js`, `js/scene.js`, `css/style.css`. (`shared/` is NOT
+touched — see the per-object `scale` section for why the collider stays base-size.)
+
+**Attempt 3 (2026-07-10) completed the feature.** Attempt 1 built the core sandbox
+(fly/select/move/rotate-R/scale-±/palette/delete/export) but never committed it, and
+was missing three listed requirements: the **help panel** (req 9), **mouse-wheel
+rotate** (req 4), and the **inspector scale slider** (req 5). Attempt 3 added exactly
+those three, all inside `editor.js` + `css/style.css`, and committed the whole feature.
 
 ## The load-bearing design call: it's a client-local SANDBOX, not a paused match
 
@@ -54,8 +61,12 @@ match flow" is honestly true rather than aspirational.
   pos, rot Y in degrees, scale, and REAL in-world size in metres).
 - **Move:** left-drag along the ground plane (grab-offset preserved); hold **Shift**
   while dragging for vertical. **G** snaps the base flush to the floor (y-offset 0).
-- **Rotate:** **R** = +15° about Y; Shift = 1° fine; Alt = reverse.
-- **Scale:** **+/−** uniform, clamped 0.1×–5× (Shift = 0.02 fine).
+- **Rotate:** **R** or the **mouse wheel** = ±15° about Y (yaw only); Shift = 1° fine;
+  Alt reverses R. Wheel always `preventDefault`s so the page never scrolls behind it.
+- **Scale:** **+/−** keys OR the inspector **slider**, uniform, clamped 0.1×–5×
+  (Shift = 0.02 fine on the keys). The slider updates only the numeric spans while
+  dragging (`_updateInspectorValues`) so it keeps its own thumb state; +/- do a full
+  `_refreshInspector` which also re-syncs the slider position.
 - **Add:** left palette lists every catalog entry (props green, fixtures blue);
   click one (or number keys 1–9 for the first nine) to spawn at the screen-centre
   crosshair's ground point, at normalized default scale (objScale 1).
@@ -66,6 +77,12 @@ match flow" is honestly true rather than aspirational.
   FULL `maps.json` with the edited map's `fixtures`/`props` arrays replaced and every
   other map byte-identical (drop-in file). A human pastes it to the bot or commits
   it — the game never writes files.
+- **Help:** a **?** button in the footer (and the **?** key / Esc to close) opens a
+  modal listing every control plus a short "how to save your edits" note: click Copy
+  map JSON → paste to **DevBot** in Discord **#devbot** saying which map it is → the
+  bot commits it. The modal **auto-opens the first time** edit mode is ever entered,
+  then a `localStorage` flag (`ph_editor_help_seen`) stops it nagging (best-effort:
+  private mode just never auto-shows; the button still works). Built in `_buildHelp`.
 
 ## Real in-world sizes come from asset-dims.json
 

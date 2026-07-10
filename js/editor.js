@@ -114,7 +114,8 @@ export class Editor {
     this._boundDown = (e) => this._onPointerDown(e);
     this._boundMove = (e) => this._onPointerMove(e);
     this._boundUp = (e) => this._onPointerUp(e);
-    this._boundWheel = (e) => e.preventDefault(); // wheel intentionally does nothing (one rotate path: R)
+    this._boundWheel = (e) => this._onWheel(e); // mouse wheel rotates the selection (see _onWheel)
+    this._helpSeenKey = 'ph_editor_help_seen'; // localStorage flag: help auto-shows only the first time
   }
 
   // ---- lifecycle -----------------------------------------------------------
@@ -152,6 +153,23 @@ export class Editor {
     this.active = true;
     this._refreshInspector();
     this._status('Edit mode. Right-drag to look, WASD + Space/Shift to fly.');
+    // Show the help panel automatically the FIRST time edit mode is ever opened, then
+    // remember it so it never nags again (per-browser, best-effort in private mode).
+    let seen = false;
+    try {
+      seen = localStorage.getItem(this._helpSeenKey) === '1';
+    } catch {
+      /* storage blocked (private mode) — just don't auto-show, the ? button still works */
+      seen = true;
+    }
+    if (!seen) {
+      this._showHelp();
+      try {
+        localStorage.setItem(this._helpSeenKey, '1');
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   exit() {
@@ -411,13 +429,27 @@ export class Editor {
       }
       this._lastPtr = { x: e.clientX, y: e.clientY };
       this._applyTransform(rec);
-      this._refreshInspector();
+      this._updateInspectorValues();
     }
   }
 
   _onPointerUp(e) {
     if (e.button === 2) this._looking = false;
     if (e.button === 0) this._dragging = false;
+  }
+
+  // Mouse wheel = rotate the selection in 15° clicks around Y (Shift = fine 1° steps),
+  // the same yaw-only rotate as the R key. preventDefault always, so the page never
+  // scrolls behind the editor. No selection => wheel is inert (but still swallowed).
+  _onWheel(e) {
+    e.preventDefault();
+    if (!this.active) return;
+    const rec = this.selected;
+    if (!rec) return;
+    const dir = e.deltaY > 0 ? 1 : -1;
+    rec.rot += dir * (e.shiftKey ? ROT_FINE : ROT_STEP);
+    this._applyTransform(rec);
+    this._refreshInspector();
   }
 
   _pick(e) {
@@ -449,6 +481,13 @@ export class Editor {
     // be safe) — skip when focus is in a form field.
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+    // '?' toggles the help panel (matches the header hint + the ? button).
+    if (e.key === '?') {
+      this._toggleHelp();
+      e.preventDefault();
+      return;
+    }
 
     const rec = this.selected;
     switch (e.code) {
@@ -487,7 +526,9 @@ export class Editor {
         this._undelete();
         break;
       case 'Escape':
-        this._select(null);
+        // Close the help panel first if it's open; otherwise deselect.
+        if (this._helpEl && !this._helpEl.classList.contains('hidden')) this._hideHelp();
+        else this._select(null);
         break;
       default:
         // Number keys 1–9 spawn the first nine palette entries.
@@ -649,7 +690,8 @@ export class Editor {
     header.innerHTML =
       '<strong>LEVEL EDITOR</strong> · debug' +
       '<div class="ed-help">Right-drag look · WASD+Space/Shift fly · click select · drag move (Shift=up/down) · ' +
-      'R rotate 15° (Shift fine, Alt reverse) · +/− scale · G snap floor · Del delete · U undo delete · Ctrl+E exit</div>';
+      'R / wheel rotate 15° · +/− or slider scale · G snap floor · Del delete · U undo · Ctrl+E exit · ' +
+      '<b>press ? for full help</b></div>';
     root.appendChild(header);
 
     // Palette (left).
@@ -681,6 +723,11 @@ export class Editor {
     dlBtn.textContent = 'Download maps.json';
     dlBtn.className = 'ed-btn';
     dlBtn.addEventListener('click', () => this._downloadJson());
+    const helpBtn = document.createElement('button');
+    helpBtn.textContent = '?';
+    helpBtn.className = 'ed-btn ed-help-btn';
+    helpBtn.title = 'Show controls & how to save (?)';
+    helpBtn.addEventListener('click', () => this._toggleHelp());
     const exitBtn = document.createElement('button');
     exitBtn.textContent = 'Exit (Ctrl+E)';
     exitBtn.className = 'ed-btn';
@@ -688,8 +735,12 @@ export class Editor {
     const label = document.createElement('span');
     label.className = 'ed-map-label';
     label.textContent = 'Map:';
-    footer.append(label, mapSel, copyBtn, dlBtn, exitBtn);
+    footer.append(label, mapSel, copyBtn, dlBtn, helpBtn, exitBtn);
     root.appendChild(footer);
+
+    // Help overlay (controls + how-to-save). Built once, hidden until the ? button
+    // or the first-open auto-show reveals it.
+    this._buildHelp(root);
 
     // Status line.
     const status = document.createElement('div');
@@ -706,6 +757,57 @@ export class Editor {
     (this.canvas.parentElement || document.body).appendChild(root);
     this._root = root;
     this._domBuilt = true;
+  }
+
+  // ---- help panel ----------------------------------------------------------
+  // A centred modal listing every control and a short "how to save your edits" note.
+  // Opens on the ? button and automatically the first time edit mode is ever entered.
+  _buildHelp(root) {
+    const backdrop = document.createElement('div');
+    backdrop.id = 'edHelp';
+    backdrop.className = 'hidden';
+    // Click on the dimmed backdrop (outside the card) closes.
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) this._hideHelp();
+    });
+
+    const card = document.createElement('div');
+    card.id = 'edHelpCard';
+    card.innerHTML =
+      '<h2>Level editor — controls</h2>' +
+      '<ul class="ed-help-list">' +
+      '<li><b>Ctrl+E</b> — toggle edit mode (also exits)</li>' +
+      '<li><b>Fly</b> — W A S D move · Space/E up · Shift/Q down · <b>right-drag</b> mouse to look</li>' +
+      '<li><b>Select</b> — left-click an object · Esc deselects</li>' +
+      '<li><b>Move</b> — drag the selection along the floor · hold <b>Shift</b> for up/down · <b>G</b> snaps to ground</li>' +
+      '<li><b>Rotate</b> — <b>R</b> or the <b>mouse wheel</b>, 15° steps (Shift = fine 1°, Alt reverses R) — yaw only</li>' +
+      '<li><b>Scale</b> — <b>+ / −</b> keys or the inspector <b>slider</b>, 0.1×–5× (Shift = fine)</li>' +
+      '<li><b>Add</b> — click a palette item on the left, or number keys <b>1–9</b> — spawns at the crosshair</li>' +
+      '<li><b>Delete</b> — <b>Del</b> / Backspace · <b>U</b> undoes the last delete</li>' +
+      '</ul>' +
+      '<h2>How to save your edits</h2>' +
+      '<ol class="ed-help-list">' +
+      '<li>Click <b>“Copy map JSON”</b> — it copies the whole maps.json to your clipboard.</li>' +
+      '<li>Paste it to <b>DevBot</b> in the Discord <b>#devbot</b> channel and say which map it is (e.g. “restaurant”).</li>' +
+      '<li>The bot commits it — no file editing on your end. (“Download maps.json” is a fallback if the clipboard is blocked.)</li>' +
+      '</ol>' +
+      '<div class="ed-help-actions"><button id="edHelpClose" class="ed-btn primary">Got it</button></div>';
+    backdrop.appendChild(card);
+    root.appendChild(backdrop);
+    this._helpEl = backdrop;
+    card.querySelector('#edHelpClose').addEventListener('click', () => this._hideHelp());
+  }
+
+  _showHelp() {
+    if (this._helpEl) this._helpEl.classList.remove('hidden');
+  }
+
+  _hideHelp() {
+    if (this._helpEl) this._helpEl.classList.add('hidden');
+  }
+
+  _toggleHelp() {
+    if (this._helpEl) this._helpEl.classList.toggle('hidden');
   }
 
   _populatePalette() {
@@ -751,25 +853,60 @@ export class Editor {
     this._status(`Editing ${this.mapMeta.name || id}.`);
   }
 
+  // Full (re)build of the inspector DOM — on selection change, spawn, rotate, snap,
+  // and keyboard scale nudge. Stable value spans (edv*) let _updateInspectorValues
+  // refresh just the numbers during a drag without rebuilding the scale slider.
   _refreshInspector() {
     const rec = this.selected;
     const body = this._inspectorBody;
     if (!rec) {
       body.className = 'ed-empty';
       body.textContent = 'Nothing selected. Click an object.';
+      this._scaleSlider = null;
       return;
     }
     body.className = '';
-    const size = this._realSize(rec.cat, rec.scale);
-    const sizeStr = size
-      ? `${size.w.toFixed(2)} × ${size.h.toFixed(2)} × ${size.d.toFixed(2)} m <span class="ed-src">(${size.source})</span>`
-      : 'size unknown';
     body.innerHTML =
       `<div class="ed-row"><span>Name</span><b>${rec.type}</b> <span class="ed-src">${rec.kind}</span></div>` +
-      `<div class="ed-row"><span>Pos</span>${rec.x.toFixed(2)}, ${rec.y.toFixed(2)}, ${rec.z.toFixed(2)}</div>` +
-      `<div class="ed-row"><span>Rot Y</span>${Math.round(((rec.rot / DEG) % 360 + 360) % 360)}°</div>` +
-      `<div class="ed-row"><span>Scale</span>${rec.scale.toFixed(2)}×</div>` +
-      `<div class="ed-row"><span>Size</span>${sizeStr}</div>`;
+      `<div class="ed-row"><span>Pos</span><span id="edvPos"></span></div>` +
+      `<div class="ed-row"><span>Rot Y</span><span id="edvRot"></span></div>` +
+      `<div class="ed-row"><span>Scale</span><span id="edvScale"></span></div>` +
+      `<input id="edScaleSlider" class="ed-scale" type="range" min="${SCALE_MIN}" max="${SCALE_MAX}" step="0.05">` +
+      `<div class="ed-row"><span>Size</span><span id="edvSize"></span></div>`;
+    this._scaleSlider = body.querySelector('#edScaleSlider');
+    this._scaleSlider.value = String(rec.scale);
+    // Dragging the slider scales the selection uniformly (same single `scale` value the
+    // +/− keys drive and the exporter writes). Update only the numeric spans so the
+    // slider keeps its own drag state (a full rebuild would reset the thumb mid-drag).
+    this._scaleSlider.addEventListener('input', () => {
+      const r = this.selected;
+      if (!r) return;
+      r.scale = round3(clamp(parseFloat(this._scaleSlider.value), SCALE_MIN, SCALE_MAX));
+      this._applyTransform(r);
+      this._updateInspectorValues(true);
+    });
+    this._updateInspectorValues();
+  }
+
+  // Refresh just the live value spans (pos / rot / scale / size). Cheap enough to call
+  // every drag frame. skipSlider avoids yanking the slider thumb while the user drags it.
+  _updateInspectorValues(skipSlider) {
+    const rec = this.selected;
+    const body = this._inspectorBody;
+    if (!rec || !body) return;
+    const set = (id, html) => {
+      const el = body.querySelector('#' + id);
+      if (el) el.innerHTML = html;
+    };
+    set('edvPos', `${rec.x.toFixed(2)}, ${rec.y.toFixed(2)}, ${rec.z.toFixed(2)}`);
+    set('edvRot', `${Math.round(((rec.rot / DEG) % 360 + 360) % 360)}°`);
+    set('edvScale', `${rec.scale.toFixed(2)}×`);
+    const size = this._realSize(rec.cat, rec.scale);
+    set(
+      'edvSize',
+      size ? `${size.w.toFixed(2)} × ${size.h.toFixed(2)} × ${size.d.toFixed(2)} m <span class="ed-src">(${size.source})</span>` : 'size unknown'
+    );
+    if (!skipSlider && this._scaleSlider) this._scaleSlider.value = String(rec.scale);
   }
 
   _status(msg) {

@@ -8,11 +8,30 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: IN-GAME LEVEL EDITOR (debug mode) BUILT (2026-07-10, vrmike). Desktop-only, not live-tested (headless).
+## Status: IN-GAME LEVEL EDITOR (debug mode) COMPLETE + COMMITTED (attempt 3, 2026-07-10, vrmike). Desktop-only, not live-tested (headless).
 
 A lightweight edit mode baked into the client so a human can fix placement/rotation/
 scale by eye instead of iterating blind builds. **Ctrl+E** (desktop) toggles it. Full
-detail: `memory/notes/level-editor.md`. Highlights:
+detail: `memory/notes/level-editor.md`.
+
+**Attempt history:** attempt 1 built the core editor in the working tree (fly/select/
+move/rotate-R/scale-±/palette/delete/export + the `scene.js` visual-scale support +
+`main.js`/`input.js` wiring) but was cancelled before committing; attempt 2 died on a
+sandbox wall and committed nothing useful. **Attempt 3 (this session)** found all of
+attempt 1's work intact in the working tree, filled the three missing listed
+requirements — **help panel (req 9)**, **mouse-wheel rotate (req 4)**, **inspector
+scale slider (req 5)** — in `js/editor.js` + `css/style.css`, verified the round-trip
+and the client-only/no-shared-touch guarantees, and committed the whole feature.
+`js/input.js` was checked for the "stray stub" the brief warned about: none — its only
+editor code is the legitimate Ctrl+E→`onToggleEdit` detection. Highlights:
+
+- **Help (req 9):** a **?** footer button + **?** key opens a modal with every control
+  and a "how to save" note (Copy map JSON → paste to DevBot in Discord #devbot naming
+  the map → bot commits). **Auto-opens the first time** edit mode is entered, then a
+  `localStorage` flag stops it nagging.
+- **Rotate (req 4):** mouse wheel now rotates the selection ±15° (Shift = fine), the
+  same yaw-only path as R (was previously a no-op).
+- **Scale (req 5):** inspector gained a 0.1×–5× range slider alongside the +/- keys.
 
 - **Client-local SANDBOX, not a paused match** — the honest reason it's genuinely
   client-only. Ctrl+E steps OUT of the game loop into `Editor` (`js/editor.js`), which
