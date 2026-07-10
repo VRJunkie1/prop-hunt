@@ -8,6 +8,42 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: IN-GAME LEVEL EDITOR (debug mode) BUILT (2026-07-10, vrmike). Desktop-only, not live-tested (headless).
+
+A lightweight edit mode baked into the client so a human can fix placement/rotation/
+scale by eye instead of iterating blind builds. **Ctrl+E** (desktop) toggles it. Full
+detail: `memory/notes/level-editor.md`. Highlights:
+
+- **Client-local SANDBOX, not a paused match** — the honest reason it's genuinely
+  client-only. Ctrl+E steps OUT of the game loop into `Editor` (`js/editor.js`), which
+  owns its own THREE scene + free-fly camera and loads the map fresh from config. The
+  referee/netcode/match-flow are never touched (they keep ticking; the editor ignores
+  them). Gated to solo/local play (`canEnterEditor`): desktop only, blocked as a guest
+  or as a host with guests. Frame loop + input loop early-return while `state.editing`.
+- **Reuses ONE renderer + scene.js mesh helpers** (`makePropMesh`, `instantiateModel`,
+  `targetSizeForEntry` now exported) so edited objects size EXACTLY like the game.
+  Own isolated GLTF loader (game renderer untouched). NO pointer lock — free cursor,
+  right-drag to look — so it never contends with input.js's desktop lock path.
+- **Controls:** WASD+Space/Shift fly; click select (outline + inspector: name/pos/rotY/
+  scale/REAL bbox size from asset-dims.json, lazy-fetched); left-drag move (Shift=up/
+  down), G snap-to-floor; R rotate 15° (Shift fine, Alt reverse); +/− scale 0.1–5×;
+  palette (click / 1–9) spawns at crosshair ground point at normalized scale; Del
+  delete + **U undelete** (restore stack); footer map dropdown; Copy/Download full
+  `maps.json` (edited map's fixtures/props replaced, others byte-identical).
+- **Prerequisite that landed with it — per-object `scale` (VISUAL-ONLY).** The loader
+  read y/rot but NOT scale. Added additive, inert-for-existing-maps `scale` support in
+  `scene.js` only (fixture + prop visuals), plus a CLIENT-side zip in `main.js` STARTED
+  that reattaches authored prop `scale` onto the referee's prop instances by index. Per
+  the approved "client-side fix" scope + constraint 9, `shared/physics.js` and
+  `shared/referee.js` are UNTOUCHED — so scaled objects render exact but their COLLIDERS
+  stay base-size (documented gap; most edits are at scale 1).
+- **Touched files:** `js/editor.js` (new), `js/main.js`, `js/input.js` (Ctrl+E →
+  `onToggleEdit` only), `js/scene.js`, `css/style.css`. NO change to shared/ (referee/
+  protocol/net/physics). **Zero boot fetches** (editor + its dims fetch are lazy).
+- **Playtest owed:** Ctrl+E in lobby → fly/select/transform/spawn/delete/undelete →
+  export → paste back into maps.json → reload → layout matches incl. rot + scale; and
+  confirm Ctrl+E refuses during a real multiplayer match.
+
 ## Status: RESTAURANT BOUNDING-BOX NORMALIZATION — measured scales (2026-07-10, vrmike). Not playtested (headless).
 
 Stops guessing per-object scales; every restaurant GLB is sized from its MEASURED
@@ -455,9 +491,10 @@ Entry/served root: `index.html` + `js/` + `css/` (flattened). Referee (host
 browser): `shared/referee.js`. Protocol: `shared/protocol.js` (C2S/S2C only now).
 Network layer (PeerJS): `js/net.js`. Client entry: `js/main.js`. Input (all
 schemes, incl. touch): `js/input.js`. Rendering + **third-person camera**:
-`js/scene.js`. Tunables: `shared/config/rules.json`. Notes: `memory/notes/`
-(netcode, game-loop, input-mouselook, map-selection, touch-controls,
-third-person-camera). Dead code awaiting `git rm`: `client/`, `server/`.
+`js/scene.js`. **Level editor (desktop debug tool)**: `js/editor.js` (toggled by
+Ctrl+E; a client-local sandbox that never touches the referee/netcode). Tunables:
+`shared/config/rules.json`. Notes: `memory/notes/` (netcode, game-loop,
+input-mouselook, map-selection, touch-controls, third-person-camera, level-editor). Dead code awaiting `git rm`: `client/`, `server/`.
 
 - The agent loop went live 2026-07-07 (per VRmike). (noted 2026-07-07 by VRmike)
 

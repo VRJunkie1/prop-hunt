@@ -263,3 +263,125 @@ button.ghost:hover { background: #3d2a66; }
   .touch-stick-zone { width: 60vw; height: 40%; }
   .touch-btn { width: 108px; height: 108px; }
 }
+
+/* ---- level editor (desktop debug tool; built in js/editor.js) ----
+   The root is a full-screen overlay with pointer-events:none so clicks/drags on
+   empty viewport reach the canvas underneath (select / move / look). Only the
+   panels re-enable pointer events. */
+#editorRoot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  font-size: 13px;
+  color: var(--text);
+}
+#editorRoot .ed-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+#edHeader {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 78vw;
+  text-align: center;
+  background: #150c2ccc;
+  padding: 8px 14px;
+  border-radius: 10px;
+  pointer-events: auto;
+}
+#edHeader strong { color: var(--accent); letter-spacing: 2px; }
+#edHeader .ed-help { font-size: 11px; opacity: 0.7; margin-top: 4px; line-height: 1.4; }
+
+#edPalette,
+#edInspector {
+  position: absolute;
+  top: 76px;
+  bottom: 64px;
+  width: 210px;
+  background: #150c2ce8;
+  border-radius: 12px;
+  padding: 12px;
+  pointer-events: auto;
+  overflow-y: auto;
+}
+#edPalette { left: 12px; }
+#edInspector { right: 12px; }
+
+#edPaletteList { display: flex; flex-direction: column; gap: 4px; }
+.ed-pal-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #241640;
+  font-size: 12px;
+  border-left: 3px solid transparent;
+}
+.ed-pal-item.prop { border-left-color: #7be38b; }
+.ed-pal-item.fixture { border-left-color: #59c6ff; }
+.ed-pal-item:hover { background: #33224f; }
+
+#edInspectorBody.ed-empty { opacity: 0.55; font-style: italic; }
+.ed-row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-bottom: 1px solid #ffffff14; }
+.ed-row span:first-child { opacity: 0.6; }
+.ed-src { opacity: 0.5; font-size: 11px; }
+
+#edFooter {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #150c2ce8;
+  padding: 8px 12px;
+  border-radius: 12px;
+  pointer-events: auto;
+}
+.ed-map-label { opacity: 0.6; font-size: 12px; }
+#edMapSelect {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #241640;
+  color: var(--text);
+  font-size: 13px;
+}
+.ed-btn {
+  flex: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #3d2a66;
+  font-size: 13px;
+}
+.ed-btn.primary { background: var(--accent); color: #240b1c; font-weight: bold; }
+
+#edStatus {
+  position: absolute;
+  left: 234px; /* clear of the palette panel (left:12 + width:210 + gap) */
+  bottom: 20px;
+  max-width: 32vw;
+  font-size: 12px;
+  opacity: 0.85;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+}
+
+#edCrosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+  color: #ffef6bcc;
+  pointer-events: none;
+  text-shadow: 0 0 4px #000;
+}

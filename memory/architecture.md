@@ -158,6 +158,18 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
   connection-type is *detected* in `net.js`, never here.
 - `js/config.js` — fetches `shared/config`; the host passes it into the `Referee`.
+- `js/editor.js` — **in-game level editor (desktop debug tool)**, toggled by
+  **Ctrl+E** (`input.js` fires `onToggleEdit`; `main.js` gates + wires). A
+  **client-local SANDBOX**: it steps the client OUT of the game loop into its own
+  `THREE.Scene` + free-fly camera loaded fresh from map config, and **never touches
+  the referee, netcode, or match flow** (they keep ticking; the editor ignores
+  them). Gated to solo/local play (never mid-multiplayer). Reuses the game's single
+  `WebGLRenderer` and `scene.js`'s exported mesh helpers (`makePropMesh`,
+  `instantiateModel`, `targetSizeForEntry`) so edited objects size exactly like the
+  game; own isolated GLTF loader. Uses a **free cursor + right-drag look (no pointer
+  lock)** so it never contends with input.js's lock path. Select/move/rotate/scale/
+  spawn/delete(+undelete); exports the edited layout as a drop-in `maps.json`.
+  Detail: `memory/notes/level-editor.md`.
 
 ## Shared (`shared/`)
 
@@ -184,6 +196,15 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   **As of the 2026-07 physics pass this split also drives the Rapier world:**
   fixtures + walls + ground become STATIC colliders; props become DYNAMIC rigid
   bodies. See the Physics + netcode section below. Detail: `notes/restaurant-map.md`.
+- **Per-object placement fields.** Each fixture/prop entry carries `type`, `x`, `z`
+  and optional `y` (surface offset), `rot` (yaw radians), and — added with the level
+  editor (2026-07-10) — `scale` (uniform, default 1). `scale` is applied **VISUAL-ONLY**
+  in `scene.js` (fixture + prop meshes); prop `scale` reaches the renderer via a
+  client-side index-zip in `main.js` (STARTED) onto the referee's prop instances.
+  **`shared/` is untouched** (referee/protocol/physics) — so a scaled object renders
+  exact but its Rapier collider stays base-size (documented gap; per the approved
+  "client-side fix" scope). Every field is inert/absent on the existing maps. Detail:
+  `notes/level-editor.md`.
 
 ## Physics + netcode (Rapier, host-authoritative prediction) — 2026-07 `physics-net`
 
