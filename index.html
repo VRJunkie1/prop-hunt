@@ -8,11 +8,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>Prop Hunt</title>
     <link rel="stylesheet" href="/css/style.css" />
-    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. -->
+    <!-- Three.js via CDN + importmap keeps the skeleton build-step-free. The
+         `three/addons/` entry lets the render layer lazily import GLTFLoader for
+         the restaurant's real GLB meshes. NOTE: an importmap only DECLARES module
+         URLs — nothing is fetched here at page load, so the headless boot-time
+         load check still makes zero external requests (the actual GLTFLoader +
+         Three fetches happen on first match start, from js/scene.js). -->
     <script type="importmap">
       {
         "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
         }
       }
     </script>

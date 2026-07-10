@@ -38,6 +38,26 @@ export function makePropMesh(type, catalog) {
   return { mesh, baseY };
 }
 
+// The largest world-space dimension a loaded GLB should be scaled to fit. Derived
+// from the catalog entry's primitive footprint so a real mesh lands at roughly the
+// intended size regardless of the GLB's native units — or from an explicit
+// `modelSize` override for pieces whose primitive box doesn't match (floors, walls,
+// pillars, door). See Scene3D._instantiateModel.
+function targetSizeForEntry(c) {
+  if (typeof c.modelSize === 'number') return c.modelSize;
+  switch (c.shape) {
+    case 'box':
+      return Math.max(c.w, c.h, c.d);
+    case 'cylinder':
+    case 'cone':
+      return Math.max(2 * c.r, c.h);
+    case 'sphere':
+      return 2 * c.r;
+    default:
+      return 1.5;
+  }
+}
+
 export class Scene3D {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -49,6 +69,16 @@ export class Scene3D {
     this.selfId = null;
     this.catalog = null;
     this.players = new Map(); // id -> { mesh, target:{x,z,yaw}, kind }
+
+    // ---- lazy GLB meshes (real Restaurant Bits models) ----------------------
+    // The map first renders with primitive placeholders, then the real GLBs the
+    // active map references are loaded and swapped in over them. Everything here is
+    // kicked off from buildWorld (match start) — never at page boot — so the
+    // GLTFLoader CDN import and the GLB downloads stay off the headless load check.
+    this._gltfLoader = null; // created lazily on the first match start
+    this._modelCache = new Map(); // '/assets/…​.glb' -> loaded template, or 'failed'
+    this._modelSlots = []; // this match's primitives still awaiting their GLB
+    this._buildToken = 0; // bumped each buildWorld so stale async loads no-op
 
     // ---- third-person follow camera -----------------------------------------
     // The local player now sees their OWN model from a camera orbiting behind and
@@ -99,6 +129,10 @@ export class Scene3D {
   // Rebuild the world for a new match.
   buildWorld(map, propInstances, catalog) {
     this.catalog = catalog;
+    // A new match: invalidate any in-flight GLB loads from a previous build and
+    // start a fresh slot list (the primitives queued for a real-mesh swap).
+    this._buildToken++;
+    this._modelSlots = [];
     // Clear previous scene contents.
     this.scene.clear();
     this.players.clear();
@@ -153,10 +187,11 @@ export class Scene3D {
     for (const f of map.fixtures || []) {
       const built = makePropMesh(f.type, catalog);
       if (!built) continue;
-      built.mesh.position.set(f.x, built.baseY, f.z);
+      built.mesh.position.set(f.x, built.baseY + (f.y || 0), f.z);
       built.mesh.rotation.y = f.rot || 0;
       this.scene.add(built.mesh);
       this.colliders.push(built.mesh); // camera pulls in against fixtures too
+      this._queueModel(f, built.mesh, catalog); // swap in the real GLB if any
     }
 
     // Dynamic props (the disguise pool — chairs, stools, crates, dishes, food).
@@ -169,7 +204,30 @@ export class Scene3D {
       built.mesh.rotation.y = p.rot || 0;
       this.scene.add(built.mesh);
       this.colliders.push(built.mesh); // ...and against static props
+      this._queueModel(p, built.mesh, catalog); // swap in the real GLB if any
     }
+
+    // Kick off the real-mesh load for everything queued above. Fire-and-forget:
+    // primitives are already on screen, so the map is playable instantly and each
+    // GLB pops in as it arrives (or never, leaving its primitive — the fallback).
+    this._loadModels().catch(() => {});
+  }
+
+  // Record a primitive that has a real GLB to swap in later. `entry` is the map's
+  // fixture/prop record (carries type/x/z and optional y/rot); `holder` is the
+  // primitive mesh already added to the scene. Called for both fixtures and props.
+  _queueModel(entry, holder, catalog) {
+    const c = catalog[entry.type];
+    if (!c || !c.model) return;
+    this._modelSlots.push({
+      holder,
+      path: '/assets/' + c.model,
+      target: targetSizeForEntry(c),
+      x: entry.x,
+      y: entry.y || 0,
+      z: entry.z,
+      rot: entry.rot || 0,
+    });
   }
 
   setSelf(id) {
@@ -179,6 +237,18 @@ export class Scene3D {
   // Create a mesh matching how a player should currently look.
   meshForPlayer(p) {
     if (p.disguise && this.catalog[p.disguise]) {
+      const c = this.catalog[p.disguise];
+      // If the disguise's real GLB has already been loaded for this map, wear the
+      // real mesh; otherwise (not yet loaded, or it failed) fall back to the
+      // primitive so a disguise is always drawn.
+      if (c.model) {
+        const tmpl = this._modelCache.get('/assets/' + c.model);
+        if (tmpl && tmpl !== 'failed') {
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c));
+          inst.userData.baseY = 0;
+          return inst;
+        }
+      }
       const built = makePropMesh(p.disguise, this.catalog);
       built.mesh.userData.baseY = built.baseY;
       return built.mesh;
@@ -349,6 +419,96 @@ export class Scene3D {
     const w = this.renderer.domElement.clientWidth;
     const h = this.renderer.domElement.clientHeight;
     return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
+  }
+
+  // ---- lazy GLB meshes ------------------------------------------------------
+  // Load the real Restaurant Bits GLBs referenced by THIS map and swap each in over
+  // its primitive placeholder. Only the models the active map references are loaded
+  // (from this._modelSlots, built during buildWorld). The GLTFLoader itself is a
+  // dynamic CDN import done here on the first match start — never at page boot — so
+  // the headless load check makes zero external requests (same rule as three.js /
+  // PeerJS). Any GLB that is missing or errors just leaves its primitive in place.
+  async _loadModels() {
+    const slots = this._modelSlots;
+    if (!slots.length) return;
+    const token = this._buildToken;
+    if (!this._gltfLoader) {
+      try {
+        const mod = await import('three/addons/loaders/GLTFLoader.js');
+        this._gltfLoader = new mod.GLTFLoader();
+      } catch (e) {
+        // CDN unreachable / import blocked: every item keeps its primitive fallback.
+        console.warn('[scene] GLTFLoader unavailable — keeping primitive shapes', e);
+        return;
+      }
+    }
+    if (token !== this._buildToken) return; // a newer match started while importing
+    // Group by GLB path so each file downloads once, then applies to all its uses.
+    const byPath = new Map();
+    for (const s of slots) {
+      if (!byPath.has(s.path)) byPath.set(s.path, []);
+      byPath.get(s.path).push(s);
+    }
+    for (const [path, uses] of byPath) this._loadOne(path, uses, token);
+  }
+
+  _loadOne(path, uses, token) {
+    const cached = this._modelCache.get(path);
+    if (cached === 'failed') return; // known-bad file — keep the primitives
+    if (cached) {
+      for (const s of uses) this._applyModel(cached, s, token);
+      return;
+    }
+    this._gltfLoader.load(
+      path,
+      (gltf) => {
+        this._modelCache.set(path, gltf.scene);
+        for (const s of uses) this._applyModel(gltf.scene, s, token);
+      },
+      undefined,
+      (err) => {
+        // Missing or corrupt GLB: record it so we don't retry, and leave every
+        // referencing primitive visible. One bad file never blanks the map.
+        console.warn('[scene] mesh failed to load, using primitive fallback:', path, err);
+        this._modelCache.set(path, 'failed');
+      }
+    );
+  }
+
+  // Place a loaded model into a slot and hide (but keep) its primitive.
+  _applyModel(template, slot, token) {
+    if (token !== this._buildToken) return; // match ended / restarted; drop it
+    const inst = this._instantiateModel(template, slot.target);
+    inst.position.set(slot.x, slot.y || 0, slot.z);
+    inst.rotation.y = slot.rot || 0;
+    this.scene.add(inst);
+    // Keep the primitive as the (now invisible) camera-collision proxy so the
+    // third-person pull-in behaves identically whatever the GLB's real silhouette
+    // is — the raycaster still hits it (invisible objects are not skipped). If the
+    // GLB had failed instead, the primitive would simply have stayed visible.
+    slot.holder.visible = false;
+  }
+
+  // Clone a loaded GLB, scale it so its largest dimension == `target` world units,
+  // then centre it in x/z and rest its base on y=0. Wrapped in a group so the caller
+  // can position/rotate it freely regardless of the model's internal origin.
+  _instantiateModel(template, target) {
+    const inner = template.clone(true);
+    const box = new THREE.Box3().setFromObject(inner);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    inner.scale.setScalar(target / maxDim);
+    const box2 = new THREE.Box3().setFromObject(inner);
+    const center = new THREE.Vector3();
+    box2.getCenter(center);
+    inner.position.set(-center.x, -box2.min.y, -center.z);
+    inner.traverse((o) => {
+      if (o.isMesh) o.castShadow = true;
+    });
+    const holder = new THREE.Group();
+    holder.add(inner);
+    return holder;
   }
 
   render() {

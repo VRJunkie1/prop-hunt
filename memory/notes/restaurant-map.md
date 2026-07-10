@@ -42,42 +42,81 @@ player collision is ever wanted, that's a separate, bigger change (referee
 - No `shared/referee.js` change was needed — it already builds
   `this.props = (map.props||[]).map(...)`, which now naturally excludes fixtures.
 
-## Catalog additions (`shared/config/props.json`)
-`props.json` is really a **shape catalog** (box/cylinder/cone/sphere + color); both
-props and fixtures resolve their mesh through it via `makePropMesh`. Added:
-- Dynamic: `diner_chair`, `kitchen_stool`, `food_crate`, `pot`, `pan`, `plate`,
-  `bowl`, `cutting_board`, `burger`, `sauce_bottle`.
-- Static (fixtures): `counter`, `stove`, `oven`, `fridge`, `cabinet`, `sink`,
-  `round_table`, `large_table`, `kitchen_wall`.
-Adding a catalog entry is inert until a map references it (referee's pool = only
-map.props), so the new fixture shapes never leak into any disguise pool.
+## Catalogs — TWO files (split in the 2026-07-09 GLB rebuild)
+There are now two shape catalogs (both: box/cylinder/cone/sphere + color, plus a
+`model` GLB path + optional `modelSize`; both resolved via `makePropMesh`):
+- `shared/config/props.json` — the **disguise catalog**, movable items ONLY:
+  `diner_chair`, `kitchen_stool`, `food_crate`/`crate_buns`/`crate_veg`/
+  `crate_cheese`, `pot`/`large_pot`/`stew_pot`, `pan`, `plate`, `bowl`/`stew_bowl`,
+  `cutting_board`, `burger`/`veg_burger`, `tomato`/`lettuce`/`cheese`/`onion`/
+  `potato`/`carrot`, `ketchup`/`mustard`.
+- `shared/config/fixtures.json` — the **static building-piece catalog**:
+  `floor_kitchen`, `kitchen_wall`, `pillar`/`pillar_b`, `oven`, `stove`, `fridge`,
+  `cabinet`/`cabinet_corner`, `extractor`, `shelf`, `counter`, `prep_sink`,
+  `dishrack`, `round_table`, `kitchen_table`, `large_table`, `small_table`, `door`.
+They are separate FILES on purpose (requirement 3): a fixture can never enter the
+disguise pool. The referee builds the pool from `map.props` only and reads NEITHER
+catalog; `config.js` loads both and `main.js` merges them (`{...props, ...fixtures}`)
+purely for rendering. (Earlier this map kept fixtures inside props.json with generic
+primitives — `sink`, `sauce_bottle`, etc.; that single-file version is superseded.)
 
 ## The map (`shared/config/maps.json` → `restaurant`)
-size 36. Kitchen along the north wall (z≈−15.5): fridge/oven/stove/counter/sink/
-cabinets, plus two mid-kitchen counter islands. Two `kitchen_wall` partitions at
-z≈−4 split kitchen from dining while leaving a central + two outer passages (mixed
-sightlines / cover). Dining (south): four round tables + one large table (all
-static fixtures) ringed with `diner_chair`/`kitchen_stool` disguise props. ~38
-dynamic props scattered (chairs, stools, crates, pots, pans, plates, bowls, cutting
-board, burgers, bottles) as hiding options. 8 prop spawns spread to the corners/
-edges; hunterSpawn centre.
+size 36. Kitchen (north, z≈−15.5): fridge/cabinet_corner/oven/stove(+extractor at
+y2.4)/counter/prep_sink/cabinet/shelf along the back wall, two counter islands + a
+kitchen_table + dishrack mid-kitchen, and a 3×2 grid of `floor_kitchen` tiles. A
+`modular_walls` + `pillar`/`pillar_b` divider at z≈−4 splits kitchen from dining
+leaving passages (mixed sightlines / cover). Dining (south): four `round_table` + a
+`large_table` + a `small_table` (static fixtures) ringed with `diner_chair`/
+`kitchen_stool` props; a `door` fixture at the south wall. ~45 disguise props
+scattered (chairs, stools, crates, pots/pans, plates/bowls, cutting board, burgers,
+veg, bottles). 8 prop spawns spread to the edges; hunterSpawn centre.
 
 Selectable with **zero extra wiring**: the lobby picker renders `Object.entries(
 maps)` (`ui.renderMapPicker`, fed by `ui.maps = cfg.maps`), and
 `Referee.setMapId`/`C2S.PICK_MAP` validate any map that exists in `maps.json`. See
 `map-selection.md`.
 
-## Assets — GLB NOT fetched (honest)
-The task wanted the actual 111 GLB meshes from
-https://poly.pizza/bundle/Restaurant-Bits-ejkcnWf78Q (CC0, Kay Lousberg). The build
-sandbox has **no working network/shell tool** (shell permission stream fails —
-same wall prior sessions hit; the write tool is text-only) so binary GLB download
-was impossible. No fake/empty `.glb` files were created. The map runs on primitive
-stand-ins now. Attribution + the shape→model mapping + the follow-up to add a lazy
-`GLTFLoader` are in `/CREDITS.md` and `assets/restaurant/README.md`. Keep any future
-GLB load lazy (inside buildWorld / match start only) — never at page boot.
+## Assets — real GLB meshes now WIRED IN (2026-07-09 rebuild)
+The 111 CC0 "Restaurant Bits" GLBs (Kay Lousberg,
+https://poly.pizza/bundle/Restaurant-Bits-ejkcnWf78Q) are real binary files in
+`assets/restaurant/` (fetched by an earlier bulk pull) and the map now renders them.
+
+**How it's wired (the swap):**
+- `props.json` — each restaurant catalog entry gained a `model:"restaurant/x.glb"`
+  field. The primitive shape/dims stay as the fallback AND as the GLB size target
+  (a fixture/prop's largest bounding dimension is scaled to match the primitive's,
+  or to an explicit `modelSize` for floors/walls/pillars/door). Only clean model
+  names are referenced — never the fetch's hash-suffixed dupes.
+- `js/scene.js` — `buildWorld` builds primitives immediately, then queues each
+  model-bearing item into `_modelSlots` and calls `_loadModels()` (fire-and-forget).
+  `_loadModels` **lazily** `import('three/addons/loaders/GLTFLoader.js')` (CDN, via
+  the new `three/addons/` importmap entry) ONCE on first match start, downloads only
+  the GLBs this map references (deduped by path), and swaps each real mesh in over
+  its placeholder (`_applyModel`). `_instantiateModel` clones + bbox-normalises the
+  scale + sits it on the ground, wrapped in a group.
+- **Primitive stays as the invisible camera collider.** On swap the primitive is
+  set `visible=false` but kept in `scene.colliders` (Three's raycaster does NOT skip
+  invisible objects), so third-person pull-in behaves identically regardless of the
+  GLB silhouette. This also IS the fallback: if a GLB is missing/errors, the
+  primitive simply stays visible (`_modelCache` marks the path `'failed'`).
+- **Disguises too:** `meshForPlayer` wears the real GLB when its template is already
+  cached (`_modelCache`), else the primitive. So a player disguised as a burger
+  becomes `burger.glb` once loaded.
+- **Lazy/boot rules honoured:** the GLTFLoader import + GLB downloads happen only on
+  the viewing client at match start — never at page boot, never in `shared/referee.js`.
+  `index.html`'s importmap only DECLARES `three/addons/` (no fetch), so the headless
+  boot-time load check still makes zero external requests. `_buildToken` invalidates
+  in-flight loads from a superseded match.
+
+**Junk from the bulk fetch — NOT deletable in this sandbox (no shell).** `_meshwork/`
+(scratch HTML + fetch.log), root `bundle.html`, `fetch_meshes.sh`, and ~19
+hash-suffixed GLB dupes are inert but still on disk. Nothing references them. They
+need a `git rm` from a shell session — see the cleanup block in `project-state.md`.
 
 ## Playtest owed
-Pick `restaurant` in the lobby → everyone spawns in it; walls/appliances/tables
-read as an enclosed kitchen+dining; disguise into a chair/crate/burger works; tag
+Pick `restaurant` in the lobby → everyone spawns in it; real 3D models (appliances,
+tables, chairs, food) render instead of boxes; walls/appliances/tables read as an
+enclosed kitchen+dining; disguise into a chair/crate/burger shows the real mesh; tag
 works; camera pulls in on fixtures; circus_lot + toy_workshop still load unchanged.
+Watch for per-model scale/orientation that needs tuning (esp. `modular_walls` rot,
+floor tiles, `extractorhood` height) — adjust `modelSize`/`rot`/`y` in the configs.

@@ -165,8 +165,14 @@ function handleGameMessage(msg) {
       state.props = msg.props;
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
-      // First time we need Three.js: build the renderer now (lazy CDN load).
-      ensureScene().then((s) => s.buildWorld(state.map, state.props, state.cfg.props));
+      // First time we need Three.js: build the renderer now (lazy CDN load). The
+      // render catalog merges the disguise props with the static fixtures catalog
+      // (kept in separate files so fixtures can't leak into the disguise pool) into
+      // one type→shape/model lookup for scene.js. Fixture types are only ever
+      // referenced by map.fixtures, so this merge never widens the disguise pool.
+      ensureScene().then((s) =>
+        s.buildWorld(state.map, state.props, { ...state.cfg.props, ...state.cfg.fixtures })
+      );
       ui.show('game');
       // Entering the game uncaptured. Desktop waits for the pointer-lock click;
       // touch shows a "Tap to play" prompt (dismissed by input.onTouchPlay) and

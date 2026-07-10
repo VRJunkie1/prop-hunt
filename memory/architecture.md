@@ -142,7 +142,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   so the reticle marks where the tag cone lands, not screen center. Detail:
   `memory/notes/third-person-camera.md`. Pixel ratio is capped at 2 (phones);
   re-measures on `orientationchange`; `preventDefault`s `webglcontextlost` so a
-  mobile GPU hiccup can restore instead of white-screening.
+  mobile GPU hiccup can restore instead of white-screening. **Real GLB meshes:** a
+  catalog entry may carry a `model` path; `buildWorld` renders the primitive first,
+  then `_loadModels` **lazily** imports a CDN `GLTFLoader` (once, at match start)
+  and swaps the real mesh in over the primitive (which stays as an invisible camera
+  collider). Missing/failed GLB → primitive stays visible (per-item fallback). Only
+  the active map's referenced GLBs load, only on the viewing client, never at boot
+  (the `three/addons/` importmap entry only declares). Detail:
+  `memory/notes/restaurant-map.md`.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
   "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
   msg?)`, called from `main.js` in response to `input.js` pointer-lock events
@@ -161,9 +168,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   agnostic (unchanged by the PeerJS swap — it only ever saw `send` callbacks).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
   `maps.json` (size, colors, spawns, prop placements — `circus_lot`,
-  `toy_workshop`, `restaurant`), `props.json` (shape catalog: box/cylinder/cone/
-  sphere + color, used for both props and fixtures). Adding maps/props needs no
-  engine change; the lobby map picker renders any new map automatically.
+  `toy_workshop`, `restaurant`), `props.json` (the **disguise catalog** — movable
+  items only: box/cylinder/cone/sphere + color, plus an optional `model` GLB path
+  for the restaurant), and `fixtures.json` (the **static building-piece catalog**:
+  same shape format + `model`/`modelSize`). props and fixtures are DELIBERATELY
+  separate files so a fixture can never enter the disguise pool — the referee builds
+  the pool from `map.props` only; `scene.js` merges the two catalogs purely for
+  rendering. Adding maps/props needs no engine change; the lobby map picker renders
+  any new map automatically.
 - **Static vs dynamic in a map** (added with the `restaurant` map): a map may
   carry an optional **`fixtures[]`** array (immovable building pieces — walls,
   counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable

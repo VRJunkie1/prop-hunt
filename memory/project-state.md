@@ -8,7 +8,71 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Status: RESTAURANT MAP BUILT (this session, on `vrmike/dev`). Not yet playtested.
+## Status: RESTAURANT REAL GLB MESHES WIRED IN (2026-07-09, on `vrmike/dev`). Not yet playtested.
+
+The `restaurant` map now renders the real CC0 "Restaurant Bits" GLB meshes (Kay
+Lousberg) instead of primitive boxes. An earlier bulk fetch had downloaded the GLBs
+into `assets/restaurant/` but never hooked them into rendering (and left scratch
+junk behind); this session did the wiring + cleanup handoff.
+
+- **Map rebuilt from the real GLBs** (`shared/config/maps.json` → `restaurant`): a
+  coherent small restaurant — tiled kitchen (floor_kitchen, fridge/oven/stove/
+  extractor/counter/sink/cabinets/shelf along the back, counter islands +
+  kitchen_table), a modular_walls + pillars divider with passages, a dining room
+  (round/large/small tables), and a door. Static geometry → `fixtures[]`; small
+  movable items → `props[]`.
+- **Two catalogs now** (requirement 3, defense-in-depth): `props.json` is the
+  disguise catalog (movable items ONLY) and the new `shared/config/fixtures.json`
+  holds the static building pieces. Kept in separate files so a fixture can never
+  enter the disguise pool. Each entry carries a `model:` path to the clean GLB name,
+  keeping the primitive shape as fallback + size target. `config.js` loads both;
+  `scene.js` merges them (`{...cfg.props, ...cfg.fixtures}`) purely for rendering.
+  The referee still builds the pool from `map.props` only — it never reads either
+  catalog.
+- **Lazy client-side GLTFLoader** in `js/scene.js`: primitives render instantly at
+  match start, then the referenced GLBs load (CDN import, deduped) and swap in over
+  them; the primitive stays as an invisible camera collider. Missing/failed GLB →
+  primitive stays visible (per-item fallback). Disguises wear the real mesh once
+  cached. `index.html` importmap gained a `three/addons/` entry (declares only — no
+  boot fetch). Referee untouched (still builds the pool from `map.props` only).
+  Full detail: `memory/notes/restaurant-map.md`.
+- **CLEANUP OWED — needs a shell (this sandbox has none).** The bulk fetch dumped
+  junk that is inert but still on `main` and could NOT be deleted here (no shell /
+  rm; Write is text-only; there is no file-delete tool). Nothing references any of
+  it. Delete from a shell session:
+  ```
+  git rm -r _meshwork
+  git rm bundle.html fetch_meshes.sh assets/restaurant/manifest.json
+  # 18 hash-suffixed GLB duplicates (each has a clean twin that is KEPT). Do NOT use
+  # a `*_??????????.glb` glob — it would also match the legit shelf_papertowel.glb
+  # (`papertowel` is exactly 10 chars). Enumerate them:
+  git rm assets/restaurant/tomato_EVTveOjwHG.glb \
+         assets/restaurant/round_table_KZXCuGx1WZ.glb \
+         assets/restaurant/round_table_oravj1kSy2.glb \
+         assets/restaurant/door_MSIuI2jpqb.glb \
+         assets/restaurant/pan_O5t9nVpPjd.glb \
+         assets/restaurant/kitchen_cabinet_corner_Pieyzl60FA.glb \
+         assets/restaurant/kitchen_cabinet_sS6Llv1TG5.glb \
+         assets/restaurant/potato_acwBoZQNdm.glb \
+         assets/restaurant/stove_cT99QUoCCn.glb \
+         assets/restaurant/chair_eGccH9cqom.glb \
+         assets/restaurant/kitchen_table_hM1OMnevjc.glb \
+         assets/restaurant/kitchen_table_jrwQfpN0LV.glb \
+         assets/restaurant/kitchen_table_ocdwmd2IKZ.glb \
+         assets/restaurant/dishrack_phJwmk2B4X.glb \
+         assets/restaurant/stew_rPa4vEsC9c.glb \
+         assets/restaurant/shelf_papertowel_uJ60T0cGEG.glb \
+         assets/restaurant/lettuce_yC6B73sG9s.glb \
+         assets/restaurant/pot_of_stew_zXG0jZ4QiC.glb
+  ```
+  `assets/restaurant/manifest.json` and `_meshwork/fetch.log` are the fetch script's
+  own artifacts (they list the dupes above) — removed by the lines above. NOTE:
+  `kitchentable_sink_la.glb` has a 2-char suffix and is NOT a dup — KEEP it. The map
+  references only clean names, so no config reference fix is needed. `fetch.log`
+  confirms all 111 downloads succeeded (fail=0), so every clean GLB the map uses is
+  a real, non-empty binary.
+
+## Status: EARLIER restaurant map build (primitive stand-ins) — superseded by the GLB wiring above.
 
 A third selectable map (`restaurant`) + the small engine seam for STEP 3's
 static/dynamic split. Data-driven, so it's host-selectable through the existing
@@ -31,39 +95,12 @@ picker with no new wiring.
   camera's `scene.colliders` raycast; "give everything collision" = adding it to
   that set, which both fixtures and props now do. Real player collision would be a
   separate, bigger lockstep change (referee `integrate` + client prediction).
-- **GLB assets were NOT fetched — reported honestly, not faked.** The task wanted
-  the 111 CC0 "Restaurant Bits" GLB meshes (Kay Lousberg,
-  https://poly.pizza/bundle/Restaurant-Bits-ejkcnWf78Q). This sandbox has no
-  working network/shell tool (shell permission stream fails — same wall prior
-  sessions hit; the write tool is text-only), so binary download was impossible.
-  No empty/placeholder `.glb` files were created. The map runs on the engine's
-  existing **primitive shapes** themed as restaurant items. Attribution + the
-  shape→model mapping + the follow-up (add a lazy `GLTFLoader`, keep it firing only
-  at match start) are in `/CREDITS.md` and `assets/restaurant/README.md`.
-- **[2026-07-09] GLB fetch RE-ATTEMPTED (attempt #2) — STILL BLOCKED, same wall.**
-  VRmike believed the binary-fetch capability was now fixed; it is NOT, in this
-  sandbox. Ran the make-or-break capability gate (download ONE real GLB before
-  touching anything). Precise findings, so nobody re-runs this blind:
-  - `Bash` tool → `Error: No such tool available: Bash. Bash exists but is not
-    enabled in this context.` (present in the registry but disabled here).
-  - `Monitor` (the only other command-shaped tool) → every invocation, both from
-    the main loop and a subagent, fails at the permission step with
-    `Tool permission request failed: Error: Stream closed` — the command never
-    executes (no stdout/stderr/exit code).
-  - No web-fetch / HTTP / download tool exists in the tool set (verified by
-    multiple `ToolSearch` passes: only `Monitor`/`NotebookEdit` are command-shaped,
-    neither does HTTP). `Write` is text/UTF-8 only — cannot reproduce binary bytes.
-  - Conclusion: **shell = NO, network = NO, binary-write = NO.** Per the approved
-    plan's step 2, STOPPED here — did NOT fake or create placeholder `.glb` files,
-    did NOT touch `assets/`. The wiring in step 3 (point `maps.json` fixtures +
-    `props.json` props at GLB paths, add a lazy `GLTFLoader` off `S2C.STARTED` with
-    primitive fallback) is READY to do the instant real `.glb` files exist — the
-    fixtures-vs-props split, the lazy `ensureScene()`/`S2C.STARTED` seam, and the
-    attribution docs are all already in place (see Explore map below / notes).
-  - **UNBLOCK PATH:** this must run in an environment where either `Bash` is
-    enabled OR `Monitor`'s permission stream works, so `curl`/`wget` can pull the
-    GLBs. Nothing in the client code needs to change first — only the assets are
-    missing.
+- **[HISTORICAL] GLBs were unfetchable in the two prior sessions** (no shell /
+  network / binary-write in that sandbox), so the map shipped on primitive
+  stand-ins and reported it honestly. That is now RESOLVED: a later bulk fetch put
+  the real GLBs on disk, and the 2026-07-09 wiring session (top of file) hooked them
+  into rendering. The prediction held — no client code assumptions changed; only the
+  assets had been missing, plus the lazy-loader wiring the notes had pre-scoped.
 - **Playtest owed:** pick `restaurant` in lobby → everyone spawns in it; enclosed
   kitchen+dining reads right; disguise into a chair/crate/burger; tag works;
   camera pulls in on fixtures; circus_lot + toy_workshop still load unchanged.

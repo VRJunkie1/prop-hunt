@@ -3,52 +3,89 @@
 Source pack: https://poly.pizza/bundle/Restaurant-Bits-ejkcnWf78Q
 License: CC0 1.0 (public domain). Author: Kay Lousberg. Full credit in `/CREDITS.md`.
 
-## Status: GLB models were NOT fetched in the build session (reported honestly)
+## Status: real GLB meshes present and WIRED INTO the restaurant map
 
-The build sandbox had **no working way to download binary files** (no functional
-network/shell tool — the shell permission stream fails; the editor's write tool is
-text-only). So this folder does **not** yet contain the `.glb` meshes, and none
-were faked with empty placeholders.
+These `.glb` files are the real low-poly Restaurant Bits models, and the
+`restaurant` map now renders them (not primitive boxes). How it hangs together:
 
-The `restaurant` map is fully playable *now* using the engine's existing
-**primitive-shape** catalog (`shared/config/props.json`), themed as restaurant
-items. Swapping in the real GLB meshes is a follow-up (see bottom).
+- `shared/config/props.json` — every restaurant catalog entry carries a `model:`
+  path (e.g. `"restaurant/oven.glb"`) **plus** its old primitive shape as a
+  fallback + size target. Small movable items are disguise **props**; building
+  pieces are static **fixtures** — the two never mix (see below).
+- `js/scene.js` — at match start (`buildWorld`, off `S2C.STARTED`) it renders the
+  primitives immediately, then **lazily** imports a CDN `GLTFLoader`, downloads only
+  the GLBs the active map references, and swaps each real mesh in over its
+  placeholder. Loading is scale-normalised by bounding box, so a model lands at
+  roughly the intended size regardless of its native units.
+- **Fallback:** if a referenced GLB is missing or fails mid-load, that one item
+  keeps its primitive shape — one bad file can never blank the map.
+- **Lazy, client-only:** the loader import and the GLB downloads happen only on the
+  viewing client at match start — never at page boot, never in `shared/referee.js`
+  (which stays render-agnostic). The headless boot-time load check makes zero
+  external requests.
 
-## Intended models → current primitive stand-in (shape/color in props.json)
+## Item → model mapping
 
-Dynamic props (disguise pool — small/movable):
-| Restaurant Bits item        | props.json type   | stand-in shape       |
-|-----------------------------|-------------------|----------------------|
-| Chair (diner)               | `diner_chair`     | box                  |
-| Stool                       | `kitchen_stool`   | cylinder             |
-| Crate                       | `food_crate`      | box                  |
-| Pot                         | `pot`             | cylinder             |
-| Pan                         | `pan`             | flat cylinder        |
-| Plate                       | `plate`           | flat cylinder        |
-| Bowl                        | `bowl`            | sphere               |
-| Cutting board               | `cutting_board`   | flat box             |
-| Burger / food               | `burger`          | short cylinder       |
-| Sauce/bottle                | `sauce_bottle`    | cylinder             |
+Disguise **props** (small / movable — the disguise pool, from `map.props`):
+| props.json type | GLB                          |
+|-----------------|------------------------------|
+| `diner_chair`   | `chair.glb`                  |
+| `kitchen_stool` | `chair_stool.glb`            |
+| `food_crate`    | `crate_of_potatoes.glb`      |
+| `crate_buns`    | `crate_of_buns.glb`          |
+| `crate_veg`     | `crate_of_tomatoes.glb`      |
+| `crate_cheese`  | `crate_cheese.glb`           |
+| `pot`           | `pot.glb`                    |
+| `large_pot`     | `large_pot.glb`              |
+| `stew_pot`      | `pot_of_stew.glb`            |
+| `pan`           | `pan.glb`                    |
+| `plate`         | `plate.glb`                  |
+| `bowl`          | `bowl.glb`                   |
+| `stew_bowl`     | `stew_bowl.glb`              |
+| `cutting_board` | `cutting_board.glb`          |
+| `burger`        | `burger.glb`                 |
+| `veg_burger`    | `vegetable_burger.glb`       |
+| `tomato`        | `tomato.glb`                 |
+| `lettuce`       | `lettuce.glb`                |
+| `cheese`        | `cheese.glb`                 |
+| `onion`         | `onion.glb`                  |
+| `potato`        | `potato.glb`                 |
+| `carrot`        | `carrot.glb`                 |
+| `ketchup`       | `ketchup.glb`                |
+| `mustard`       | `mustard_bottle.glb`         |
 
-Static fixtures (world colliders — immovable building pieces):
-| Restaurant Bits item        | props.json type   | stand-in shape       |
-|-----------------------------|-------------------|----------------------|
-| Kitchen counter             | `counter`         | box                  |
-| Stove                       | `stove`           | box                  |
-| Oven                        | `oven`            | box                  |
-| Fridge                      | `fridge`          | tall box             |
-| Kitchen cabinet             | `cabinet`         | box                  |
-| Sink                        | `sink`            | box                  |
-| Round/kitchen table (large) | `round_table`     | cylinder             |
-| Large table                 | `large_table`     | box                  |
-| Interior wall / partition   | `kitchen_wall`    | wide thin box        |
+Static **fixtures** (immovable building pieces — from `map.fixtures`, NEVER
+disguisable):
+| props.json type  | GLB                            |
+|------------------|--------------------------------|
+| `floor_kitchen`  | `floor_kitchen.glb`            |
+| `kitchen_wall`   | `modular_walls.glb`            |
+| `pillar`         | `pillar.glb`                   |
+| `pillar_b`       | `pillar_b.glb`                 |
+| `oven`           | `oven.glb`                     |
+| `stove`          | `stove_with_multi_burner.glb`  |
+| `fridge`         | `fridge.glb`                   |
+| `cabinet`        | `kitchen_cabinet.glb`          |
+| `cabinet_corner` | `kitchen_cabinet_corner.glb`   |
+| `extractor`      | `extractorhood.glb`            |
+| `shelf`          | `shelf_papertowel.glb`         |
+| `counter`        | `modular_kitchen_parts.glb`    |
+| `prep_sink`      | `kitchentable_sink.glb`        |
+| `dishrack`       | `dishrack.glb`                 |
+| `round_table`    | `round_table.glb`              |
+| `kitchen_table`  | `kitchen_table.glb`            |
+| `large_table`    | `table.glb`                    |
+| `small_table`    | `table_round_a_small.glb`      |
+| `door`           | `door.glb`                     |
 
-## To swap in the real GLB meshes later (follow-up work)
-1. Download the pack's GLBs into this folder (e.g. `stove.glb`, `fridge.glb`, …).
-2. Add a **lazy** `GLTFLoader` path in `js/scene.js` `makePropMesh` — load GLB when
-   a catalog entry carries a `model:"restaurant/xxx.glb"` field, fall back to the
-   current primitive when it doesn't. MUST stay lazy: models load only inside
-   `buildWorld` (match start), never at page boot, to keep the headless load check
-   at zero external requests (same rule as three.js/PeerJS).
-3. Add `model` fields to the restaurant entries in `props.json`; keep the primitive
-   fields as fallback. No map or referee change needed — types stay the same.
+The pack ships many more food/cookware variants (steaks, hams, onions rings, buns,
+sauces, lids, jars, …) not yet placed in the map — they're available to reference
+from `props.json`/`maps.json` with no engine change.
+
+## Duplicate files awaiting removal
+
+The original bulk fetch saved ~19 models a second time under hash-suffixed names
+(`round_table_KZXCuGx1WZ.glb`, `tomato_EVTveOjwHG.glb`, `door_MSIuI2jpqb.glb`, …).
+The map references only the clean names; the hash-suffixed twins are unused junk to
+be `git rm`'d (this build's sandbox has no shell to delete them — see
+`memory/project-state.md`).
