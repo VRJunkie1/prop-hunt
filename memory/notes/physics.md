@@ -67,10 +67,10 @@ Four root causes, four fixes:
   `shared/referee.js` (wall-derived clamp, out-of-arena + wedged respawn),
   `js/main.js` (predict prop sync), `shared/config/physics-feel.json`
   (`groundStickSpeed`), `tools/check-physics-live.mjs` (new).
-- **LIVE RE-TEST OWED (Jie):** stand on a crate/table — no bob, jump always fires; shove
-  a big prop — you stay at its surface, it never buries into the floor; try to wedge into
-  a wall — you either can't or get respawned within ~1 s; the old perimeter glitch can't
-  persist (out-of-arena respawn); disguised-small vs big props — pushing in ejects you.
+- **LIVE RE-TEST PASSED (Jie, 2026-07-11, local solo playtest):** confirmed fixed in a
+  live browser session — no bob on props, prop collision holds firm (no phase-in /
+  hide-inside), and the perimeter "glitched mode" no longer persists. First physics pass
+  to be BOTH headless-sim verified AND playtest-confirmed before merge.
 
 ## 2026-07-11 PHYSICS PASS #4 (on `main`) — Jie: bouncy invisible wall + still phasing. ROOT CAUSE FOUND (behavioural, not geometry).
 Attempt #4. Jie reported the just-shipped relaunch made it WORSE: (1) STILL phases through
