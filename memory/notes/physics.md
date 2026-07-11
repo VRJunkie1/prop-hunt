@@ -3,6 +3,70 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS SOLIDITY PASS #3 — RELAUNCH (on `main`) — verify + close the fall-through window
+Relaunch of pass #3 (the first attempt's session was lost). Found pass #3's CODE already in
+the tree (disguise-sized capsule + thin-panel min-thickness) and re-traced from data before
+changing anything. Key diagnostic results:
+
+- **The empty-measurements hypothesis is REFUTED for the shipped maps.** `asset-dims.json` is
+  NOT read at runtime anyway — its keys are GLB paths (`"restaurant/door.glb"`), not the
+  `{dims:{...}}` shape `js/config.js` looks for, so `c.measured` is `undefined` everywhere and
+  colliders use the primitive footprints. Those footprints were ALREADY normalized to
+  `native × modelScale (0.75)` by the bbox pass, so **colliders match meshes**: verified
+  door `2.1==2.8×0.75`, fridge `1.88≈2.5×0.75`, oven `1.52≈2.02×0.75`, counter/cabinet
+  `0.75==1.0×0.75`, food_crate `1.5×0.72==2.0×0.966×0.75`, chair/tables likewise. So the
+  reported sinking is NOT a collider-smaller-than-visuals gap, and there is NO top-face height
+  gap on any wall (collider height == mesh height for every verifiable static fixture).
+- **The dramatic "fall through the ground → solid purple void" (both attached screenshots) is
+  the RECOVERY WINDOW, not a permanent fall.** The host's below-floor respawn
+  (`referee.integrate`) only fires when the capsule is >2 m below the floor AND is throttled to
+  ~0.5 s, so a wall-top tunnel drops the player into the void for up to half a second before it
+  yanks them back — long enough to screenshot. That window is the concrete defect this relaunch
+  closes.
+
+**FIX (minimal, guaranteed, un-tunable): per-substep hard floor clamp** (`physics.js
+_substep`). After the swept move, clamp the capsule CENTRE to `>= _pCenterY + FLOOR_Y` so the
+foot can never pass `y=FLOOR_Y` in ANY substep. Lives in the SHARED substep → host authority
+and every guest predictor apply it identically (no rubber-band). Purely additive: no map has
+legitimate sub-floor space (the ground slab top is `FLOOR_Y` everywhere), so it can't fire in
+normal play; when it catches a tunnelling capsule it lands it ON the floor instead of the void.
+The throttled referee respawn stays as the higher-level net (still logs). **`FLOOR_Y` is now an
+exported constant** — the one place the floor plane is defined, keyed by both the clamp and the
+check.
+
+**Shared pure helpers (single source of truth, no Rapier):** `halfExtentsFor(c)` and
+`thickenWallHalfExtents(hx,hz,minHalf)` extracted from the inline collider-build math.
+`_buildStatic` now calls `thickenWallHalfExtents` (behaviour-identical to the old inline
+`isThinPanel` block), and the headless check imports the SAME helpers, so engine and guard can
+never disagree on a collider's size or which walls get thickened.
+
+**`tools/check-physics-solidity.mjs` REWRITTEN to a pure-JS, zero-dependency, deterministic
+guard** that actually runs on bare `node` (the old version stood up Rapier — browser-only WASM
+— so it SKIPPED (exit 3) everywhere incl. CI and never guarded anything). It asserts the
+geometric root-cause invariants, proven against the real map+catalog data, one per bug:
+  - **A (sink/hide inside):** every world-prop *box* collider ≥ its drawn mesh (no gap to sink
+    into). Round colliders hug the body, not the GLB bbox — reported, not asserted. Plus the
+    worst-case disguise mesh-overhang bound (0.2 m today; hard-fails only if it regresses past
+    the pre-pass-#3 ~0.35, i.e. capsule-fitting disabled).
+  - **B (wall tunnel incl. top face):** every static box collider ≥ its mesh HEIGHT (no
+    top-face gap), the min wall thickness clears the capsule radius, and thin panels still get
+    thickened (regression guard on pass #3's grow).
+  - **C (below floor):** ground slab top == `FLOOR_Y`, covers the arena, ≫ one-substep fall;
+    and the engine clamps every foot to `FLOOR_Y` each substep.
+  Hand-traced GREEN against all three maps (this sandbox has no shell to execute it; the
+  invariants are computed by hand in the relaunch summary). **Run `node
+  tools/check-physics-solidity.mjs` to gate a build.**
+
+**Honest residuals (unchanged, live-playtest owed):** (1) Rapier's character-controller
+top-of-thin-wall tunnel is a runtime edge case a static check can't reproduce — the swept mover
++ CCD + depenetration failsafe + the new floor clamp are the defence; a live browser pass on
+the divider is still owed. (2) The disguise capsule is capped at `0.55` radius for doorway
+passability, so the biggest disguises (1.5-wide crate) leave ~0.2 m of mesh able to overlap a
+world prop — the documented tell-vs-passability tradeoff; raise `disguiseColliderMaxRadius` if a
+playtest wants more solidity at the cost of squeezing through the 1.2-wide door. Did NOT
+blind-tune it (that was build #38's mistake). **Files:** `shared/physics.js` (FLOOR_Y +
+helpers + floor clamp), `tools/check-physics-solidity.mjs` (rewrite), notes.
+
 ## 2026-07-11 PHYSICS SOLIDITY PASS #3 (on `main`) — Jie/Teravortryx: pass-through props + wall tunnel
 Third pass after two players reported (a) a player-controlled prop passing through /
 hiding fully INSIDE world props, and (b) jumping INTO a vertical wall tunnelling through

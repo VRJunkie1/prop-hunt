@@ -28,6 +28,12 @@ let _loadPromise = null;
 // it in the first few frames. See fix #3 (calm match start).
 const SPAWN_EPS = 0.02;
 
+// THE floor plane. Every map's ground/floor surface sits at y=0 (the ground slab's
+// TOP face, and where every spawn is placed). The un-throttled per-substep player
+// clamp (Bug 2, solidity pass #3 relaunch) and the host's referee failsafe both key
+// off this ONE constant, so "below the floor" means the same thing everywhere.
+export const FLOOR_Y = 0;
+
 // THE static/dynamic split (fix #2). A world object is a fixed, immovable collider
 // only if its catalog entry is flagged `static` (genuinely bolted-in: floor, walls,
 // pillars, doors, the vent/hood, and the big built-ins — counters, cabinets, oven,
@@ -121,6 +127,45 @@ function shapeFor(RAPIER, c) {
     default:
       return { desc: RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5), halfH: 0.5 };
   }
+}
+
+// Pure footprint half-extents for a catalog entry — measured bounds first, else the
+// primitive shape — with NO Rapier dependency. shapeFor() (which needs a real
+// ColliderDesc) and the headless solidity check (tools/check-physics-solidity.mjs,
+// which has no Rapier) both derive sizes from HERE, so engine and check can never drift
+// on what a collider's size is. `box` marks whether a cuboid collider is used (a
+// measured entry always forces a cuboid — see shapeFor / notes/asset-dims.md).
+export function halfExtentsFor(c) {
+  const m = c && c.measured;
+  if (m && m.w > 0 && m.h > 0 && m.d > 0) return { hx: m.w / 2, hy: m.h / 2, hz: m.d / 2, box: true };
+  switch (c && c.shape) {
+    case 'box':
+      return { hx: (c.w || 1) / 2, hy: (c.h || 1) / 2, hz: (c.d || 1) / 2, box: true };
+    case 'cylinder':
+    case 'cone':
+      return { hx: c.r || 0.5, hy: (c.h || 1) / 2, hz: c.r || 0.5, box: false };
+    case 'sphere':
+      return { hx: c.r || 0.5, hy: c.r || 0.5, hz: c.r || 0.5, box: false };
+    default:
+      return { hx: 0.5, hy: 0.5, hz: 0.5, box: true };
+  }
+}
+
+// Pure thin-wall thickening decision (Bug 2). Given a static box's HORIZONTAL half-
+// extents, return the FINAL half-extents after the min-thickness grow. This is the ONE
+// source of truth shared by _buildStatic (the live collider) and the headless check
+// (the regression guard), so the "which walls got thickened" rule can't diverge between
+// them. A wide+thin PANEL — one horizontal axis long, the other thinner than minHalf and
+// ≤ half the long one — gets its thin axis grown to minHalf (symmetric about the centre,
+// long axis + visible mesh untouched). Narrow posts/pillars (thin in BOTH axes: a wider
+// capsule can't tunnel them) are left exactly as authored. Returns {hx, hz, grew}.
+export function thickenWallHalfExtents(hx, hz, minHalf) {
+  const thin = Math.min(hx, hz);
+  const wide = Math.max(hx, hz);
+  const isPanel = thin < minHalf && wide >= 2 * thin;
+  if (!isPanel) return { hx, hz, grew: false };
+  if (hx <= hz) return { hx: minHalf, hz, grew: true };
+  return { hx, hz: minHalf, grew: true };
 }
 
 export class PhysicsWorld {
@@ -264,14 +309,14 @@ export class PhysicsWorld {
       // and thickening them would add annoying invisible collision). Guarded to box shapes.
       const isBox = c.shape === 'box' || (c.measured && c.measured.w > 0 && c.measured.d > 0);
       const minHalf = this.rules.minWallHalfThickness != null ? this.rules.minWallHalfThickness : 0.6;
-      let hx = halfExtentXZ(c, 'w');
-      let hz = halfExtentXZ(c, 'd');
-      const thin = Math.min(hx, hz);
-      const wide = Math.max(hx, hz);
-      const isThinPanel = isBox && thin < minHalf && wide >= 2 * thin;
-      if (isThinPanel) {
-        if (hx <= hz) hx = minHalf; else hz = minHalf; // grow the thin axis only
-        const wc = R.ColliderDesc.cuboid(hx, halfH, hz)
+      const hx0 = halfExtentXZ(c, 'w');
+      const hz0 = halfExtentXZ(c, 'd');
+      // Shared grow rule (thickenWallHalfExtents) — the SAME decision the headless check
+      // asserts, so live colliders and the regression guard can't disagree on which walls
+      // got thickened. Only box fixtures are eligible.
+      const grown = isBox ? thickenWallHalfExtents(hx0, hz0, minHalf) : { hx: hx0, hz: hz0, grew: false };
+      if (grown.grew) {
+        const wc = R.ColliderDesc.cuboid(grown.hx, halfH, grown.hz)
           .setTranslation(f.x, halfH + (f.y || 0), f.z)
           .setRestitution(rest);
         if (f.rot) wc.setRotation(yawQuat(f.rot));
@@ -663,7 +708,26 @@ export class PhysicsWorld {
       if (p.grounded && p.vy < 0) p.vy = 0;
 
       const tr = p.body.translation();
-      const nx = tr.x + mv.x, ny = tr.y + mv.y, nz = tr.z + mv.z;
+      const nx = tr.x + mv.x, nz = tr.z + mv.z;
+      let ny = tr.y + mv.y;
+      // HARD FLOOR CLAMP (Bug 2, solidity pass #3 relaunch). The swept mover + terminal
+      // clamp + depenetration failsafe make below-floor rare, but a wall-top tunnel could
+      // still drop the capsule until the host's THROTTLED (~0.5 s) respawn fires — that gap
+      // is the void the players screenshotted. Clamp the capsule foot to the floor plane
+      // every substep, un-throttled: the centre can never go below _pCenterY + FLOOR_Y, so
+      // the foot can never pass y=FLOOR_Y. This lives in the SHARED substep, so the host's
+      // authoritative world and every guest's prediction world apply it identically (no
+      // rubber-band). It is purely additive safety — no map has legitimate sub-floor space
+      // (the ground slab top is FLOOR_Y everywhere), so it can never fire in normal play;
+      // when it does catch a tunnelling capsule it lands it ON the floor instead of the
+      // void, and the depenetration anchor below records that valid spot. Props are
+      // untouched — they keep their own below-world respawn (respawnEscaped).
+      const floorCenterY = this._pCenterY + FLOOR_Y;
+      if (ny < floorCenterY) {
+        ny = floorCenterY;
+        if (p.vy < 0) p.vy = 0;
+        p.grounded = true;
+      }
       p.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
       // The controller's corrected result never enters geometry (it keeps `offset`
       // clearance), so it is a valid collision-free anchor for the depenetration

@@ -8,7 +8,44 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Latest: PHYSICS SOLIDITY PASS #3 — disguise-sized capsule + thin-wall min-thickness (2026-07-11, Jie/Teravortryx, on `main`). Code done; NOT live-tested (no shell / headless).
+## Latest: PHYSICS SOLIDITY PASS #3 — RELAUNCH: floor clamp + runnable check (2026-07-11, Jie/Teravortryx, on `main`). Headless invariants pass (hand-traced); live browser pass still owed.
+
+Relaunch of pass #3 (first attempt's session was lost). Pass #3's code (disguise-sized capsule
++ thin-panel min-thickness) was already in the tree; this session re-traced from data, refuted
+the empty-measurements theory, and closed the one concrete remaining defect. Full detail:
+`memory/notes/physics.md` (top "RELAUNCH").
+
+- **Diagnosis (data-verified):** colliders MATCH meshes on all shipped maps — the primitive
+  footprints were already normalized to `native × modelScale(0.75)` (door 2.1, fridge 1.88,
+  counter 0.75, food_crate 1.5×0.72, …), so there is no collider-smaller-than-visuals gap and
+  no wall top-face height gap. `asset-dims.json` isn't even read at runtime (its keys are GLB
+  paths, not the `{dims:{}}` shape config.js expects) — a genuine red herring. The "fall
+  through the ground → purple void" in BOTH screenshots is the host respawn's ~0.5 s throttled
+  RECOVERY WINDOW (only fires >2 m below floor), not a permanent fall.
+- **Fix (minimal, guaranteed):** a per-substep HARD FLOOR CLAMP in `physics.js _substep` — the
+  capsule foot can never pass `y=FLOOR_Y` in any substep, applied in the SHARED substep so host
+  + every guest predictor match. Kills the void window; lands a tunnelling capsule ON the floor
+  instead. Purely additive (no legit sub-floor space anywhere). `FLOOR_Y` is now an exported
+  constant. Throttled referee respawn kept as the higher net.
+- **Shared pure helpers** `halfExtentsFor` + `thickenWallHalfExtents` extracted from the inline
+  collider math; `_buildStatic` uses them (behaviour-identical) and the check imports the SAME
+  ones — engine + guard can't drift on collider sizes / which walls thicken.
+- **`tools/check-physics-solidity.mjs` REWRITTEN** to a pure-JS, zero-dep, deterministic guard
+  that actually runs on bare `node` (the old Rapier-sim SKIPPED everywhere and guarded nothing).
+  Asserts, per real map+catalog: (A) world-prop box colliders ≥ their mesh (no sink-in gap) +
+  bounded disguise overhang; (B) static box colliders ≥ mesh HEIGHT (no top-face gap) + thin
+  panels thickened past the capsule radius; (C) slab top == FLOOR_Y, covers arena, ≫ one-substep
+  fall + the engine floor-clamp. **Hand-traced GREEN on all three maps** (no shell to execute in
+  sandbox). Run `node tools/check-physics-solidity.mjs` to gate.
+- **Props stay movable/trampleable** — the clamp only touches below-floor Y; nothing frozen.
+- **Config unchanged.** Did NOT blind-tune `disguiseColliderMaxRadius` (build #38's mistake);
+  the ~0.2 m disguise mesh overhang on the widest disguises is the documented passability
+  tradeoff.
+- **OWED — live browser pass (Jie/Teravortryx, phone):** jump into the divider top / walk a
+  crate-disguise into world props / drop off a ledge — confirm no void screen, no walk-inside,
+  props still shove + trampleable; watch the console anti-fall warning stays silent.
+
+## [prev] PHYSICS SOLIDITY PASS #3 — disguise-sized capsule + thin-wall min-thickness (2026-07-11, Jie/Teravortryx, on `main`). Code done; NOT live-tested (no shell / headless).
 
 Third pass at the known-hard collision area. Two players reported (1) a player prop passing
 through / hiding fully INSIDE world props and (2) jumping into a wall tunnelling through then
