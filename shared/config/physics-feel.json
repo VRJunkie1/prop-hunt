@@ -7,7 +7,9 @@
   "propAngularDamping": 0.4,
   "capGroundedImpulse": true,
   "depenetrate": true,
+  "groundStickSpeed": 1.5,
   "_notes": {
+    "groundStickSpeed": "Pass #5 anti-bob. Downward stick velocity (m/s) a grounded, non-jumping player keeps instead of vy=0, so the swept controller holds ground contact and computedGrounded() stays stable (vy=0 made it flip every other substep on dynamic props = the standing-on-objects bob + flaky jump). Must satisfy value/60 >= controllerOffset (0.02), i.e. >= 1.2; the controller stops the press at the surface so there is no visible sinking.",
     "depenetrate": "Bug 2 anti-tunnel failsafe. When true, a player capsule that STARTS a physics substep genuinely inside solid geometry (e.g. a wall-top jump that landed it a hair inside a thin edge) is snapped back to its last collision-free position instead of being allowed to fall through the wall. Uses a skin-shrunk capsule test so ordinary resting-on-a-surface contact never trips it. Set false only if a live playtest shows it stuttering — it can only add stability.",
     "restitution": "0 = nothing bounces. A restaurant has no trampolines. Applied to every collider (dynamic props, static fixtures, floor, walls, ground). Rapier's default is already 0, so this is belt-and-suspenders + a single dial if a future map ever wants bounce.",
     "numSolverIterations": "Contact-solver iterations (Rapier default 4). Raised to make stiff contacts resolve fully in one step — the main fix for both sinking-into-props penetration and standing-on-object bobbing. 12-16 is the useful range; higher costs CPU every frame. If a PHONE HOST dips below 60fps, THIS is the first dial to back down (try 8).",

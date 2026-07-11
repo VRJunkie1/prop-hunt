@@ -353,6 +353,14 @@ function onSnapshot(msg) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
     if (msg.props) scene.syncProps(msg.props); // awake dynamic-prop transforms
   }
+  // Mirror the shoved props into the local PREDICTION world too (pass #5). Its props
+  // are fixed colliders built at match-start poses; without this they never moved, so
+  // local movement collided with ghost colliders where props USED to be and got no
+  // resistance where they actually are (the "walk into props" sponginess — authority
+  // only corrected at 15 Hz). Same transforms the renderer just consumed.
+  if (msg.props && msg.props.length && state.predict && state.predict.syncPropTransforms) {
+    state.predict.syncPropTransforms(msg.props);
+  }
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
     state.serverSelf.x = me.x;

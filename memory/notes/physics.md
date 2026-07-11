@@ -3,6 +3,75 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS PASS #5 (branch `physics-pass-5-player-collision`) — Jie: bob + phase-into-props + hide-inside + perimeter "glitched mode". FIRST PASS VERIFIED BY HEADLESS LIVE-SIM, NOT INSPECTION.
+What ended the guess cycle: `PhysicsWorld` takes RAPIER as a constructor arg, so the REAL
+engine was run headless in Node against a local `@dimforge/rapier3d-compat@0.14.0` (same
+pinned version the CDN serves) and every reported bug was REPRODUCED with numbers before
+anything was changed. The repro harness ships as **`tools/check-physics-live.mjs`** (SKIPs
+exit-3 if rapier isn't installed; `npm i --no-save @dimforge/rapier3d-compat@0.14.0` first).
+Four root causes, four fixes:
+
+- **Bob while standing on objects (+ flaky jump on props) = grounded-flag oscillation.**
+  Grounded set `vy = 0`, so the next substep's movement had NO downward component, so
+  `computedGrounded()` read false, so gravity applied, so it re-grounded — MEASURED: 593
+  flips in 600 substeps standing still on a crate. Through 15 Hz round2-quantised
+  snapshots + reconciliation that's the visible bob; and jump (needs `grounded`) was a
+  coin toss on props. **Fix: ground STICK** — a grounded, non-jumping player keeps
+  `vy = -feel.groundStickSpeed` (1.5; `groundStickSpeed/60 ≥ controllerOffset` so one
+  substep's press reaches the surface). The swept controller stops the press at the
+  surface (no visible sinking); grounding is now 0-flip stable, y amplitude 1 mm.
+- **Walk-into / push-through / hide-inside props = "fix #5" was DEAD CODE.** The
+  constructor declared `_propSkin/_propMaxPush/_propObstacles/_maxStuckSubsteps/
+  _stuckPlayerIds` with comments describing a character-vs-prop depenetration and an
+  escape hatch — none of it was referenced anywhere. Meanwhile pass #4 had (correctly)
+  excluded props from the static snap failsafe, so NOTHING ever separated capsule from
+  prop: measured penetration up to a full capsule radius while shoving; a capsule
+  teleported inside a prop stayed there forever. **Fix: `_depenetrateFromProps`** (every
+  substep, after `world.step()`): project the capsule's three axis points onto the
+  nearest PROP surface (`world.projectPoint`, `solid=false`, props-only predicate =
+  `_propHandles`, the complement of `_staticHandles`); push the PLAYER out when an axis
+  point is nearer than `radius − _propSkin` (or inside), capped `_propMaxPush`/substep.
+  Inside-exits take the CHEAPEST surface (deepest can point at a floor-pressed face) and
+  the push is floor-clamped. NOTE: contact MANIFOLDS were tried first and DON'T work — a
+  kinematic capsule's pairs exist but carry zero contact points in 0.14. The ESCAPE HATCH
+  is real now too: a static-snap that fails `_maxStuckSubsteps` consecutive substeps
+  flags the id; the referee failsafe consumes `consumeStuckPlayers()` and respawns.
+- **Perimeter "glitched mode" (run along outside, snapped back wall-ward) = referee clamp
+  0.58 m IN FRONT of the walls + no out-of-arena recovery.** `integrate()` clamped
+  broadcast pos to `size/2 − mapMargin` (1.5) but legal wall-hugging reaches
+  `size/2 − WALL_INSET(0.5) − playerRadius(0.4)`. A body that escaped the arena (ground
+  slab extends 2 m past the walls — a walkable apron; below-floor failsafe never fires
+  out there) kept broadcasting a clamped pos AT the wall; the client rewound to it every
+  snapshot (>2.5 m mismatch = the hard corr snap = "bounces me toward the wall").
+  **Fix:** clamp derived from wall geometry (imports `WALL_INSET` from bounds.js, now a
+  true backstop that never bites in normal play) + the throttled failsafe respawns any
+  body whose centre passes the wall inner face (reads `physics.getPlayer`, the TRUE pose,
+  not the clamped `p.pos`) and logs fallen/escaped/wedged counts separately.
+- **"Phasing regardless of disguise" feel = prediction world's props NEVER MOVED.** Every
+  predict world built props as fixed colliders at match-start poses; snapshot prop
+  transforms only reached the renderer. Local movement collided with ghosts where props
+  USED to be and sailed through where they ARE (authority corrected at only 15 Hz = the
+  spongy push-in). **Fix: `syncPropTransforms(list)`** repositions the fixed colliders
+  (`_fixedPropColliders` by id), called from `main.js onSnapshot` with the same transforms
+  `scene.syncProps` consumes. Plus **buried-prop recovery**: a prop's centre can't stay
+  below `FLOOR_Y + min half-extent − 0.05` (the kinematic capsule used to pin shoved
+  props INSIDE the ground slab — measured centre y=−0.56).
+- **Chaos caveat for future checks:** Rapier runs are NOT bit-reproducible across
+  processes — scenario outcomes (how a prop tumbles) vary run to run. Live-sim assertions
+  must be INVARIANTS the engine enforces every substep (push-out, clamps, stick), not
+  trajectory expectations. All 10 checks in check-physics-live.mjs are green 3/3 runs;
+  `check-physics.mjs` has 2 PRE-EXISTING spawn-blocked-by-floor_kitchen failures on main
+  (map data, untouched by this pass).
+- **Files:** `shared/physics.js` (stick, `_propHandles`, `_depenetrateFromProps`, escape
+  hatch, buried-prop recovery, `syncPropTransforms`, `consumeStuckPlayers`),
+  `shared/referee.js` (wall-derived clamp, out-of-arena + wedged respawn),
+  `js/main.js` (predict prop sync), `shared/config/physics-feel.json`
+  (`groundStickSpeed`), `tools/check-physics-live.mjs` (new).
+- **LIVE RE-TEST OWED (Jie):** stand on a crate/table — no bob, jump always fires; shove
+  a big prop — you stay at its surface, it never buries into the floor; try to wedge into
+  a wall — you either can't or get respawned within ~1 s; the old perimeter glitch can't
+  persist (out-of-arena respawn); disguised-small vs big props — pushing in ejects you.
+
 ## 2026-07-11 PHYSICS PASS #4 (on `main`) — Jie: bouncy invisible wall + still phasing. ROOT CAUSE FOUND (behavioural, not geometry).
 Attempt #4. Jie reported the just-shipped relaunch made it WORSE: (1) STILL phases through
 props, and (2) NEW — an "invisible bouncy wall" confines the player to a strip along one wall;

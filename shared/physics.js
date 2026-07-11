@@ -72,6 +72,16 @@ export function resolveFeel(feel) {
     // than let the swept query drop it through the wall. Default ON; flip OFF here if
     // a live playtest shows it stuttering (it can only ADD stability, never remove it).
     depenetrate: f.depenetrate !== false,
+    // Ground stick (pass #5, the standing-on-objects BOB). A grounded player used to
+    // get vy=0, so the next substep's movement had NO downward component, so
+    // computedGrounded() read false, so gravity applied, so it re-grounded — the flag
+    // flipped EVERY OTHER substep on a dynamic prop (measured: 593 flips/600 substeps),
+    // which 15 Hz round2-quantised snapshots + reconciliation turn into the visible bob
+    // (and it made jump flaky on props, since jumping requires `grounded`). Instead a
+    // grounded, non-jumping player keeps a small constant downward velocity so the swept
+    // controller holds contact and grounding stays stable. Must satisfy
+    // stick/60 >= controllerOffset (0.02) so one substep's press reaches the surface.
+    groundStickSpeed: num(f.groundStickSpeed, 1.5),
   };
 }
 
@@ -358,6 +368,16 @@ export class PhysicsWorld {
 
   _buildProps(propInstances, catalog) {
     const R = this.R;
+    // Handles of every PROP collider (dynamic bodies AND fixed obstacles), the exact
+    // complement of _staticHandles. The player-vs-prop depenetration (fix #5 Bug B,
+    // implemented in pass #5 — see _depenetrateFromProps) keys off THIS set so it only
+    // ever pushes the capsule out of props, never off world geometry (which the
+    // static-only snap failsafe owns). Built identically on host + guest predictors.
+    this._propHandles = new Set();
+    // id -> fixed prop collider, for a PREDICTION world only: syncPropTransforms
+    // repositions these to the host's live transforms each snapshot so local collision
+    // stops drifting from where the props actually are (pass #5, stale-ghost fix).
+    this._fixedPropColliders = new Map();
     // Phone-safety budget: cap how many props are DYNAMIC (real simulated rigid
     // bodies). Past the cap, extras become solid STATIC colliders — fully collidable,
     // just not shovable — so a dense map degrades to "the smallest clutter doesn't
@@ -402,10 +422,18 @@ export class PhysicsWorld {
         // through a thin collider — swept detection closes that hole. Method-guarded.
         if (bodyDesc.setCcdEnabled) bodyDesc.setCcdEnabled(true);
         const body = this.world.createRigidBody(bodyDesc);
-        this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
+        const col = this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
+        this._propHandles.add(col.handle);
         // Keep the spawn transform so the failsafe can respawn a prop that escapes the
-        // world below the floor (fix #4). See respawnEscaped.
-        this.propBodies.push({ id: p.id, body, spawn: { x: p.x, y: spawnY, z: p.z, q: spawnQ } });
+        // world below the floor (fix #4). See respawnEscaped. minHalf = the smallest
+        // half-extent = the lowest the body CENTRE can legitimately sit above the floor
+        // in any orientation; the per-substep buried-prop recovery (pass #5) keys off it.
+        const he = halfExtentsFor(c);
+        this.propBodies.push({
+          id: p.id, body,
+          spawn: { x: p.x, y: spawnY, z: p.z, q: spawnQ },
+          minHalf: Math.min(he.hx, he.hy, he.hz),
+        });
         dynCount++;
       } else {
         // Fixed obstacle. Three cases land here:
@@ -417,7 +445,9 @@ export class PhysicsWorld {
         desc.setTranslation(p.x, cy, p.z).setRestitution(this.feel.restitution);
         if (moved) desc.setRotation({ x: p.qx, y: p.qy, z: p.qz, w: p.qw });
         else if (p.rot) desc.setRotation(yawQuat(p.rot));
-        this.world.createCollider(desc);
+        const col = this.world.createCollider(desc);
+        this._propHandles.add(col.handle);
+        this._fixedPropColliders.set(p.id, col);
       }
     }
   }
@@ -673,7 +703,7 @@ export class PhysicsWorld {
     // frame can never leap past a collider. From rules.json (shared by both sims).
     const maxFall = this.rules.maxFallSpeed != null ? this.rules.maxFallSpeed : 20;
 
-    for (const p of this.players.values()) {
+    for (const [id, p] of this.players) {
       // DEPENETRATION FAILSAFE (Bug 2): if this substep begins with the capsule
       // genuinely INSIDE solid geometry (a wall-top jump can leave it a hair inside a
       // thin edge), the swept query would start from an illegal state and can drop the
@@ -681,9 +711,22 @@ export class PhysicsWorld {
       // and kill the fall instead of tunnelling. Skin-shrunk test (below) so ordinary
       // resting-on-a-surface contact never trips it. Cheap, guarded, no-ops if the
       // intersection API is unavailable.
+      // ESCAPE HATCH (fix #5 Bug A, implemented in pass #5): if the snap fails to clear
+      // penetration for _maxStuckSubsteps CONSECUTIVE substeps, the anchor itself is
+      // poisoned (recorded while already wedged) — the player is permanently stuck.
+      // Flag them for the referee's failsafe sweep to respawn instead of leaving them
+      // pinned; a guest predictor also flags, but only the host acts (guests just get
+      // corrected by the authoritative respawn through the normal snapshot).
       if (this.feel.depenetrate && p.safePos && this._isPenetrating(p) === true) {
         p.body.setTranslation({ x: p.safePos.x, y: p.safePos.y, z: p.safePos.z }, false);
         p.vy = 0;
+        p.stuckSubsteps = (p.stuckSubsteps || 0) + 1;
+        if (p.stuckSubsteps >= this._maxStuckSubsteps) {
+          this._stuckPlayerIds.add(id);
+          p.stuckSubsteps = 0;
+        }
+      } else {
+        p.stuckSubsteps = 0;
       }
 
       const inp = p.input || { mx: 0, mz: 0, yaw: 0, jump: false };
@@ -698,9 +741,15 @@ export class PhysicsWorld {
         vz /= len;
       }
 
-      // Vertical: integrate gravity; jump only when grounded.
+      // Vertical: integrate gravity; jump only when grounded. A grounded, non-jumping
+      // player keeps a small downward STICK velocity (never 0 — see resolveFeel
+      // groundStickSpeed): with desired.y = 0 the next substep's movement query makes
+      // no downward contact, computedGrounded() flips false, gravity applies, and the
+      // flag oscillates every other substep — the standing-on-objects bob + flaky jump.
+      // The swept controller stops the press at the surface, so there is no visible
+      // sinking; the press only keeps the ground contact (and grounding) continuous.
       if (p.grounded) {
-        p.vy = inp.jump ? jumpSpeed : 0;
+        p.vy = inp.jump ? jumpSpeed : -this.feel.groundStickSpeed;
       } else {
         p.vy -= g * dt;
       }
@@ -773,6 +822,139 @@ export class PhysicsWorld {
     // Fixed substep — timestep is _fixedDt (set in the constructor); dt is always
     // _fixedDt here, so the dynamics solver runs at a constant rate.
     this.world.step();
+
+    // PLAYER-vs-PROP DEPENETRATION (fix #5 Bug B, implemented in pass #5). The
+    // character controller only SOFTLY resists dynamic bodies: shoving a free prop, the
+    // capsule creeps into its footprint (measured up to a full 0.40 m radius) and can
+    // cross out the far side — the walk-into/through-props and hide-inside-a-prop bugs.
+    // The static-only snap failsafe above deliberately ignores props (pass #4), and
+    // nothing else ever separates capsule from prop. So: read the contact manifolds the
+    // step just computed and push the PLAYER out of any prop it genuinely overlaps —
+    // a firm per-substep push (capped at _propMaxPush), never a teleport-snap. Max
+    // approach speed is moveSpeed/60 = 0.1 m per substep, so a 0.2 cap always wins.
+    for (const p of this.players.values()) this._depenetrateFromProps(p);
+
+    // BURIED-PROP RECOVERY (pass #5). While a prop is being shoved by (or trampled
+    // under) the infinite-mass kinematic capsule, the solver can only resolve the
+    // overlap by pushing the PROP — and against the capsule it can drive the prop into
+    // the ground slab and pin it there (measured: a shoved table's centre ended at
+    // y = -0.56, fully below the floor). minHalf is the lowest a body's centre can
+    // legitimately sit in ANY orientation, so lifting only when below it can never
+    // fight a normal tumble; velocity is only stripped of its downward component.
+    for (const pb of this.propBodies) {
+      const t = pb.body.translation();
+      const minY = FLOOR_Y + pb.minHalf;
+      if (t.y < minY - 0.05) {
+        pb.body.setTranslation({ x: t.x, y: minY, z: t.z }, true);
+        const lv = pb.body.linvel();
+        if (lv.y < 0) pb.body.setLinvel({ x: lv.x, y: 0, z: lv.z }, true);
+      }
+    }
+  }
+
+  // Push the player capsule out of any PROP collider it genuinely overlaps. Props only
+  // (_propHandles predicate) — world-geometry recovery stays with the static snap
+  // failsafe. Mechanism: project the capsule's three axis points (bottom, centre, top)
+  // onto the nearest PROP surface (world.projectPoint, solid=false, so an inside point
+  // still gets its nearest surface point + isInside=true — verified against the pinned
+  // rapier3d-compat@0.14 API; contact MANIFOLDS were tried first but a kinematic
+  // capsule's pairs carry zero contact points, so they can't drive this). An axis point
+  // closer to a prop surface than (radius − _propSkin) — or inside the prop outright —
+  // yields a push; the deepest sample wins and the push is capped at _propMaxPush per
+  // substep, so a recovery is a firm shove, never a visible teleport. Overlap shallower
+  // than _propSkin is ordinary resting/pressing contact and is deliberately left alone
+  // (the capsule rests against props; it must not vibrate off them). Guarded: absent
+  // API → no-op, and the whole thing costs 3 point queries per player per substep.
+  _depenetrateFromProps(p) {
+    const world = this.world;
+    if (!this._propHandles || this._propHandles.size === 0 || typeof world.projectPoint !== 'function') return;
+    const propsOnly = (col) => this._propHandles.has(col.handle);
+    const t = p.body.translation();
+    const half = p.half != null ? p.half : this._pHalf;
+    const radius = p.radius != null ? p.radius : this._pRadius;
+    const clear = radius - this._propSkin; // an axis point must keep this much distance
+    // Two kinds of candidate push, chosen differently:
+    //  - INSIDE sample (axis point swallowed by a prop): exit is THROUGH the nearest
+    //    surface. Among inside samples take the CHEAPEST exit (smallest travel) — the
+    //    deepest one can point at a face that is pressed against the floor (a table's
+    //    underside) and would drive the capsule downward instead of surfacing it.
+    //  - NEAR sample (surface closer than the capsule radius): push straight away from
+    //    the surface; take the deepest violation.
+    let inX = 0, inY = 0, inZ = 0, inNeed = Infinity;
+    let outX = 0, outY = 0, outZ = 0, outNeed = 0;
+    for (const oy of [-half, 0, half]) {
+      const pt = { x: t.x, y: t.y + oy, z: t.z };
+      let proj;
+      try {
+        proj = world.projectPoint(pt, false, undefined, undefined, undefined, undefined, propsOnly);
+      } catch {
+        return; // API mismatch — degrade to no push-out rather than throw mid-substep
+      }
+      if (!proj || !proj.point) continue;
+      const dx = proj.point.x - pt.x, dy = proj.point.y - pt.y, dz = proj.point.z - pt.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d < 1e-9) continue;
+      if (proj.isInside) {
+        const need = d + clear;
+        if (need < inNeed) {
+          inNeed = need;
+          inX = (dx / d) * need; inY = (dy / d) * need; inZ = (dz / d) * need; // toward + past the surface
+        }
+      } else if (d < clear) {
+        const need = clear - d;
+        if (need > outNeed) {
+          outNeed = need;
+          outX = (-dx / d) * need; outY = (-dy / d) * need; outZ = (-dz / d) * need; // away from the surface
+        }
+      }
+    }
+    let px, py, pz;
+    if (inNeed < Infinity) { px = inX; py = inY; pz = inZ; }
+    else if (outNeed > 0) { px = outX; py = outY; pz = outZ; }
+    else return;
+    const mag = Math.hypot(px, py, pz);
+    if (mag < 1e-9) return;
+    const scale = Math.min(1, this._propMaxPush / mag);
+    const nx = t.x + px * scale, nz = t.z + pz * scale;
+    // Never push the capsule below the floor plane (a prop face resting on the ground
+    // must not become an exit route into the slab — same clamp the mover applies).
+    const ny = Math.max(t.y + py * scale, this._pCenterY + FLOOR_Y);
+    p.body.setTranslation({ x: nx, y: ny, z: nz }, false);
+    p.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+    // The pushed-out position is MORE collision-free than the pre-push one — make it
+    // the new anchor so a following static snap can't yank the player back into the prop.
+    p.safePos = { x: nx, y: ny, z: nz };
+  }
+
+  // Player ids the depenetration escape hatch flagged as unrecoverably wedged since the
+  // last call. The HOST referee consumes this in its failsafe sweep and respawns them;
+  // returns [] when there is nothing to do (and always on guest predictors, where the
+  // authoritative respawn arrives via the normal snapshot instead).
+  consumeStuckPlayers() {
+    if (!this._stuckPlayerIds || this._stuckPlayerIds.size === 0) return [];
+    const out = [...this._stuckPlayerIds];
+    this._stuckPlayerIds.clear();
+    return out;
+  }
+
+  // PREDICTION-WORLD PROP SYNC (pass #5). A guest predictor (and the host's own
+  // prediction world) builds every prop as a FIXED collider at its match-start pose —
+  // and nothing ever moved them, so after a minute of shoving, local movement collided
+  // with ghost colliders where props USED to be and sailed through where they actually
+  // are (the "walk into props no problem" feel; authority only corrected at 15 Hz).
+  // Called from main.js with each snapshot's awake-prop transforms: reposition the
+  // fixed colliders to the live poses so local prediction and authority agree on where
+  // the props are. No-op on the host's authoritative world (its props are real dynamic
+  // bodies and never enter _fixedPropColliders... except past-cap statics, which the
+  // host never syncs because the referee doesn't call this).
+  syncPropTransforms(list) {
+    if (!this._fixedPropColliders || this._fixedPropColliders.size === 0 || !list) return;
+    for (const q of list) {
+      const col = this._fixedPropColliders.get(q.id);
+      if (!col) continue;
+      col.setTranslation({ x: q.x, y: q.y, z: q.z });
+      if (Number.isFinite(q.qx)) col.setRotation({ x: q.qx, y: q.qy, z: q.qz, w: q.qw });
+    }
   }
 
   // Transforms of props that are currently AWAKE (moving). Sleeping props are
