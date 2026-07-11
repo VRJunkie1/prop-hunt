@@ -3,6 +3,64 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS PASS #4 (on `main`) — Jie: bouncy invisible wall + still phasing. ROOT CAUSE FOUND (behavioural, not geometry).
+Attempt #4. Jie reported the just-shipped relaunch made it WORSE: (1) STILL phases through
+props, and (2) NEW — an "invisible bouncy wall" confines the player to a strip along one wall;
+they bounce off empty air and can't move toward the middle. Both attached screenshots are the
+**circus_lot** map (purple sky) — whose props are pure PRIMITIVES with perfect
+collider==mesh alignment. So the acute bug is **map-independent player physics, NOT a collider
+geometry misalignment** (the prime "displaced collider" hypothesis is refuted by the map choice
+in the very screenshots).
+
+**ROOT CAUSE — the depenetration failsafe was snapping players off PROPS.** `_isPenetrating`
+(pass #2, `physics.js`) tested the capsule against ALL solid geometry using only
+`EXCLUDE_SENSORS`. Since fix #2 the world defaults to ~130 **dynamic/knockable** props, and
+pass #3 grows a disguised player's capsule fatter — so a (disguised) player pushing through the
+pervasive props overlapped a prop every substep, tripped the failsafe, and was **yanked back to
+`safePos` = "bounce off empty air, can't reach the middle, confined to a strip"**. The failsafe
+is meant to recover a capsule that started a substep inside IMMOVABLE geometry (a wall-top
+tunnel), never to fight a prop the player is legitimately shoving.
+
+**FIX (behavioural, minimal):** `_buildStatic` now records the handles of the STATIC WORLD
+colliders only (ground slab, boundary walls, static fixtures) in `this._staticHandles`.
+`_isPenetrating` passes Rapier's `intersectionWithShape` **filterPredicate** (its final arg,
+verified against the pinned rapier3d-compat@0.14 API) = `(col) => _staticHandles.has(col.handle)`,
+so depenetration considers ONLY immovable world geometry. Props (dynamic on the host, fixed
+obstacles on a guest predictor) are excluded on BOTH sims — the set is built identically in the
+shared `PhysicsWorld`, so no rubber-band. Wall-top / floor tunnel recovery is **preserved**
+(walls + slab are in the set); prop collide-and-slide (via `computeColliderMovement`, unchanged)
+still blocks the capsule at a prop's surface and still shoves it. This also cleans up symptom 1:
+the failsafe fighting every prop contact was degrading prop-collision feel ("minimal
+resistance / phasing"). The disguise-capsule 0.55 radius cap (≈0.2 m overhang on the widest
+disguises) remains the documented passability tradeoff — NOT blind-tuned.
+
+**SEE-IT + GUARD (the thing that ends the 4-attempt guess cycle):**
+- **`shared/bounds.js` (NEW) — ONE shared source** for the world-space bounds of every
+  collider + every mesh. Collider SIZES reuse the SAME pure helpers `physics.js` builds real
+  colliders from (`halfExtentsFor`/`thickenWallHalfExtents`/`isStaticEntry`/`FLOOR_Y`); the
+  static-collider PLACEMENT math is a faithful mirror of `_buildStatic` (constants
+  `GROUND_SLAB_HALF_Y`/`WALL_INSET`/`WALL_HALF_THICK`/`WALL_HALF_HEIGHT` live here). The debug
+  view, the guard, and diagnosis ALL read this — they cannot drift from each other.
+- **`?debug=1` collider view** (`js/scene.js`) — wireframe outline of EVERY physics collider
+  in-world (ground grey, boundary walls red, static fixtures cyan; each prop's collider
+  outline parented to its container so it tracks shoves in yellow). Built from `shared/bounds.js`.
+  Toggle with the `?debug=1` URL param. Full doc: `memory/notes/collider-debug.md`.
+- **`tools/check-physics.mjs` (NEW)** — sibling of `check-physics-solidity.mjs`, pure/zero-dep/
+  headless. Asserts (MISALIGNMENT) every collider AABB overlaps its mesh AABB and is not
+  smaller than the mesh; (OPEN MIDDLE) every spawn + the hunter spawn is collider-free at
+  player height and no static fixture collider is arena-sized (a blown-up transform).
+  Hand-traced GREEN on all three maps (sandbox has no shell; several GLBs are UNVERIFIED
+  because their native bbox isn't in asset-dims.json — those keep the primitive footprint,
+  which equals the mesh by construction). Run `node tools/check-physics.mjs` to gate.
+
+**Honest residual:** the depenetration fix is BEHAVIOURAL — a static check can't reproduce it.
+It needs a live browser pass (Jie): disguise as a big crate, walk INTO the props toward the
+middle → you now push through/past them instead of bouncing; jump onto the divider/wall top →
+still no tunnel/void; props still shove + trampleable. **Files:** `shared/physics.js`
+(`_staticHandles` + predicate), `shared/bounds.js` (new), `js/scene.js` (debug view), `js/main.js`
+(scene.rules), `tools/check-physics.mjs` (new), notes.
+
+
 ## 2026-07-11 PHYSICS SOLIDITY PASS #3 — RELAUNCH (on `main`) — verify + close the fall-through window
 Relaunch of pass #3 (the first attempt's session was lost). Found pass #3's CODE already in
 the tree (disguise-sized capsule + thin-panel min-thickness) and re-traced from data before

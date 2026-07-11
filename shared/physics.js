@@ -245,13 +245,28 @@ export class PhysicsWorld {
     const half = map.size / 2;
     const rest = this.feel.restitution; // 0 = nothing bounces (feel dial 1)
 
+    // Handles of the STATIC WORLD colliders only (ground slab, boundary walls, static
+    // fixtures) — NOT props. The depenetration failsafe (_isPenetrating, Bug 2) queries
+    // ONLY this set: it must recover a capsule that STARTED a substep inside solid,
+    // immovable geometry (a wall-top tunnel), but it must NEVER snap a player back for
+    // touching a knockable PROP (those are meant to be shoved via collide-and-slide, not
+    // depenetrated). Testing props here was the "bounce off empty air / can't move toward
+    // the middle / confined to a strip" regression: with the world now defaulting to ~130
+    // dynamic props (fix #2) and a disguised player wearing a fatter capsule (pass #3), a
+    // player pushing through props tripped the failsafe every substep and was yanked back.
+    // The set is built identically on the host (props = dynamic) and every guest predictor
+    // (props = fixed obstacles), so props are excluded from depenetration on BOTH — the
+    // fix can't rubber-band. See notes/physics.md (RELAUNCH #2).
+    this._staticHandles = new Set();
+    const addStatic = (col) => { this._staticHandles.add(col.handle); return col; };
+
     // Ground: a thick fixed slab whose TOP face sits exactly at y=0. Extended well
     // DOWNWARD (3 m thick, top unchanged) so a fast/falling body can't punch through
     // the floor between substeps (fix #5). Render is unaffected (the visible ground
     // is a separate flat plane at y=0).
-    this.world.createCollider(
+    addStatic(this.world.createCollider(
       R.ColliderDesc.cuboid(half + 2, 1.5, half + 2).setTranslation(0, -1.5, 0).setFriction(0.9).setRestitution(rest)
-    );
+    ));
 
     // Boundary walls. Thickened to ~1.5 m and EXTENDED OUTWARD (the inner, arena-
     // facing face stays exactly where it was) and taller (5 m, base at y=0) so a
@@ -269,7 +284,7 @@ export class PhysicsWorld {
       [cOut, wallHY, 0, wallTZ, wallHY, along],
     ];
     for (const [x, y, z, hx, hy, hz] of walls) {
-      this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z).setRestitution(rest));
+      addStatic(this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z).setRestitution(rest)));
     }
 
     // Static fixtures — ONLY the genuinely bolted-in pieces (`static`). Knockable
@@ -293,7 +308,7 @@ export class PhysicsWorld {
           .setFriction(0.9)
           .setRestitution(rest);
         if (f.rot) fc.setRotation(yawQuat(f.rot));
-        this.world.createCollider(fc);
+        addStatic(this.world.createCollider(fc));
         continue;
       }
       // ANTI-TUNNEL for thin wall PANELS (Bug 2, solidity pass #3). A wide, thin static
@@ -320,12 +335,12 @@ export class PhysicsWorld {
           .setTranslation(f.x, halfH + (f.y || 0), f.z)
           .setRestitution(rest);
         if (f.rot) wc.setRotation(yawQuat(f.rot));
-        this.world.createCollider(wc);
+        addStatic(this.world.createCollider(wc));
         continue;
       }
       desc.setTranslation(f.x, halfH + (f.y || 0), f.z).setRestitution(rest);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
-      this.world.createCollider(desc);
+      addStatic(this.world.createCollider(desc));
     }
   }
 
@@ -559,8 +574,16 @@ export class PhysicsWorld {
     try {
       const t = p.body.translation();
       const shape = new R.Capsule(hh, rr);
+      // filterPredicate (Rapier's final intersectionWithShape arg): consider ONLY the
+      // static WORLD colliders (walls/floor/fixtures). Returning false for everything
+      // else means a knockable PROP the player is legitimately shoving is NOT counted as
+      // "penetrating solid geometry", so the failsafe never snaps the player off a prop —
+      // it only ever fires on immovable geometry (its actual job: wall-top tunnel + floor).
+      const staticOnly = this._staticHandles
+        ? (col) => this._staticHandles.has(col.handle)
+        : undefined;
       const hit = this.world.intersectionWithShape(
-        { x: t.x, y: t.y, z: t.z }, IDENT_QUAT, shape, this._moveFilter, undefined, p.collider, p.body
+        { x: t.x, y: t.y, z: t.z }, IDENT_QUAT, shape, this._moveFilter, undefined, p.collider, p.body, staticOnly
       );
       return !!hit;
     } catch {

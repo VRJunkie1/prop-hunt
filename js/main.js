@@ -30,6 +30,9 @@ async function ensureScene() {
   if (!scene) {
     const { Scene3D } = await import('./scene.js');
     scene = new Scene3D(canvas);
+    // Rules feed the ?debug=1 collider overlay so it mirrors thin-wall thickening exactly
+    // (same rules.minWallHalfThickness the engine + guard use). Harmless when debug is off.
+    scene.rules = state.cfg && state.cfg.rules ? state.cfg.rules : null;
     if (state.selfId) scene.setSelf(state.selfId);
   }
   return scene;

@@ -6,7 +6,11 @@ import * as THREE from 'three';
 // became a knockable rigid body isn't ALSO drawn as immovable scenery here (it would
 // double-render and leave a ghost collider). Importing the constant does not load
 // Rapier — physics.js only fetches the WASM inside loadRapier().
-import { isStaticEntry } from '/shared/physics.js';
+import { isStaticEntry, halfExtentsFor } from '/shared/physics.js';
+// Collider bounds, the ONE shared source (see shared/bounds.js). Used ONLY by the ?debug=1
+// wireframe overlay below — the same function the headless misalignment guard reads, so
+// what you SEE in debug is exactly what the guard checks and the engine builds.
+import { worldColliderBoxes } from '/shared/bounds.js';
 
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
@@ -182,6 +186,18 @@ export class Scene3D {
     this._hlSize = new THREE.Vector3();
     this._hlCenter = new THREE.Vector3();
 
+    // ---- collider debug overlay (?debug=1) ----------------------------------
+    // When the page URL carries ?debug=1, buildWorld draws a wireframe outline of EVERY
+    // physics collider in-world (static world geometry from shared/bounds.js; each prop's
+    // collider parented to its container so it tracks shoves live). This makes physics
+    // bugs SEEABLE — an invisible wall in open space or a collider offset from its mesh is
+    // obvious at a glance instead of guessed at. See memory/notes/collider-debug.md.
+    this._colliderDebug =
+      typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined'
+        ? new URLSearchParams(location.search).get('debug') === '1'
+        : false;
+    this.rules = null; // set by main.js (ensureScene) so the debug view can mirror thin-wall thickening
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
     // Orientation changes on phones sometimes report the new size a beat late;
@@ -323,6 +339,9 @@ export class Scene3D {
       built.mesh.userData.propId = p.id; // so a disguise-aim raycast maps a hit back to its prop
       container.add(built.mesh);
       this.scene.add(container);
+      // ?debug=1: parent this prop's collider outline to its container so it tracks the
+      // body as it's shoved (the disguise-vs-prop tell is a collider thing — see it move).
+      if (this._colliderDebug) this._addPropColliderWire(container, catalog[p.type]);
       this.colliders.push(built.mesh); // camera pulls in against props too
       this.propMeshes.set(p.id, {
         container,
@@ -336,6 +355,12 @@ export class Scene3D {
       });
       this._queueModel(p, built.mesh, catalog, container, built.baseY * s, s); // swap in the real GLB if any
     }
+
+    // ?debug=1: draw the STATIC world colliders (ground slab, boundary walls, static
+    // fixtures) from the ONE shared source (shared/bounds.js) — identical geometry to what
+    // physics.js builds and tools/check-physics.mjs checks. Prop colliders were parented to
+    // their containers above so they track shoves.
+    if (this._colliderDebug) this._buildStaticColliderDebug(map, catalog);
 
     // Kick off the real-mesh load for everything queued above. Fire-and-forget:
     // primitives are already on screen, so the map is playable instantly and each
@@ -1054,6 +1079,42 @@ export class Scene3D {
       const ctl = entry.hunterCtl;
       if (ctl && ctl.weaponRoot) ctl.weaponRoot.visible = this._weaponVisible;
     }
+  }
+
+  // ---- collider debug overlay (?debug=1) ------------------------------------
+  // A reusable wireframe box (unit cube edges) scaled/placed per collider. Colour codes
+  // the collider KIND so a mismatch reads at a glance.
+  _wireBox(w, h, d, color) {
+    const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.85 });
+    const box = new THREE.LineSegments(geo, mat);
+    box.scale.set(Math.max(w, 1e-3), Math.max(h, 1e-3), Math.max(d, 1e-3));
+    box.renderOrder = 998;
+    box.frustumCulled = false;
+    return box;
+  }
+
+  // Parent a prop's collider outline (yellow) to its container, centred on the body
+  // centre (== container origin), so it moves/rotates with the shoved prop.
+  _addPropColliderWire(container, c) {
+    if (!c) return;
+    const he = halfExtentsFor(c);
+    container.add(this._wireBox(he.hx * 2, he.hy * 2, he.hz * 2, 0xffd23f));
+  }
+
+  // Draw the static world colliders (ground grey, boundary walls red, static fixtures
+  // cyan) from shared/bounds.js — the SAME boxes physics.js builds and the guard checks.
+  _buildStaticColliderDebug(map, catalog) {
+    const group = new THREE.Group();
+    const boxes = worldColliderBoxes(map, catalog, this.rules || {});
+    for (const b of boxes) {
+      const color = b.kind === 'ground' ? 0x555555 : b.kind === 'wall' ? 0xff5a5a : 0x4ad9ff;
+      const w = this._wireBox(b.hx * 2, b.hy * 2, b.hz * 2, color);
+      w.position.set(b.cx, b.cy, b.cz);
+      w.rotation.y = b.rot || 0;
+      group.add(w);
+    }
+    this.scene.add(group); // dropped by the next buildWorld's scene.clear()
   }
 
   render() {

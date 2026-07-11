@@ -252,6 +252,19 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   footprints in `props.json`/`fixtures.json`. The measured file is the output of the
   bounding-box normalization build; it currently ships EMPTY (footprint fallback
   everywhere) with the wiring ready. Detail: `notes/asset-dims.md`.
+- **ONE shared bounds source — `shared/bounds.js`** (pass #4). The world-space bounds
+  of every collider and every mesh are derived HERE (reusing the same size helpers
+  `physics.js` builds real colliders from). Three consumers read it so they can never
+  drift: the `?debug=1` in-world collider wireframe (`scene.js`), the headless
+  misalignment guard (`tools/check-physics.mjs`), and numeric diagnosis. Static-collider
+  placement math mirrors `physics.js _buildStatic` (constants live in `bounds.js`). This
+  is the structural answer to "the check passed but the game was broken" (see
+  `notes/collider-debug.md` + `notes/physics.md` pass #4).
+- **Depenetration failsafe is STATIC-ONLY** (pass #4). `_isPenetrating` (the anti-tunnel
+  snap-back) queries only `PhysicsWorld._staticHandles` (ground/walls/static fixtures),
+  never props — so a player shoving a knockable prop is never yanked back off it (that
+  was the "bouncy invisible wall" regression). Collide-and-slide still blocks + shoves
+  props; wall-top/floor tunnel recovery is preserved.
 - **Host** runs the one authoritative world; broadcasts player transforms + AWAKE
   prop transforms at 15 Hz with an `ack` seq per player. **Guests + host** each run
   a local prediction world for their OWN player and reconcile (rewind to the

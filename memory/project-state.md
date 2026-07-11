@@ -8,7 +8,42 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Latest: PHYSICS SOLIDITY PASS #3 — RELAUNCH: floor clamp + runnable check (2026-07-11, Jie/Teravortryx, on `main`). Headless invariants pass (hand-traced); live browser pass still owed.
+## Latest: PHYSICS PASS #4 — bouncy-invisible-wall ROOT CAUSE + `?debug=1` collider view + alignment guard (2026-07-11, Jie, on `main`). Geometry guard hand-traced GREEN; behavioural fix owes a live browser pass.
+
+Attempt #4. Jie: the relaunch made it WORSE — (1) still phases through props, (2) NEW "invisible
+bouncy wall" confines the player to a strip along one wall, can't reach the middle. Both attached
+screenshots are **circus_lot** (primitives, perfect collider==mesh) → the acute bug is
+**map-independent player physics, NOT a collider misalignment** (prime hypothesis refuted by the
+screenshots' own map). Full detail: `memory/notes/physics.md` (pass #4) + `notes/collider-debug.md`.
+
+- **ROOT CAUSE (behavioural):** the pass-#2 depenetration failsafe `_isPenetrating` tested the
+  capsule against ALL solids (only `EXCLUDE_SENSORS`). With the world now ~130 **knockable**
+  props (fix #2) and a **fatter disguised capsule** (pass #3), a player pushing through props
+  overlapped one every substep → snapped back to `safePos` = "bounce off empty air, can't reach
+  the middle, confined to a strip." The failsafe is only meant to recover from IMMOVABLE
+  geometry (wall-top/floor tunnel), never to fight a prop being shoved.
+- **FIX (minimal):** `_buildStatic` records the static WORLD collider handles
+  (`_staticHandles`); `_isPenetrating` passes Rapier's `filterPredicate` so depenetration
+  considers ONLY those — props (dynamic on host, fixed on guest) are excluded on BOTH sims (no
+  rubber-band). Wall/floor tunnel recovery preserved; prop collide-and-slide unchanged (still
+  blocks + shoves). Cleans up symptom 1 too (the failsafe was degrading prop-collision feel).
+- **`?debug=1` collider view (NEW):** wireframe of EVERY collider in-world (ground grey, walls
+  red, static fixtures cyan, each prop's collider yellow + tracking the shove). Bugs are now
+  SEEN, not guessed. Doc: `notes/collider-debug.md`.
+- **`shared/bounds.js` (NEW) — ONE shared bounds source** read by the debug view, the guard,
+  and diagnosis, reusing physics.js's own size helpers → the check can't drift from the engine.
+- **`tools/check-physics.mjs` (NEW):** asserts every collider AABB overlaps its mesh AABB and
+  isn't smaller (misalignment guard), and every spawn + hunter spawn is collider-free with no
+  arena-sized fixture (open-middle guard). **Hand-traced GREEN** on all three maps (no shell in
+  sandbox; some GLBs UNVERIFIED = not in asset-dims, keep the primitive footprint = the mesh).
+- **Config unchanged** (no blind tuning). **Files:** `shared/physics.js`, `shared/bounds.js`
+  (new), `js/scene.js`, `js/main.js`, `tools/check-physics.mjs` (new), notes + architecture.
+- **OWED — live browser pass (Jie, phone):** disguise as a big crate, walk INTO props toward the
+  middle → push through/past instead of bouncing; jump onto the divider/wall top → no tunnel/void;
+  props still shove + trampleable. Run `node tools/check-physics.mjs` (+ the other check-*.mjs)
+  to gate. Open `?debug=1` to eyeball collider alignment.
+
+## [prev] PHYSICS SOLIDITY PASS #3 — RELAUNCH: floor clamp + runnable check (2026-07-11, Jie/Teravortryx, on `main`). Headless invariants pass (hand-traced); live browser pass still owed.
 
 Relaunch of pass #3 (first attempt's session was lost). Pass #3's code (disguise-sized capsule
 + thin-panel min-thickness) was already in the tree; this session re-traced from data, refuted
