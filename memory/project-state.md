@@ -8,6 +8,40 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: "STUCK BLINDFOLD" bugfix #2 — REAL root cause was a render-loop crash, NOT the blindfold (2026-07-11, VRmike, on `main`)
+
+The prior two sessions kept "re-verifying the blindfold" and finding it correct — because
+it **was** correct. The actual bug was elsewhere and the blindfold was a red herring.
+
+- **Symptom (live screenshot):** a PROP in the HUNT phase sees a solid dark blue/purple
+  screen; HUD ticks fine; world never draws — for EVERYONE, any role, any phase.
+- **Root cause:** `js/main.js` `frame()` calls `scene.aimedDisguiseTarget(...)` and
+  `scene.highlightProp(...)` (the crosshair-disguise API) but **neither method existed in
+  `js/scene.js`** — a half-landed refactor. The `TypeError` threw every frame BEFORE
+  `scene.render()` and the `requestAnimationFrame(frame)` re-arm, so the render loop ran
+  once and died. Network snapshots kept updating the DOM HUD. A never-rendered transparent
+  WebGL canvas showed the body's dark `radial-gradient` CSS background → the "blue/purple".
+- **Fix (this session):** implemented the two missing methods in `js/scene.js`
+  (`aimedDisguiseTarget` = raycast look-ray vs disguisable prop primitives → hit prop id;
+  `highlightProp` = one reused wireframe outline box). Prop render records now carry
+  `disguisable`; primitives tagged `userData.propId`. Client-side selection aid only — the
+  host's `applyDisguise` stays authoritative. NO blindfold/referee/netcode/physics change.
+- **Blindfold confirmed correct & untouched:** overlay present in `index.html`, gate derived
+  fresh (`role===HUNTER && phase===HIDING`) off snapshot + phase event, `.hidden`
+  `!important` beats `.blindfold`, referee `blindHunterSnapshot` data-half gated the same.
+- **Restaurant = default map:** `maps.json` reordered so `restaurant` is the FIRST key.
+  The referee default is `Object.keys(this.maps)[0]` and the picker renders in key order,
+  so first-key == default-selected. Data-only reorder; block contents byte-identical.
+- **New headless check `tools/check-blindfold.mjs`** (authoring-only, never shipped):
+  statically asserts every `scene.<method>()` main.js calls IS defined in scene.js (the
+  exact regression that broke this), + blindfold decision a/b/c + referee data-half d.
+  Run: `node tools/check-blindfold.mjs`. NOTE: authored + hand-traced against source; the
+  sandbox has no shell, so it was not executed here — run it + a live browser pass to close.
+- **OWED:** one live browser run (prop + hunter) to confirm the world draws with no console
+  error and the blindfold behaves; run the two check tools. Files: `js/scene.js`,
+  `shared/config/maps.json`, `tools/check-blindfold.mjs`, notes.
+  Detail: `memory/notes/anti-cheat-blindfold.md` (Attempt #2).
+
 ## Latest: HUNTER BLINDFOLD fix RE-VERIFIED on-disk on `main` (2026-07-11, VRmike bugfix, follow-up session)
 
 A follow-up session (resuming a cut-off attempt) re-read all six pieces on `main` and

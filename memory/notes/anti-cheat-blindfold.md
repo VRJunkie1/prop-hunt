@@ -46,3 +46,35 @@ props included — threw `ui.setBlindfold is not a function` on the first snapsh
 the game for everyone (read by humans as "everyone stuck on a blindfold screen"). The
 server data half and main.js's derived gate were already correct and were left untouched;
 the fix only added the missing visual overlay. See project-state.md.
+
+### Attempt #2 (2026-07-11): "still broken" was NOT the blindfold at all
+VRmike reported the same symptom AFTER attempt #1 — a **PROP** in the **HUNT** phase
+seeing a solid dark blue/purple screen, HUD ticking fine. It looked like a stuck
+blindfold but was a completely separate bug, and the blindfold pieces above were all
+verified **correct** (overlay present, gate derived fresh, `.hidden { … !important }`
+beats `.blindfold`, referee data-half gated right). The screenshot's tells — HUD alive
+(DOM, driven by network snapshots) while the 3D scene is frozen dark for **everyone,
+any role, any phase** — point at the RENDER LOOP dying, not an overlay.
+
+Root cause: `js/main.js` `frame()` called `scene.aimedDisguiseTarget(...)` (PROP branch)
+and `scene.highlightProp(...)` (else branch) — the crosshair-disguise API — but **neither
+method existed in `js/scene.js`** (a half-landed refactor: main.js updated, scene.js not).
+The `TypeError` fired every frame BEFORE `scene.render()` and the tail
+`requestAnimationFrame(frame)`, so the loop ran once and died; the network kept feeding
+the HUD. A never-rendered `WebGLRenderer` canvas is transparent → the body's dark
+`radial-gradient(#4a2a7a → #1a1030)` CSS background showed through = the "dark blue/purple
+screen". The blue/purple was CSS, not a blackout.
+
+Fix (this session): implemented the two missing methods in `js/scene.js` —
+`aimedDisguiseTarget(pos,yaw,pitch,range)` (raycasts the look ray against DISGUISABLE prop
+primitives, returns the hit prop id; client-side SELECTION aid only — the host's
+`applyDisguise` stays authoritative) and `highlightProp(id)` (a single reused wireframe
+box fitted to the target's world bounds; no shared-material tint/leak). Prop records now
+carry `disguisable` + the primitive is tagged `userData.propId`. NO blindfold/referee/
+netcode change.
+
+**Lesson / guard:** the real class of bug is "main.js calls a `scene.*` method that
+doesn't exist" → silent per-frame throw → dark world, live HUD. `tools/check-blindfold.mjs`
+now statically asserts every `scene.<method>()` main.js calls is defined in scene.js
+(plus the blindfold decision a/b/c and the referee data-half d). Run it on any
+render-loop or scene-API change: `node tools/check-blindfold.mjs`.

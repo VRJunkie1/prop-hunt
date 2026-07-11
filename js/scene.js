@@ -153,6 +153,19 @@ export class Scene3D {
     this._qScratch = new THREE.Quaternion(); // reused for awake-prop orientation
     this.propMeshes = new Map(); // id -> dynamic-prop render record (rebuilt per match)
 
+    // ---- crosshair disguise targeting ---------------------------------------
+    // aimedDisguiseTarget() raycasts the look direction against the disguisable prop
+    // primitives to pick what a PROP would disguise as; highlightProp() outlines it.
+    // Reused scratch so the per-frame targeting allocates nothing.
+    this._vDisgOrigin = new THREE.Vector3();
+    this._vDisgDir = new THREE.Vector3();
+    this._disguiseTargets = []; // reused list of raycast targets (disguisable primitives)
+    this._highlightId = null; // prop id currently outlined (disguise target), or null
+    this._highlightBox = null; // reusable wireframe outline; lazily (re)added after a rebuild
+    this._hlBox = new THREE.Box3(); // scratch: highlighted prop's world bounds
+    this._hlSize = new THREE.Vector3();
+    this._hlCenter = new THREE.Vector3();
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
     // Orientation changes on phones sometimes report the new size a beat late;
@@ -193,6 +206,10 @@ export class Scene3D {
     this.selfKind = null;
     this.colliders = [];
     this._camDist = this._camDesiredDist;
+    // scene.clear() also dropped the disguise-highlight outline; forget the stale
+    // target so it doesn't linger. The wireframe box is re-added lazily on demand
+    // (its parent is now null → _ensureHighlightBox re-attaches it to this scene).
+    this._highlightId = null;
 
     this.scene.background = new THREE.Color(map.sky || '#87ceeb');
     this.scene.fog = new THREE.Fog(new THREE.Color(map.sky || '#87ceeb'), 40, 120);
@@ -284,6 +301,7 @@ export class Scene3D {
       }
       built.mesh.scale.setScalar(s);
       built.mesh.position.set(0, 0, 0); // centred on the container origin
+      built.mesh.userData.propId = p.id; // so a disguise-aim raycast maps a hit back to its prop
       container.add(built.mesh);
       this.scene.add(container);
       this.colliders.push(built.mesh); // camera pulls in against props too
@@ -291,6 +309,9 @@ export class Scene3D {
         container,
         primitive: built.mesh,
         baseY: built.baseY * s,
+        // Only disguise-pool props are aimable targets; knockable fixtures
+        // (disguisable:false) render here too but must never be a disguise choice.
+        disguisable: p.disguisable !== false,
         target: null, // set once the prop first appears AWAKE in a snapshot
         awake: false,
       });
@@ -578,6 +599,82 @@ export class Scene3D {
     const w = this.renderer.domElement.clientWidth;
     const h = this.renderer.domElement.clientHeight;
     return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
+  }
+
+  // ---- crosshair disguise targeting -----------------------------------------
+  // Return the id of the disguisable prop the local player is AIMING at — the first
+  // prop primitive hit by a ray from the player along the look direction, within
+  // `range` — or null. This is a client-side SELECTION + highlight aid only: the
+  // host's applyDisguise re-checks role/phase/range/disguisable from the player's
+  // authoritative position, so this can never grant a disguise the referee refuses.
+  // Rays test the prop PRIMITIVES, which stay in the scene as (possibly invisible)
+  // collision proxies even after a real GLB swaps in — the raycaster still hits them.
+  aimedDisguiseTarget(pos, yaw, pitch, range) {
+    if (!this.propMeshes || !this.propMeshes.size) return null;
+    const targets = this._disguiseTargets;
+    targets.length = 0;
+    for (const rec of this.propMeshes.values()) {
+      if (rec.disguisable && rec.primitive) targets.push(rec.primitive);
+    }
+    if (!targets.length) return null;
+    // Look-forward vector — SAME convention as setCamera and the referee's aim.
+    const cp = Math.cos(pitch);
+    const dir = this._vDisgDir.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
+    if (dir.lengthSq() < 1e-9) return null;
+    dir.normalize();
+    const origin = this._vDisgOrigin.set(pos.x, this._camHeadY + (pos.y || 0), pos.z);
+    this._raycaster.set(origin, dir);
+    this._raycaster.far = range > 0 ? range : 4.5;
+    const hits = this._raycaster.intersectObjects(targets, false);
+    if (!hits.length) return null;
+    const id = hits[0].object.userData.propId;
+    return id == null ? null : id;
+  }
+
+  // Outline the prop the player would disguise as (id from aimedDisguiseTarget), or
+  // clear the outline when id is null / the prop is gone. A SINGLE reused wireframe
+  // box is fitted to the target's live world bounds each call, so it tracks a prop
+  // even if it's being shoved, and never tints or leaks a shared GLB material.
+  highlightProp(id) {
+    if (id == null) {
+      this._highlightId = null;
+      if (this._highlightBox) this._highlightBox.visible = false;
+      return;
+    }
+    const rec = this.propMeshes && this.propMeshes.get(id);
+    if (!rec || !rec.container) {
+      this._highlightId = null;
+      if (this._highlightBox) this._highlightBox.visible = false;
+      return;
+    }
+    this._highlightId = id;
+    const box = this._hlBox.setFromObject(rec.container);
+    if (box.isEmpty()) {
+      if (this._highlightBox) this._highlightBox.visible = false;
+      return;
+    }
+    const b = this._ensureHighlightBox();
+    box.getSize(this._hlSize);
+    box.getCenter(this._hlCenter);
+    b.position.copy(this._hlCenter);
+    b.scale.set(this._hlSize.x || 0.1, this._hlSize.y || 0.1, this._hlSize.z || 0.1);
+    b.visible = true;
+  }
+
+  // Lazily build the reusable disguise-target outline (a unit wireframe box scaled /
+  // placed per target). buildWorld's scene.clear() detaches it (parent → null); the
+  // parent check re-attaches the same box to the fresh scene, so there's no per-match
+  // leak and no null-check needed at the call site.
+  _ensureHighlightBox() {
+    if (!this._highlightBox) {
+      const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+      const mat = new THREE.LineBasicMaterial({ color: 0x7be38b });
+      this._highlightBox = new THREE.LineSegments(geo, mat);
+      this._highlightBox.renderOrder = 999;
+      this._highlightBox.frustumCulled = false; // the box's own bounds are unit-sized
+    }
+    if (!this._highlightBox.parent) this.scene.add(this._highlightBox);
+    return this._highlightBox;
   }
 
   // ---- lazy GLB meshes ------------------------------------------------------

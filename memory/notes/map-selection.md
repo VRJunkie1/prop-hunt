@@ -6,8 +6,11 @@ so adding a map needs **zero code** (just a new entry in that file).
 
 ## Where it lives (one gate, one source of truth)
 - **`Referee.mapId`** (`shared/referee.js`) is the single source of truth. It
-  defaults to the first map in `maps.json` (`DEFAULT_MAP_ID`) and is changed ONLY
-  through `setMapId(id, byId)`.
+  defaults to `Object.keys(this.maps)[0]` — the **first key in `maps.json`** — and
+  is changed ONLY through `setMapId(id, byId)`. So the JSON key ORDER is literally
+  how the default is chosen; the lobby picker also renders in that order and marks
+  the default `.selected`. As of the 2026-07-11 fix, `restaurant` is that first key
+  (the agreed default map), so a fresh lobby opens on Restaurant with no other logic.
 - **`Referee.setMapId(id, byId)`** is the ONE validation gate. All rails live here
   and nothing downstream re-checks:
   - only the host (`byId === this.hostId`),
@@ -44,7 +47,8 @@ so the last-picked map stays selected for the next round. This is a documented
 exception to "fresh lobby", not a silent branch.
 
 ## Maps present
-`circus_lot` (default), `toy_workshop`, and `restaurant`. The first two reference
+`restaurant` (default — first in `maps.json`), `circus_lot`, and `toy_workshop`.
+`circus_lot`/`toy_workshop` reference
 only existing prop types from `props.json`. `restaurant` added new restaurant-
 themed prop types AND introduced the optional `map.fixtures[]` array (static world
 pieces, separate from the disguise `props`) — one small `js/scene.js` change; see
