@@ -152,13 +152,28 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !ui.el.game.classList.contains('hidden')) acquireWakeLock();
 });
 
+// Freshest known x/z of a prop. Awake props stream their live transform into the
+// scene's per-id container (syncProps); a prop that hasn't moved sits at its spawn
+// x/z. Either way the container position is the best local estimate. Falls back to
+// the prop's spawn x/z before the scene exists.
+function livePropPos(p) {
+  const rec = scene && scene.propMeshes && scene.propMeshes.get(p.id);
+  if (rec && rec.container) return { x: rec.container.position.x, z: rec.container.position.z };
+  return { x: p.x, z: p.z };
+}
+
 function tryDisguise() {
   if (state.role !== ROLE.PROP) return;
   const range = state.cfg.rules.disguiseRange;
   let best = null;
   let bestDist = Infinity;
   for (const p of state.props) {
-    const d = Math.hypot(p.x - state.self.x, p.z - state.self.z);
+    if (p.disguisable === false) continue; // knockable fixtures (tables, dishes…) aren't wearable
+    // A prop may have been shoved from its spawn; its live x/z arrive via awake-prop
+    // snapshots (scene). Use the freshest position we have so aiming at a nudged
+    // chair still lets you disguise as it. (Host is authoritative on the final check.)
+    const live = livePropPos(p);
+    const d = Math.hypot(live.x - state.self.x, live.z - state.self.z);
     if (d <= range && d < bestDist) {
       bestDist = d;
       best = p;

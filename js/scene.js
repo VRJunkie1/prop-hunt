@@ -2,6 +2,11 @@
 // it builds the map + props from config, and each frame reconciles player
 // meshes against the latest authoritative snapshot. No game rules here.
 import * as THREE from 'three';
+// The SAME static/dynamic classifier the physics + referee use, so a fixture that
+// became a knockable rigid body isn't ALSO drawn as immovable scenery here (it would
+// double-render and leave a ghost collider). Importing the constant does not load
+// Rapier — physics.js only fetches the WASM inside loadRapier().
+import { isStaticEntry } from '/shared/physics.js';
 
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
@@ -231,6 +236,8 @@ export class Scene3D {
     // host and guests with no protocol change. Older maps have no `fixtures` key
     // and are unaffected. See memory/notes/restaurant-map.md.
     for (const f of map.fixtures || []) {
+      const c = catalog[f.type];
+      if (!c || !isStaticEntry(c)) continue; // knockable fixtures render via propInstances (below)
       const built = makePropMesh(f.type, catalog);
       if (!built) continue;
       // Optional per-object uniform scale (default 1) — authored by the level editor.
@@ -265,8 +272,16 @@ export class Scene3D {
       // base rests flush on the floor.
       const s = p.scale || 1;
       const container = new THREE.Group();
-      container.position.set(p.x, built.baseY * s + (p.y || 0), p.z);
-      container.rotation.y = p.rot || 0;
+      // A mid-round joiner's props carry a live transform (centre + quaternion) so a
+      // shoved chair arrives where it actually rests; a fresh match's props carry
+      // spawn semantics (floor x/z, surface y-offset, yaw). `moved` picks between them.
+      if (Number.isFinite(p.qx)) {
+        container.position.set(p.x, p.y, p.z);
+        container.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+      } else {
+        container.position.set(p.x, built.baseY + (p.y || 0), p.z);
+        container.rotation.y = p.rot || 0;
+      }
       built.mesh.scale.setScalar(s);
       built.mesh.position.set(0, 0, 0); // centred on the container origin
       container.add(built.mesh);
@@ -317,7 +332,9 @@ export class Scene3D {
       // dimension — the reliable fix for pieces whose native proportions don't match
       // the intended footprint (e.g. a floor tile that must stay thin however thick
       // its GLB is). Uniform max-dim scaling inflated the kitchen floor's thickness.
-      dims: c.modelDims || null,
+      // MEASURED bounds win when present so the mesh matches the physics collider
+      // (both baked from asset-dims.json); else the ad-hoc modelDims override.
+      dims: c.measured || c.modelDims || null,
       x: entry.x,
       y: entry.y || 0,
       z: entry.z,
@@ -339,10 +356,9 @@ export class Scene3D {
       if (c.model) {
         const tmpl = this._modelCache.get('/assets/' + c.model);
         if (tmpl && tmpl !== 'failed') {
-          // Wear the disguise at the SAME measured scale it renders as world decor,
-          // so a player disguised as a burger is burger-sized, not player-sized.
+          // Disguise renders at the same measured scale as world decor.
           const scale = typeof c.modelScale === 'number' ? c.modelScale : this.modelScale;
-          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.modelDims || null, scale);
+          const inst = this._instantiateModel(tmpl, targetSizeForEntry(c), c.measured || c.modelDims || null, scale);
           inst.userData.baseY = 0;
           return inst;
         }

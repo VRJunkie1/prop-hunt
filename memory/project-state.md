@@ -10,6 +10,96 @@ ours). Strict NATs relay through a free public TURN.
 
 ## Status: IN-GAME LEVEL EDITOR (debug mode) COMPLETE + COMMITTED (attempt 3, 2026-07-10, vrmike). Desktop-only, not live-tested (headless).
 
+## Status: PHYSICS FIX PASS — controller + knockable world + calm start (2026-07-10, on `physics-net`). NOT feel-tested.
+
+Playtest-driven fix pass on the ALREADY-BUILT physics/netcode. Full detail in
+`memory/notes/physics.md` (top section) + `netcode.md`. Honest summary:
+
+- **MERGE NOT DONE (blocked, honest).** Task said FIRST `git merge origin/main`
+  (bbox-normalized layout + populated `asset-dims.json`). No shell here by design →
+  can't run the merge; main's populated blobs are zlib git objects the file tools
+  can't inflate. The measured-bounds CONSUMPTION path is already wired on this branch
+  (`shapeFor`→`c.measured`, scene→`c.measured`) with a graceful fallback to authored
+  footprints, so colliders bake from measured bounds automatically once the data
+  lands. `asset-dims.json` is still `dims:{}` → authored footprints in use.
+  **OWED: someone with a shell must merge origin/main into physics-net.**
+- **Fix #1 controller** (`shared/physics.js`): diagnosis corrected — the branch code
+  was ALREADY compute-before-move (`computeColliderMovement` + apply corrected delta)
+  and prediction ALREADY shares the same `PhysicsWorld` as the host, so the
+  "translate-first eject" hypothesis didn't match. Real fixes: (a) **jump jitter** —
+  snap-to-ground toggled OFF while `vy>0`, ON otherwise; (b) **character mass** 3.0 +
+  **prop density** 1.0 so shoving a chair feels natural (needs feel-test); (c)
+  **fixed timestep** — `step()` runs whole 1/60 substeps via an accumulator, no
+  variable partial tail; (d) offset/autostep/slope/snap tunables in rules.json.
+- **Fix #2 flip static→dynamic** (`physics.js` `isStaticEntry` + catalog flags +
+  `referee.js`): world now defaults KNOCKABLE. Static only for `"static"`-flagged
+  built-ins (floor/walls/pillars/doors/hood/counters/cabinets/oven/fridge/sinks/
+  shelves) and `"decor"`-flagged tiny garnish. Tables, cookware, plates, dishes,
+  food, condiments → dynamic. Decoupled dynamic-ness from the disguise pool: referee
+  builds ONE prop stream = disguise props (disguisable) + non-static fixtures
+  (non-disguisable); disguise gates skip non-disguisable. Cap raised 60→130. Disguise
+  range now reads LIVE prop positions (`referee.propLive`).
+- **Fix #8 mid-join** (deliberate change): late joiners get CURRENT prop transforms
+  (centre+quaternion via `PhysicsWorld.allProps()`), not spawn — a kicked chair stays
+  kicked. STARTED prop entry gained `disguisable` + optional live quaternion form.
+- **Fix #3 calm start**: dynamic bodies spawn `SPAWN_EPS` (0.02) above rest so
+  nothing interpenetrates at match start; settle + sleep. Nothing overlaps at spawn
+  by construction.
+- **Files:** `shared/physics.js`, `shared/referee.js`, `shared/protocol.js` (doc),
+  `js/scene.js`, `js/main.js`, `shared/config/fixtures.json` (static/decor flags),
+  `shared/config/rules.json` (cap 130 + controller/prop tunables), notes.
+- **NEEDS A LIVE FEEL-TEST (can't be done headless):** does jumping feel smooth; does
+  shoving a chair/table feel natural (tune characterMass + propDensity); is the
+  match-start settle of ~130 bodies calm on all 3 maps; does a phone HOST hold frame
+  rate with the bigger dynamic set (lower `maxDynamicProps` if not); mid-join shows
+  the knocked-about room correctly; prediction/reconciliation still smooth with the
+  fixed-timestep mover.
+
+## Status: MEASURED-BOUNDS COLLIDER SEAM + PROP CAP (2026-07-10, on `physics-net`). NOT playtested.
+
+Context correction first: the "big pass" below (Rapier physics + full prediction/
+reconciliation netcode) was **already built and wired** on this branch by the
+2026-07-09 session — it is NOT re-done here. This follow-up task assumed two things
+that were both FALSE on disk: (a) that physics still needed implementing, and (b)
+that a measured `shared/config/asset-dims.*` file from a bounding-box normalization
+build already existed. It did **not** — colliders were (and by default still are)
+baked from the hand-authored primitive footprints in `props.json`/`fixtures.json`.
+
+I could NOT produce measured GLB bounds here (no shell; `Write` is text-only, can't
+decode binary `.glb` to compute a bbox — that measurement IS the "prior build" that
+never landed its output). Rather than **guess sizes** (explicitly forbidden) or
+silently declare victory, I wired the **drop-in seam** so measured bounds bake
+automatically the moment they exist, and shipped the file EMPTY (zero behavior
+change today). Asked VRmike which path to take; got no answer, took the
+non-destructive recommended one.
+
+- **`shared/config/asset-dims.json`** (NEW, ships empty `dims:{}`): the output slot
+  for the bounding-box build — per catalog type, the normalized **world-space**
+  `{w,h,d}` box. Documented contract in the file + `memory/notes/asset-dims.md`.
+- **`js/config.js`**: `loadConfig` fetches it (tolerant of absence) and attaches
+  `entry.measured` onto the matching catalog entry. One mutation reaches all three
+  consumers via the shared `cfg` object: host referee's `PhysicsWorld`, each
+  client's prediction `PhysicsWorld`, and the renderer.
+- **`shared/physics.js` `shapeFor`**: if `c.measured` present → bake a **cuboid from
+  the measured bounds** ("cuboid from measured bounds; trimesh only where clearly
+  wrong"); else fall back to the primitive footprint. Also added the plan's
+  **phone-safety cap** (`rules.maxDynamicProps`, default 60): props past the cap are
+  solid STATIC colliders (collidable, not shovable). Restaurant (~56) is under it →
+  inert today.
+- **`js/scene.js`**: GLB mesh scale now prefers `c.measured` over `modelDims`, so
+  mesh and collider stay in lockstep once measurements land (all 3 scale paths).
+- **Regression**: with `dims:{}` empty, every `c.measured` is `undefined` → all `||`
+  chains fall through to the exact pre-seam path. Byte-for-byte prior behavior;
+  verified by inspection (headless can't runtime-test). Files: `shared/config/
+  asset-dims.json` (new), `js/config.js`, `shared/physics.js`, `js/scene.js`,
+  `shared/config/rules.json`, `memory/notes/asset-dims.md` (new), `physics.md`.
+- **STILL OWED**: run the bounding-box normalization build and populate
+  `asset-dims.json` so colliders bake from real measurements instead of the
+  eyeballed footprint fallback. Until then, collider sizes = the same footprints the
+  big pass shipped. Live multiplayer playtest still the only real QA for netcode.
+
+## Status: IN-GAME LEVEL EDITOR (debug mode) BUILT (2026-07-10, vrmike). Desktop-only, not live-tested (headless).
+
 A lightweight edit mode baked into the client so a human can fix placement/rotation/
 scale by eye instead of iterating blind builds. **Ctrl+E** (desktop) toggles it. Full
 detail: `memory/notes/level-editor.md`.

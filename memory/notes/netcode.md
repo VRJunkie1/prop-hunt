@@ -1,5 +1,25 @@
 # netcode
 
+## 2026-07-10 FIX PASS — STARTED payload now carries live prop state
+Because the world became knockable (see physics.md fix pass), the `S2C.STARTED`
+prop list changed, and mid-game join changed DELIBERATELY:
+- Each prop entry now carries `disguisable` (false for knockable fixtures — solid +
+  shovable but not wearable) so the client's disguise picker skips them.
+- A MID-ROUND joiner's STARTED carries each prop's LIVE transform (`x,y,z` = body
+  centre + `qx,qy,qz,qw` quaternion) instead of spawn positions, so they see kicked
+  chairs/tables where they actually rest, not back at spawn (fix #8). Fresh-match
+  STARTED still sends spawn-form entries (`x/z` floor pos, `y` surface offset, `rot`).
+  Presence of `qx` marks the live form. Referee: `_propsCatchup()` via
+  `PhysicsWorld.allProps()`. Readers: scene.buildWorld + physics._buildProps branch
+  on `qx`.
+- Per-tick SNAPSHOT is UNCHANGED: still only AWAKE dynamic props ride it
+  (`{id,x,y,z,qx,qy,qz,qw}`), sleeping ones omitted. There are just more potential
+  dynamic props now (tables/dishes/food), so a big collision cascade streams more for
+  a moment — still near-zero at rest.
+- Prediction/reconciliation logic itself is UNCHANGED (same rewind/replay); it still
+  needs a live playtest since the shared mover's timestep changed to strict fixed
+  substeps (see physics.md). No protocol change to C2S or the snapshot player entry.
+
 ## PHYSICS PASS UPDATE (2026-07-09, `physics-net`) — prediction + reconciliation
 The netcode grew from "predict the local player's flat 2D position" to full
 **client-side prediction + server reconciliation over a Rapier sim**. Architecture

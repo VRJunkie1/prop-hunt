@@ -28,7 +28,13 @@ export const C2S = {
 export const S2C = {
   JOINED: 'joined', // { id, room, host }
   LOBBY: 'lobby', // { room, hostId, players:[{id,name,ready}], phase, mapId, result:{winner}|null }
-  STARTED: 'started', // { mapId, props:[{id,type,x,y,z,rot}] }
+  STARTED: 'started', // { mapId, props:[ propEntry ] }
+  //   propEntry = every DYNAMIC object (disguise-pool props + knockable fixtures):
+  //     { id, type, disguisable, x, y, z, rot }              (spawn: x/z floor pos, y surface offset)
+  //   OR, for a MID-ROUND joiner catching up to a knocked-about world (fix #8):
+  //     { id, type, disguisable, x, y, z, qx, qy, qz, qw }   (live: x/y/z body centre + quaternion)
+  //   `disguisable:false` = a knockable fixture (table/dish/food) — solid + shovable
+  //   but never wearable. Presence of `qx` marks the live-transform form.
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state. players:[{id,name,x,y,z,yaw,alive,
   //   hunter,disguise,ack}] + awake dynamic-prop transforms props:[{id,x,y,z,qx,qy,qz,qw}]
