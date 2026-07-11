@@ -147,6 +147,8 @@ button.ghost:hover { background: #3d2a66; }
   pointer-events: none;
   text-shadow: 0 0 4px #000;
 }
+/* Prop aiming at nothing disguisable: dim the reticle as a "no target" hint. */
+#crosshair.no-target { color: #ffffff55; }
 #hud { position: absolute; inset: 0; pointer-events: none; }
 .hud-top {
   position: absolute;

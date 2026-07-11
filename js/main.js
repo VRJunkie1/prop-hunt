@@ -516,7 +516,24 @@ function predictStep(input, dt) {
 
 // ---- prediction + render loop ---------------------------------------------
 let last = performance.now();
+// Render-loop safety wrapper. The next-frame reschedule happens HERE, first, before
+// any gameplay work — so a thrown exception in frameBody() can never stop the loop
+// (the bug that blanked the whole game to solid blue when a called method was missing).
+// We catch, log once, and keep animating; a transient error degrades gracefully instead
+// of killing all rendering forever.
 function frame(now) {
+  requestAnimationFrame(frame);
+  try {
+    frameBody(now);
+  } catch (e) {
+    if (!frame._loggedErr) {
+      console.error('[frame] render loop error (continuing anyway):', e);
+      frame._loggedErr = true; // log once so a per-frame throw doesn't spam the console
+    }
+  }
+}
+
+function frameBody(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
@@ -524,7 +541,6 @@ function frame(now) {
   // the shared renderer and ignores gameplay entirely (no predict, no game render).
   if (state.editing) {
     if (editor) editor.frame(dt);
-    requestAnimationFrame(frame);
     return;
   }
 
@@ -619,8 +635,6 @@ function frame(now) {
     // player. Null => first-person, reticle stays centered.
     ui.setCrosshair(scene.aimScreenPoint(disp, input.yaw));
   }
-
-  requestAnimationFrame(frame);
 }
 
 // Send movement intent to the referee at a fixed rate.

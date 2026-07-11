@@ -111,6 +111,7 @@ export class Input {
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;
+      if (this.lookFrozen) return; // blindfolded hunter: camera is locked while props hide
       this.yaw -= e.movementX * this.sensitivity;
       this.pitch -= e.movementY * this.sensitivity;
       this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch));

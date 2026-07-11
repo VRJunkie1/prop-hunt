@@ -196,4 +196,15 @@ export class UI {
     }
     this.el.blindfold.classList.toggle('hidden', !blind);
   }
+
+  // Crosshair aim feedback for PROPs. main.js calls this every frame with
+  // `noTarget = (aimed prop id == null)`: true when the player is aiming at nothing
+  // disguisable (dim the reticle as a hint), false when a valid prop is targeted or
+  // the hint doesn't apply (hunter/dead/lobby → bright default). Pure show/hide on the
+  // existing crosshair element — no new DOM, and guaranteed non-throwing (this method
+  // going missing is exactly what blanked the render loop; keep it defined).
+  setAimHint(noTarget) {
+    if (!this.el.crosshair) return;
+    this.el.crosshair.classList.toggle('no-target', !!noTarget);
+  }
 }
