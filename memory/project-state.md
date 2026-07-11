@@ -8,7 +8,21 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Latest: HUNTER BLINDFOLD visual half restored on `main` (2026-07-11, VRmike bugfix)
+## Latest: HUNTER BLINDFOLD fix RE-VERIFIED on-disk on `main` (2026-07-11, VRmike bugfix, follow-up session)
+
+A follow-up session (resuming a cut-off attempt) re-read all six pieces on `main` and
+confirmed the fix is fully present and correct — **nothing to build.** Checked the SERVED
+root files (not the dead `client/` stubs): root `index.html` `#blindfold` div; `css/style.css`
+`.blindfold` (z-index:12, `pointer-events:none`, blur, `.hidden`=display:none default off);
+`js/ui.js` `setBlindfold` (plain show/hide, non-latched); `js/main.js` `updateBlindfold`
+derives `role===HUNTER && phase===HIDING` and is called from BOTH `onSnapshot` (L348) and the
+`phase` event (L413), plus force-cleared on back-to-menu (L316) + return-to-lobby (L199);
+`shared/referee.js` L708 data-half gated on the same condition via `blindHunterSnapshot`.
+No edits made (touching the already-correct gate would be an out-of-scope regression). Still
+OWED: the live per-role browser test + deploy/link (can't be done headless). Detail below +
+`memory/notes/anti-cheat-blindfold.md`.
+
+## HUNTER BLINDFOLD visual half restored on `main` (2026-07-11, VRmike bugfix)
 
 Reported as "everyone loads into a solid blue/blindfold screen that never clears — props
 too." Root cause was NOT a mis-gated overlay: `js/main.js` already derived the blindfold
