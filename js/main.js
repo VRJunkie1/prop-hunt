@@ -77,6 +77,10 @@ const state = {
   // this is just so our OWN third-person model matches instead of spinning.
   selfDisguised: false,
   selfDispYaw: 0,
+
+  // Crosshair-based disguise: the prop id currently under the aim ray (or null), set
+  // each frame by the render loop and consumed by tryDisguise() on Action. See frame().
+  aimPropId: null,
 };
 
 // ---- action routing -------------------------------------------------------
@@ -152,35 +156,18 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !ui.el.game.classList.contains('hidden')) acquireWakeLock();
 });
 
-// Freshest known x/z of a prop. Awake props stream their live transform into the
-// scene's per-id container (syncProps); a prop that hasn't moved sits at its spawn
-// x/z. Either way the container position is the best local estimate. Falls back to
-// the prop's spawn x/z before the scene exists.
-function livePropPos(p) {
-  const rec = scene && scene.propMeshes && scene.propMeshes.get(p.id);
-  if (rec && rec.container) return { x: rec.container.position.x, z: rec.container.position.z };
-  return { x: p.x, z: p.z };
-}
-
+// CROSSHAIR-BASED DISGUISE (was nearest-prop). Target = the disguisable prop the
+// player is AIMING AT, not whichever is closest. The frame loop raycasts from the
+// player along the look direction each frame (scene.aimedDisguiseTarget), highlights the
+// hit prop, and stores its id in state.aimPropId; pressing Action disguises as THAT prop.
+// Identical on desktop (mouse aim) and mobile (screen-centre crosshair) since both feed
+// the same yaw/pitch. Only target SELECTION changed — the host's applyDisguise (range +
+// disguisable check from the player's position) is untouched and remains authoritative.
 function tryDisguise() {
   if (state.role !== ROLE.PROP) return;
-  const range = state.cfg.rules.disguiseRange;
-  let best = null;
-  let bestDist = Infinity;
-  for (const p of state.props) {
-    if (p.disguisable === false) continue; // knockable fixtures (tables, dishes…) aren't wearable
-    // A prop may have been shoved from its spawn; its live x/z arrive via awake-prop
-    // snapshots (scene). Use the freshest position we have so aiming at a nudged
-    // chair still lets you disguise as it. (Host is authoritative on the final check.)
-    const live = livePropPos(p);
-    const d = Math.hypot(live.x - state.self.x, live.z - state.self.z);
-    if (d <= range && d < bestDist) {
-      bestDist = d;
-      best = p;
-    }
-  }
-  if (best) session.send({ t: C2S.DISGUISE, propId: best.id });
-  else ui.feed('No prop close enough to disguise as.');
+  const id = state.aimPropId;
+  if (id != null) session.send({ t: C2S.DISGUISE, propId: id });
+  else ui.feed('No prop targeted — aim at a prop and press Action.');
 }
 
 // ---- network handling -----------------------------------------------------
@@ -209,6 +196,9 @@ function handleGameMessage(msg) {
           input.exitGame();
           releaseWakeLock();
           ui.setClickToPlay(false);
+          ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
+          input.lookFrozen = false;
+          state.aimPropId = null;
           resetReadyButton();
           destroyPredict();
           state.role = null;
@@ -224,16 +214,17 @@ function handleGameMessage(msg) {
       state.map = state.cfg.maps[msg.mapId];
       state.props = msg.props;
       // Client-side merge of any authored per-object prop `scale` onto the referee's
-      // prop instances. The referee builds this.props by mapping map.props in order
-      // (see referee.js), so msg.props[i] corresponds to state.map.props[i] on every
-      // client — we zip the scale back on without any referee/protocol change. Inert
-      // for every current map (none carry a scale); it lets an edited map's scaled
-      // props RENDER at the authored scale once committed (scale is visual-only —
-      // colliders stay base-size; shared/ is untouched). Fixtures read scale straight
-      // from local map data in scene.js and need no merge.
+      // prop instances. Each prop instance carries `mi` = its source index in
+      // state.map.props (the referee stamps it), so we zip the authored scale back on by
+      // ORIGINAL index — robust even though map randomization skipped some props (a plain
+      // positional zip would misalign after a skip). No referee/protocol change beyond the
+      // already-present `mi`. Inert for every current map (none carry a scale); it lets an
+      // edited map's scaled props RENDER at the authored scale once committed (scale is
+      // visual-only — colliders stay base-size; shared/ is untouched). Fixtures read scale
+      // straight from local map data in scene.js and need no merge.
       const mapProps = (state.map && state.map.props) || [];
-      state.props.forEach((pi, i) => {
-        const src = mapProps[i];
+      state.props.forEach((pi) => {
+        const src = Number.isInteger(pi.mi) ? mapProps[pi.mi] : null;
         if (src && src.scale) pi.scale = src.scale;
       });
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
@@ -322,6 +313,9 @@ function backToMenu(msg) {
   releaseWakeLock();
   destroyPredict();
   resetReadyButton();
+  ui.setBlindfold(false); // clear any active blindfold overlay + release look
+  input.lookFrozen = false;
+  state.aimPropId = null;
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
@@ -336,9 +330,22 @@ function resetReadyButton() {
   ui.el.readyBtn.textContent = 'Ready';
 }
 
+// HUNTER BLINDFOLD (anti-cheat, screen half). While the start-of-map HIDING countdown
+// runs, a HUNTER's screen is blacked out with a centered countdown and their look/yaw is
+// frozen (movement is already frozen by the referee). The instant the host flips to
+// HUNTING the overlay drops and look is released. Props are never blindfolded. The
+// referee also withholds prop data from a blinded hunter (blindHunterSnapshot), so a
+// hacked client that deletes this overlay still gets nothing to peek at.
+function updateBlindfold(seconds) {
+  const blind = state.role === ROLE.HUNTER && state.phase === PHASE.HIDING;
+  input.lookFrozen = blind; // freeze yaw/pitch while blindfolded (see input.js)
+  ui.setBlindfold(blind, seconds);
+}
+
 function onSnapshot(msg) {
   state.phase = msg.phase;
   ui.setHud(msg);
+  updateBlindfold(msg.timeLeft);
   if (scene) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
     if (msg.props) scene.syncProps(msg.props); // awake dynamic-prop transforms
@@ -399,6 +406,11 @@ function onSnapshot(msg) {
 function onEvent(msg) {
   switch (msg.kind) {
     case 'phase':
+      // Drive the blindfold straight off the phase event too, so a HUNTER's overlay drops
+      // (and look unfreezes) the instant the host flips HIDING→HUNTING — without waiting
+      // for the next snapshot. state.phase is authoritative from the event here.
+      state.phase = msg.phase;
+      updateBlindfold(msg.seconds);
       if (msg.phase === PHASE.HIDING) ui.banner('HIDING PHASE — props, disguise now!', 2500);
       if (msg.phase === PHASE.HUNTING) ui.banner('HUNT! Hunters are loose.', 2500);
       break;
@@ -579,6 +591,24 @@ function frame(now) {
       z: state.self.z + state.corr.z,
     };
     scene.setCamera(disp, input.yaw, input.pitch, state.selfDispYaw);
+
+    // Crosshair-based disguise targeting + highlight. While alive as a PROP in an active
+    // phase, raycast from the player along the look direction for the first disguisable
+    // prop within disguiseRange; outline it (so you see what you'll become) and remember
+    // its id for Action. Anything else (hunter, dead, lobby) clears the highlight/target.
+    // state.movable for a PROP == alive AND in an active phase (props are never frozen),
+    // exactly when targeting should run.
+    if (state.role === ROLE.PROP && state.movable) {
+      const id = scene.aimedDisguiseTarget(disp, input.yaw, input.pitch, state.cfg.rules.disguiseRange);
+      state.aimPropId = id;
+      scene.highlightProp(id);
+      ui.setAimHint(id == null); // tiny "no prop targeted" hint when nothing valid is aimed at
+    } else {
+      state.aimPropId = null;
+      scene.highlightProp(null);
+      ui.setAimHint(false);
+    }
+
     scene.interpolate(0.25);
     scene.render();
     // Drive the aim reticle off the referee's yaw-forward vector (where the tag

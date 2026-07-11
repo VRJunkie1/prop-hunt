@@ -322,9 +322,33 @@ export class Referee {
     // disguise/tag gates read the `disguisable` flag, so a table can be shoved but
     // never worn. y = rest offset above a surface; rot = spawn yaw.
     const catalog = { ...this.propCatalog, ...this.fixtureCatalog };
-    const disguiseProps = (map.props || []).map((p) => ({
-      id: nextPropId++, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0, disguisable: true,
-    }));
+    // MAP RANDOMIZATION (host-authoritative, no seed on the wire). The host picks a
+    // per-match seed and deterministically SKIPS ~mapRandomizeSkip (default 20%) of the
+    // DISGUISABLE decorative props, so hiding spots differ each round and the scene has
+    // gaps. ONLY map.props (the disguise pool) are eligible — fixtures/built-ins
+    // (walls/floor/counters) are never touched. A minimum-keep clamp stops a sparse map
+    // from emptying out. The seed lives ONLY here on the host: clients don't receive it,
+    // they render/predict from the concrete reduced `props` list broadcast in STARTED
+    // (and a late joiner gets the SAME reduced list via _propsCatchup), so every client
+    // and every late joiner agree with zero desync risk. See notes/map-randomization.md.
+    this.matchSeed = (Math.random() * 0x100000000) >>> 0;
+    const mapProps = map.props || [];
+    const skip = seededSkipSet(
+      mapProps.length,
+      this.matchSeed,
+      this.rules.mapRandomizeSkip != null ? this.rules.mapRandomizeSkip : 0.2,
+      this.rules.minPropsKept != null ? this.rules.minPropsKept : 6,
+    );
+    // `mi` = the source index in map.props, carried so the client can still zip authored
+    // per-object `scale` back on by original index even though randomization removed some
+    // props (a plain positional zip would misalign after a skip). Inert on every current
+    // map (none author a scale). disguisable: true — all disguise-pool props.
+    const disguiseProps = mapProps
+      .map((p, i) => ({ p, i }))
+      .filter(({ i }) => !skip.has(i))
+      .map(({ p, i }) => ({
+        id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0, disguisable: true,
+      }));
     // Bigger pieces first: the dynamic-body cap (rules.maxDynamicProps) spends its
     // budget on furniture/large cookware; anything past the cap degrades to a solid
     // STATIC collider (still collidable, just not shovable — phone safety).
@@ -649,7 +673,7 @@ export class Referee {
     }));
     const propsTotal = [...this.players.values()].filter((p) => p.role === ROLE.PROP).length;
     const propsAlive = [...this.players.values()].filter((p) => p.role === ROLE.PROP && p.alive).length;
-    this.broadcast({
+    const full = {
       t: S2C.SNAPSHOT,
       phase: this.phase,
       timeLeft: round2(timeLeft),
@@ -668,7 +692,26 @@ export class Referee {
         qz: round3(q.qz),
         qw: round3(q.qw),
       })),
-    });
+    };
+
+    // HUNTER BLINDFOLD — data-peek shield (anti-cheat). While the start-of-map HIDING
+    // countdown runs, every hunter is blindfolded. The client blacks out the screen and
+    // freezes look, but a hacked client could delete that overlay — so we ALSO withhold
+    // the data it would need to peek: for a hunter during HIDING we strip every PROP-role
+    // player's transform and all dynamic-prop transforms from THAT recipient's snapshot
+    // (blindHunterSnapshot). Props (not blindfolded) and everyone during HUNTING keep the
+    // full stream, so full prop data resumes the instant the host flips HIDING→HUNTING.
+    // This is per-recipient dispatch — the SAME single filter path, computed once per
+    // tick and reused. See memory/notes/anti-cheat-blindfold.md.
+    let blinded = null;
+    for (const p of this.players.values()) {
+      if (p.role === ROLE.HUNTER && this.phase === PHASE.HIDING) {
+        if (!blinded) blinded = blindHunterSnapshot(full);
+        send(p, blinded);
+      } else {
+        send(p, full);
+      }
+    }
   }
 
   // Live x/z of a prop (shoved position if it has moved, else spawn). See propLive.
@@ -688,7 +731,7 @@ export class Referee {
       const q = live.get(p.id);
       if (!q) return p; // never simulated (capped-static) — spawn pose is correct
       return {
-        id: p.id, type: p.type, disguisable: p.disguisable,
+        id: p.id, mi: p.mi, type: p.type, disguisable: p.disguisable,
         x: round2(q.x), y: round2(q.y), z: round2(q.z),
         qx: round3(q.qx), qy: round3(q.qy), qz: round3(q.qz), qw: round3(q.qw),
       };
@@ -697,6 +740,58 @@ export class Referee {
 }
 
 // ---- helpers --------------------------------------------------------------
+
+// Deterministic set of prop indices to SKIP for map randomization (feature: gaps in
+// the scene each round). A mulberry32 PRNG seeded by the match seed drives a partial
+// Fisher–Yates over [0..n): shuffle and take the first `skipCount`. skipCount =
+// round(n * ratio), clamped so at least `minKeep` props always remain — a sparse map
+// (few props) is never emptied out, and a full ~20% is removed on dense maps. Pure +
+// deterministic: same (n, seed, ratio, minKeep) always yields the same set, so the host
+// could reproduce a round — but ONLY the host runs this; clients get the concrete
+// reduced prop list, never the seed. Exported for tools/check-features.mjs.
+export function seededSkipSet(n, seed, ratio, minKeep) {
+  const skip = new Set();
+  if (!(n > 0)) return skip;
+  const r = Number.isFinite(ratio) ? ratio : 0.2;
+  const keepFloor = Number.isFinite(minKeep) ? minKeep : 6;
+  let skipCount = Math.round(n * r);
+  const maxSkip = Math.max(0, n - keepFloor);
+  if (skipCount > maxSkip) skipCount = maxSkip;
+  if (skipCount <= 0) return skip;
+  const idx = Array.from({ length: n }, (_, i) => i);
+  const rng = mulberry32(seed >>> 0);
+  for (let i = 0; i < skipCount; i++) {
+    const j = i + Math.floor(rng() * (n - i));
+    const tmp = idx[i];
+    idx[i] = idx[j];
+    idx[j] = tmp;
+    skip.add(idx[i]);
+  }
+  return skip;
+}
+
+// Small, fast, seedable PRNG (public-domain mulberry32). Deterministic given its seed —
+// what makes the map randomization reproducible on the host.
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Filtered snapshot for a BLINDFOLDED hunter (HIDING phase) — the data-peek half of the
+// anti-cheat blindfold. Removes every prop-role player entry (they are hiding; a hunter
+// must not learn where, even via a hacked client) and all dynamic-prop transforms, so a
+// hunter's HIDING snapshot carries zero prop positions to draw. Hunters stay in the list
+// (visible seekers); the propsAlive/propsTotal COUNTS stay (they carry no position and
+// show normally in the HUD anyway). Pure so tools/check-features.mjs can assert it.
+export function blindHunterSnapshot(full) {
+  return { ...full, players: full.players.filter((pl) => pl.hunter), props: [] };
+}
+
 // Rough footprint volume of a catalog entry, for prioritising which knockable
 // fixtures get a dynamic body when the cap is tight (bigger pieces win). Prefers
 // measured bounds when present, else the authored primitive.

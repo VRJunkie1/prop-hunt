@@ -57,6 +57,10 @@ export class Input {
     this.yaw = 0;
     this.pitch = 0;
     this.locked = false;
+    // When true, look (yaw/pitch) updates are ignored — used by the HUNTER BLINDFOLD
+    // during the HIDING phase so a blindfolded hunter can't pre-aim while their screen
+    // is blacked out. Movement is frozen separately by the referee. Set from main.js.
+    this.lookFrozen = false;
     this.sensitivity = 0.0022;
     this.jump = false; // held: Space (desktop) / jump button (touch)
     this.rotUnlock = false; // held: right-click (desktop) / rotate button (touch) —
