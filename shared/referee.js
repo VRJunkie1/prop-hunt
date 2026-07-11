@@ -15,6 +15,7 @@
 // memory/architecture.md for why that trade was made.
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
 import { loadRapier, PhysicsWorld, isStaticEntry } from './physics.js';
+import { WALL_INSET } from './bounds.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -574,14 +575,25 @@ export class Referee {
         );
       }
       this.physics.step(dt);
+      // Arena-edge backstop clamp — derived from the WALL geometry, NOT rules.mapMargin.
+      // The old bound (size/2 − mapMargin = wall face − 1.0) sat 0.58 m IN FRONT of where
+      // the walls actually let a capsule stand (size/2 − WALL_INSET − playerRadius), so it
+      // clamped the broadcast position of anyone hugging a wall while their physics body
+      // stayed put — and if a body ever ended up OUTSIDE the walls, the clamp pinned its
+      // broadcast at the wall forever while the real body roamed the ground-slab apron:
+      // the reported "glitched mode" (run the perimeter, get snapped back wall-ward every
+      // snapshot when trying to leave). Now the clamp sits just BEHIND the legal standing
+      // range (a true backstop that never bites in normal play), and the failsafe below
+      // actively recovers any body that escapes the arena. (pass #5)
+      const pRadius = this.rules.playerRadius != null ? this.rules.playerRadius : 0.4;
+      const wallBound = map.size / 2 - WALL_INSET - pRadius;
       for (const p of this.players.values()) {
         if (!p.alive) continue;
         const t = this.physics.getPlayer(p.id);
         if (t) {
-          // Keep the arena-edge clamp as a cheap backstop behind the wall colliders.
-          p.pos.x = clamp(t.x, -bound, bound);
+          p.pos.x = clamp(t.x, -wallBound, wallBound);
           p.pos.y = t.y;
-          p.pos.z = clamp(t.z, -bound, bound);
+          p.pos.z = clamp(t.z, -wallBound, wallBound);
         }
       }
       this.awakePropTransforms = this.physics.awakeProps();
@@ -606,23 +618,38 @@ export class Referee {
         this._lastFailsafe = now;
         const floorTop = 0; // every map's ground/floor surface sits at y=0
         const capsuleH = 2 * ((this.rules.playerRadius || 0.4) + (this.rules.playerHalfHeight || 0.5));
-        let fellPlayers = 0;
+        // OUT-OF-ARENA line (pass #5): the boundary walls' inner face. A capsule whose
+        // CENTRE is past it is at least half-embedded in (or beyond) a wall — never a
+        // legal state, since legal wall-hugging stops a radius short of the face. The
+        // ground slab extends 2 m past the walls, so an escaped body does NOT fall (the
+        // below-floor check never fires for it) — it walks the apron in "glitched mode"
+        // forever unless recovered here.
+        const innerFace = map.size / 2 - WALL_INSET;
+        // Players the depenetration escape hatch flagged as wedged beyond recovery
+        // (snap-to-anchor failing for ~0.33 s straight — a poisoned anchor).
+        const stuckIds = new Set(this.physics.consumeStuckPlayers ? this.physics.consumeStuckPlayers() : []);
+        let fellPlayers = 0, escapedPlayers = 0, stuckPlayers = 0;
         for (const p of this.players.values()) {
           if (!p.alive || !p.spawn) continue;
-          if ((p.pos.y || 0) + capsuleH < floorTop - 2) {
-            p.pos = { x: p.spawn.x, y: 0, z: p.spawn.z };
-            this.physics.setPlayerPosition(p.id, p.pos);
-            fellPlayers++;
-          }
+          const t = this.physics.getPlayer(p.id); // TRUE body pose (p.pos is clamped)
+          const fell = (p.pos.y || 0) + capsuleH < floorTop - 2;
+          const escaped = t && (Math.abs(t.x) > innerFace || Math.abs(t.z) > innerFace);
+          const stuck = stuckIds.has(p.id);
+          if (!fell && !escaped && !stuck) continue;
+          p.pos = { x: p.spawn.x, y: 0, z: p.spawn.z };
+          this.physics.setPlayerPosition(p.id, p.pos);
+          if (fell) fellPlayers++;
+          else if (escaped) escapedPlayers++;
+          else stuckPlayers++;
         }
         const fellProps = this.physics.respawnEscaped(floorTop - 2);
         // LOG when the last-resort net fires (solidity pass #3): after this pass it should
         // basically never trigger, so a line here means we hear about a tunnelling/fall-
         // through regression from the console before players report it. Kept as the net —
         // logging it doesn't weaken the recovery, it just makes a silent failure loud.
-        if (fellPlayers > 0 || fellProps > 0) {
+        if (fellPlayers > 0 || escapedPlayers > 0 || stuckPlayers > 0 || fellProps > 0) {
           console.warn(
-            `[physics] anti-fall failsafe recovered ${fellPlayers} player(s) + ${fellProps} prop(s) from below the floor on map "${this.mapId}". This should be rare after solidity pass #3 — a repeat means a real collision regression.`
+            `[physics] failsafe recovered ${fellPlayers} fallen, ${escapedPlayers} out-of-arena, ${stuckPlayers} wedged player(s) + ${fellProps} prop(s) on map "${this.mapId}". This should be rare — a repeat means a real collision regression.`
           );
         }
       }
