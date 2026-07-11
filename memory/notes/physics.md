@@ -3,6 +3,79 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS SOLIDITY PASS #2 (on `main`) — Jie's three bugs
+Second solidity pass after a live playtest. Three specific bugs; scope limited to the
+player controller + disguise rotation + fall path (no map/netcode/editor changes). All
+three still need a LIVE re-test — headless can't verify physics behaviour at runtime.
+
+**Bug 1 — player stands/pushes deep inside props.** *Filter-excludes-dynamic theory
+REFUTED.* `computeColliderMovement` was called with NO filter, and Rapier's default does
+NOT exclude dynamic bodies — dynamic props were already obstacles the capsule slides
+against; `applyImpulsesToDynamicBodies(true)` is the ADDITIONAL push, not a replacement
+for blocking. So nothing was letting the capsule through. What remains (documented, not a
+controller bug): the player collider is a player-sized *capsule* smaller than the disguise
+mesh, and primitive footprints (asset-dims.json still empty) can be smaller than a GLB, so
+a capsule stopping at a prop's collider edge can still *look* embedded; plus a one-substep
+lag (controller queries the prop's last-step position, the prop moves during `world.step`)
+leaves a small visual overlap while a light prop is being shoved. Change made: pass an
+EXPLICIT `QueryFilterFlags.EXCLUDE_SENSORS` to `computeColliderMovement` so "dynamic props
+block the capsule" is unambiguous + future-proof (behaviour-identical to the old default in
+this sensor-free world). The controller `offset` (0.02) is a controller-GLOBAL property —
+it already applies to dynamic contacts (confirmed), so the capsule keeps its skin gap off
+props too. Real "feels more solid" levers are propDensity/characterMass (feel dials, left
+alone — need a feel-test, not a blind bump).
+
+**Bug 2 — fall-through via wall-top jump.** *Raw-gravity-translation theory REFUTED.* ALL
+vertical motion already routes through `computeColliderMovement` (desired.y = vy·dt) — there
+is NO raw gravity translation anywhere in the physics path (the 2D fallback has no vertical
+at all). And the KinematicCharacterController's movement query is inherently SWEPT
+(shape-cast along the desired vector), so a single frame can't tunnel a wall by moving too
+far — confirming plan Step 4's "if it sweeps, no redundant step-clamp." The real cause is
+(c): the movement query STARTING already penetrating. A wall-top jump can leave the capsule
+a hair inside a thin top edge; a swept query from inside solid geometry is degenerate and
+can drop the capsule through. Fixes:
+  - **Depenetration failsafe** (`_substep` + `_isPenetrating`, gated by `feel.depenetrate`,
+    default ON): each substep, if the capsule STARTS genuinely inside solid geometry, snap
+    it back to `safePos` (the previous substep's controller-corrected, collision-free
+    position) and zero vy — instead of tunnelling. Tested with a SKIN-SHRUNK capsule
+    (radius/half −0.05) so resting-on-a-surface or pressing-a-wall contact never trips it;
+    only a real overlap deeper than the skin does. `intersectionWithShape`, guarded/try-
+    catch → no-ops to the clamp+failsafe alone if the API is absent. `safePos` is recorded
+    every substep as the controller's output (never enters geometry by construction).
+  - **Terminal fall-speed clamp** `rules.maxFallSpeed` (20 u/s): bounds one substep's fall
+    to ≈0.33 m — far under any wall/floor thickness — so sweep + clamp together make a
+    single-frame leap impossible. No extra per-step position clamp added (the sweep already
+    covers it; not stacking a redundant third clamp).
+  - **Void failsafe (verified, not rebuilt):** the "capsule top < floorTop−2 → respawn"
+    catch is host-authoritative in `referee.integrate` at floorTop=0, GLOBAL to every map
+    (not per-map). Confirmed it covers all three maps; left as-is.
+
+**Bug 3 — disguise rotation snaps instantly.** Was: `dispYaw` set instantly to look-yaw on
+right-click (referee `applyInput` + client `main.js`) — a teleport that could jump the prop
+into a pose it can't fit rotated. Now CONTINUOUS: `referee.updateDisguiseRotation(dt)` (per
+tick, before movement) eases `dispYaw` toward look-yaw at a capped
+`rules.disguiseRotSpeedDeg` (270°/s), and each increment is validated by
+`physics.rotationWouldCollide(playerId, propType, yaw)` — a footprint shape-cast (the prop's
+w/d box at capsule height, excluding own capsule) against the SHARED Rapier world; if the
+next increment would intersect a wall/fixture/prop, the turn STOPS there (no force-through).
+*Honest caveat:* the player's physics body is a symmetric *capsule*, so yaw rotation can't
+literally wedge the physics — the snap's damage was the VISUAL prop teleporting into an
+illegal-looking pose and (where a big disguise silhouette clips geometry) reading as an
+eject. The gate now tests the PROP footprint so the disguise won't rotate into a wall; if a
+disguise is already wedged (mesh bigger than capsule, current pose overlapping), rotation
+locks until you move out — intended ("no force-through"), a rare edge. Client mirrors the
+same capped ease on the local own-model (cosmetic; host stays authoritative + does the
+gating). Yaw authorship unchanged (turning player's own client → host → snapshot).
+
+**Config added:** `rules.json` → `maxFallSpeed: 20`, `disguiseRotSpeedDeg: 270`.
+`physics-feel.json` → `depenetrate: true`. **Files:** `shared/physics.js`,
+`shared/referee.js`, `js/main.js`, `shared/config/{rules,physics-feel}.json`.
+**LIVE RE-TEST OWED:** props feel solid (compress+push, no standing inside); wall-top jumps
+no longer fall through wall→floor; disguise rotation turns smoothly and stops at walls
+instead of wedging; watch the depenetration for any stutter (flip `depenetrate` off if so).
+
+---
+
 ## 2026-07-11 PHYSICS FEEL TUNING (on `main`) — Jie's three dials + anti-bob
 Small focused feel pass after a live playtest reported: players push deep INTO props
 before they react; standing on objects causes constant up/down bobbing; everything
@@ -234,7 +307,12 @@ readers (`js/scene.js`, `js/main.js`) + catalog flags (`shared/config/*`).
   in `applyDisguise` at the current look yaw). Holding **right-click** (desktop) /
   **ROTATE** (touch) sets `rotUnlock`, which lets `dispYaw` follow look yaw again —
   yaw ONLY, it never tips (players are kinematic capsules; there is no pitch/roll
-  to leak). Snapshots broadcast `dispYaw` as the player's `yaw` when disguised, so
+  to leak). **As of SOLIDITY PASS #2 (2026-07-11) this follow is CONTINUOUS, not a
+  snap:** `referee.updateDisguiseRotation(dt)` eases `dispYaw` toward look-yaw at
+  `rules.disguiseRotSpeedDeg` (270°/s) with a per-increment
+  `physics.rotationWouldCollide` fit-gate (stops the turn at a wall instead of
+  wedging the prop). See the top "SOLIDITY PASS #2" section. Snapshots broadcast
+  `dispYaw` as the player's `yaw` when disguised, so
   every other client sees the lock; `main.js` mirrors it on the local own-model via
   `scene.setCamera(..., selfDispYaw)`.
 - Movement direction still follows the look yaw — only the VISUAL orientation is

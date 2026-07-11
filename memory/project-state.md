@@ -8,6 +8,40 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: PHYSICS SOLIDITY PASS #2 on `main` (2026-07-11, Jie) — three specific bugs. Code/wiring done; all three need a LIVE re-test (headless can't verify runtime physics).
+
+Second solidity pass after Jie's playtest. Scope: player controller + disguise rotation +
+fall path only (no map/netcode/editor). Full detail: `memory/notes/physics.md` (top
+"SOLIDITY PASS #2"). Honest per-bug summary:
+
+1. **Deep-inside-props (Bug 1).** *Filter-excludes-dynamic theory REFUTED* — the movement
+   query passed no filter and Rapier's default never excluded dynamic bodies; they were
+   already obstacles the capsule blocks against (impulses are the ADDITIONAL shove). Added
+   an explicit `EXCLUDE_SENSORS` filter to make that unambiguous (behaviour-identical here).
+   Confirmed the controller offset (0.02) is controller-global → applies to dynamic contacts
+   too. Residual "looks embedded" is the player-sized capsule < disguise mesh + empty
+   asset-dims footprints + a one-substep shove lag — documented, not a controller bug.
+2. **Wall-top fall-through (Bug 2).** *Raw-gravity theory REFUTED* — all vertical motion
+   already goes through the swept `computeColliderMovement`; no raw translation exists. The
+   controller sweeps, so the real cause is the query STARTING inside geometry (wall-top jump
+   leaves the capsule a hair inside a thin edge). Added: **depenetration failsafe** (snap
+   back to last collision-free pos if a substep starts penetrating; skin-shrunk test so
+   resting/pressing never trips it; `feel.depenetrate`, default ON) + **terminal fall clamp**
+   (`rules.maxFallSpeed` 20). Verified the void→respawn failsafe is host-level + global to
+   all maps (kept). No redundant step-clamp (sweep already covers a single-frame leap).
+3. **Rotation snap (Bug 3).** Right-click no longer snaps `dispYaw` to look-yaw; it now
+   eases at a capped `rules.disguiseRotSpeedDeg` (270°/s) with a per-increment footprint
+   shape-cast gate (`physics.rotationWouldCollide`) that STOPS the turn if it would rotate
+   the prop into a wall. Honest caveat: the physics body is a symmetric capsule (yaw can't
+   truly wedge it) — the gate tests the PROP footprint so the disguise won't rotate into
+   geometry; the fix is mostly the continuous (non-teleport) turn. Client mirrors the ease
+   on the own-model (cosmetic; host authoritative + gates).
+
+**Config:** `rules.json` +`maxFallSpeed:20` +`disguiseRotSpeedDeg:270`; `physics-feel.json`
++`depenetrate:true`. **Files:** `shared/physics.js`, `shared/referee.js`, `js/main.js`,
+`shared/config/{rules,physics-feel}.json`. **OWED — live re-test:** solidity feel, wall-top
+jumps, rotation wedging; watch depenetration for stutter (flip `depenetrate` off if so).
+
 ## Status: PHYSICS FEEL TUNING on `main` (2026-07-11, Jie) — three dials + anti-bob. Config/wiring done; FEEL still owed a live playtest (can't be verified headless).
 
 Small focused feel pass after a live playtest: players push deep INTO props before they

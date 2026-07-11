@@ -218,10 +218,14 @@ export class Referee {
     // reordered/duplicate packet lowering the ack.
     if (Number.isFinite(msg.seq) && msg.seq > player.lastInputSeq) player.lastInputSeq = msg.seq;
 
-    // Orientation lock: a disguised prop keeps its facing while moving (dispYaw
-    // frozen at disguise time) UNLESS right-click is held (rotUnlock), which lets it
-    // rotate on yaw only. Anyone not disguised simply faces where they look.
-    if (!player.disguise || player.rotUnlock) player.dispYaw = player.yaw;
+    // Orientation lock: someone NOT disguised has no prop to keep still, so their
+    // display yaw just tracks where they look (instant — no footprint to wedge). A
+    // DISGUISED prop's facing is now advanced CONTINUOUSLY in integrate()
+    // (updateDisguiseRotation) at a capped rate with a per-increment fit check, instead
+    // of snapping to look-yaw here — a snap could teleport the prop into a pose it
+    // can't fit, forcing the solver to eject/tunnel it (Bug 3). Nothing to do here for
+    // the disguised case; the tick handles it.
+    if (!player.disguise) player.dispYaw = player.yaw;
   }
 
   applyDisguise(player, propId) {
@@ -485,9 +489,42 @@ export class Referee {
     }
   }
 
+  // CONTINUOUS disguise rotation (Bug 3). Right-click (rotUnlock) no longer snaps a
+  // disguised prop instantly to look-yaw — that could teleport the prop into a pose it
+  // can't fit rotated, forcing the physics solver to eject or tunnel it. Instead the
+  // display yaw eases toward the look direction at a capped angular rate
+  // (rules.disguiseRotSpeedDeg, default 270°/s), and each increment is validated: if
+  // turning the prop's footprint that far would intersect world geometry
+  // (physics.rotationWouldCollide), the turn STOPS there rather than forcing through.
+  // Physics then resolves incrementally along the way instead of jumping to an illegal
+  // state. Yaw stays authored here on the host (authoritative) and rides the snapshot as
+  // before — no netcode change. Runs every tick with real dt.
+  updateDisguiseRotation(dt) {
+    const maxStep = (((this.rules.disguiseRotSpeedDeg || 270) * Math.PI) / 180) * dt;
+    for (const p of this.players.values()) {
+      if (!p.alive || !p.disguise) continue;
+      // Only turn while right-click is held; otherwise the facing stays frozen (the
+      // "prop doesn't spin as it slides" tell).
+      const target = p.rotUnlock ? p.yaw : p.dispYaw;
+      const delta = wrapAngle(target - p.dispYaw);
+      if (Math.abs(delta) < 1e-4) continue;
+      const step = Math.max(-maxStep, Math.min(maxStep, delta));
+      const next = wrapAngle(p.dispYaw + step);
+      // Per-increment fit check against the SHARED physics world (guarded — a missing
+      // physics or query API just lets it turn, so rotation never locks up on a gap).
+      if (this.physics && this.physics.rotationWouldCollide && this.physics.rotationWouldCollide(p.id, p.disguise, next)) {
+        continue; // blocked: hold the last fitting facing rather than wedge the prop
+      }
+      p.dispYaw = next;
+    }
+  }
+
   integrate(dt) {
     const map = this.maps[this.mapId];
     const bound = map.size / 2 - this.rules.mapMargin;
+
+    // Advance disguise facings continuously this tick (Bug 3), before movement.
+    this.updateDisguiseRotation(dt);
 
     // Physics path: real collide-and-slide vs walls/fixtures, jump, prop shoving.
     if (this.physics) {
@@ -685,3 +722,11 @@ function shuffle(arr) {
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const round2 = (v) => Math.round(v * 100) / 100;
 const round3 = (v) => Math.round(v * 1000) / 1000;
+// Wrap an angle delta into [-π, π] so continuous disguise rotation always turns the
+// short way and never treats a ±2π wrap as a huge jump.
+const wrapAngle = (a) => {
+  a = a % (2 * Math.PI);
+  if (a > Math.PI) a -= 2 * Math.PI;
+  else if (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+};

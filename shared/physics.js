@@ -60,6 +60,12 @@ export function resolveFeel(feel) {
     propLinearDamping: num(f.propLinearDamping, 0.4),
     propAngularDamping: num(f.propAngularDamping, 0.4),
     capGroundedImpulse: f.capGroundedImpulse !== false, // default ON
+    // Depenetration failsafe (Bug 2, 2026-07-11): if a capsule STARTS a substep
+    // genuinely penetrating solid geometry (e.g. a wall-top jump landed it slightly
+    // inside a thin edge), snap it back to its last collision-free position rather
+    // than let the swept query drop it through the wall. Default ON; flip OFF here if
+    // a live playtest shows it stuttering (it can only ADD stability, never remove it).
+    depenetrate: f.depenetrate !== false,
   };
 }
 
@@ -133,6 +139,18 @@ export class PhysicsWorld {
     this.feel = resolveFeel(opts.feel);
     this.dynamicProps = !!opts.dynamicProps;
     this.map = map;
+    // Keep the render catalog so the disguise-rotation gate (Bug 3) can look up a
+    // prop's footprint to shape-cast it against world geometry before letting it turn.
+    this.catalog = catalog || {};
+
+    // Movement-query obstacle filter (Bug 1). computeColliderMovement's DEFAULT filter
+    // already treats dynamic bodies as obstacles — nothing was excluding them (the
+    // "filter excludes dynamic props" theory is REFUTED by the code). We pass an
+    // explicit EXCLUDE_SENSORS filter anyway so the intent is unambiguous and
+    // future-proof: dynamic props BLOCK the capsule (it compresses against a chair and
+    // pushes it, never occupies its space) while applyImpulsesToDynamicBodies(true)
+    // still lets the push happen. Sensors (none today) are the only thing skipped.
+    this._moveFilter = (RAPIER.QueryFilterFlags && RAPIER.QueryFilterFlags.EXCLUDE_SENSORS) || undefined;
 
     const g = this.rules.gravity != null ? this.rules.gravity : 22;
     this.world = new RAPIER.World({ x: 0, y: -g, z: 0 });
@@ -348,7 +366,14 @@ export class PhysicsWorld {
     // Slightly smaller collider than the visual capsule so it slips through gaps a
     // touch more forgivingly and never wedges on its own body offset.
     const collider = this.world.createCollider(R.ColliderDesc.capsule(this._pHalf, this._pRadius), body);
-    this.players.set(id, { body, collider, vy: 0, grounded: false, input: { mx: 0, mz: 0, yaw: 0, jump: false } });
+    const t0 = body.translation();
+    // safePos = last collision-free capsule position, seeded at spawn. The depenetration
+    // failsafe (Bug 2) snaps the capsule back here if a substep starts inside geometry.
+    this.players.set(id, {
+      body, collider, vy: 0, grounded: false,
+      input: { mx: 0, mz: 0, yaw: 0, jump: false },
+      safePos: { x: t0.x, y: t0.y, z: t0.z },
+    });
   }
 
   hasPlayer(id) {
@@ -372,9 +397,13 @@ export class PhysicsWorld {
   setPlayerPosition(id, pos) {
     const p = this.players.get(id);
     if (!p) return;
-    p.body.setNextKinematicTranslation({ x: pos.x, y: this._pCenterY + (pos.y || 0), z: pos.z });
-    p.body.setTranslation({ x: pos.x, y: this._pCenterY + (pos.y || 0), z: pos.z }, false);
+    const y = this._pCenterY + (pos.y || 0);
+    p.body.setNextKinematicTranslation({ x: pos.x, y, z: pos.z });
+    p.body.setTranslation({ x: pos.x, y, z: pos.z }, false);
     p.vy = 0;
+    // A teleport (reconciliation / respawn) is by construction a fresh valid spot, so
+    // reset the depenetration anchor to it — otherwise it could snap back to a stale one.
+    p.safePos = { x: pos.x, y, z: pos.z };
   }
 
   getPlayer(id) {
@@ -382,6 +411,70 @@ export class PhysicsWorld {
     if (!p) return null;
     const t = p.body.translation();
     return { x: t.x, y: t.y - this._pCenterY, z: t.z, grounded: p.grounded };
+  }
+
+  // Is the player capsule genuinely PENETRATING a solid collider right now? (Bug 2
+  // depenetration.) Tests a SKIN-SHRUNK capsule so ordinary resting-on-a-surface
+  // contact — which is what a grounded player has every frame — reads as clear; only a
+  // real overlap deeper than the skin returns true. Excludes the player's own body.
+  // Returns true / false, or null if the intersection query isn't available (caller
+  // then does nothing — degrades to the terminal clamp + void failsafe alone).
+  _isPenetrating(p) {
+    const R = this.R;
+    if (typeof this.world.intersectionWithShape !== 'function' || !R.Capsule) return null;
+    const skin = 0.05;
+    const hh = Math.max(0.02, this._pHalf - skin);
+    const rr = Math.max(0.02, this._pRadius - skin);
+    try {
+      const t = p.body.translation();
+      const shape = new R.Capsule(hh, rr);
+      const hit = this.world.intersectionWithShape(
+        { x: t.x, y: t.y, z: t.z }, IDENT_QUAT, shape, this._moveFilter, undefined, p.collider, p.body
+      );
+      return !!hit;
+    } catch {
+      return null;
+    }
+  }
+
+  // Disguise-rotation gate (Bug 3). Would turning the disguised prop to `yaw` push its
+  // FOOTPRINT into world geometry (a wall/fixture/other prop) it can't fit into rotated?
+  // The player's own collision body is a symmetric capsule, so its physics can't wedge
+  // on yaw — this instead shape-casts the PROP's footprint (from the catalog) at the
+  // player's position and reports whether that box, turned to `yaw`, would intersect.
+  // The referee steps dispYaw continuously and calls this each increment; a `true` stops
+  // the turn there so the prop never rotates through a wall. Reuses the ONE shared
+  // Rapier world + catalog (no parallel collision path). Guarded; false (allow) on any
+  // gap so rotation never silently locks up.
+  rotationWouldCollide(playerId, propType, yaw) {
+    const R = this.R;
+    const p = this.players.get(playerId);
+    const c = propType && this.catalog[propType];
+    if (!p || !c) return false;
+    if (typeof this.world.intersectionWithShape !== 'function' || !R.Cuboid) return false;
+    // Footprint half-extents (measured bounds first, else the primitive w/d/r).
+    const m = c.measured;
+    let hw, hd;
+    if (m && m.w > 0 && m.d > 0) { hw = m.w / 2; hd = m.d / 2; }
+    else {
+      hw = (c.w != null ? c.w : (c.r != null ? c.r * 2 : 1)) / 2;
+      hd = (c.d != null ? c.d : (c.r != null ? c.r * 2 : 1)) / 2;
+    }
+    // A square / round footprint sweeps the same area at every yaw — rotating it can't
+    // change what it overlaps, so skip the query (cheap + avoids spurious blocks).
+    if (Math.abs(hw - hd) < 1e-3) return false;
+    try {
+      const t = p.body.translation();
+      // Box at capsule height, kept clear of the y=0 ground (half-height 0.8, centred at
+      // the capsule centre ≈0.9 → spans ~0.1..1.7) so only walls/fixtures/props trip it.
+      const shape = new R.Cuboid(Math.max(hw, this._pRadius), 0.8, Math.max(hd, this._pRadius));
+      const hit = this.world.intersectionWithShape(
+        { x: t.x, y: t.y, z: t.z }, yawQuat(yaw), shape, this._moveFilter, undefined, p.collider, p.body
+      );
+      return !!hit;
+    } catch {
+      return false;
+    }
   }
 
   // ---- step ----------------------------------------------------------------
@@ -407,8 +500,25 @@ export class PhysicsWorld {
     const g = this.rules.gravity != null ? this.rules.gravity : 22;
     const jumpSpeed = this.rules.jumpSpeed != null ? this.rules.jumpSpeed : 8;
     const moveSpeed = this.rules.moveSpeed != null ? this.rules.moveSpeed : 6;
+    // Terminal fall speed cap (Bug 2). Bounds how far a falling capsule can travel in
+    // one substep (maxFall/60 ≈ 0.33 m at 20 u/s — far less than any wall/floor
+    // thickness), so combined with the controller's SWEPT movement query a single
+    // frame can never leap past a collider. From rules.json (shared by both sims).
+    const maxFall = this.rules.maxFallSpeed != null ? this.rules.maxFallSpeed : 20;
 
     for (const p of this.players.values()) {
+      // DEPENETRATION FAILSAFE (Bug 2): if this substep begins with the capsule
+      // genuinely INSIDE solid geometry (a wall-top jump can leave it a hair inside a
+      // thin edge), the swept query would start from an illegal state and can drop the
+      // capsule clean through the wall. Snap back to the last collision-free position
+      // and kill the fall instead of tunnelling. Skin-shrunk test (below) so ordinary
+      // resting-on-a-surface contact never trips it. Cheap, guarded, no-ops if the
+      // intersection API is unavailable.
+      if (this.feel.depenetrate && p.safePos && this._isPenetrating(p) === true) {
+        p.body.setTranslation({ x: p.safePos.x, y: p.safePos.y, z: p.safePos.z }, false);
+        p.vy = 0;
+      }
+
       const inp = p.input || { mx: 0, mz: 0, yaw: 0, jump: false };
       const sin = Math.sin(inp.yaw);
       const cos = Math.cos(inp.yaw);
@@ -427,6 +537,7 @@ export class PhysicsWorld {
       } else {
         p.vy -= g * dt;
       }
+      if (p.vy < -maxFall) p.vy = -maxFall; // terminal-velocity clamp (Bug 2)
 
       // JUMP-JITTER FIX: snap-to-ground pulls the capsule back down and fights an
       // ascending jump, which reads as jitter at takeoff. Enable snapping ONLY when
@@ -457,13 +568,20 @@ export class PhysicsWorld {
       // exactly that. The capsule therefore never interpenetrates and is never
       // ejected by penetration recovery.
       const desired = { x: vx * moveSpeed * dt, y: p.vy * dt, z: vz * moveSpeed * dt };
-      this._controller.computeColliderMovement(p.collider, desired);
+      // Explicit obstacle filter (Bug 1): dynamic props are NOT excluded — they block
+      // the capsule as solid obstacles while still being shoved by the impulse pass.
+      this._controller.computeColliderMovement(p.collider, desired, this._moveFilter);
       const mv = this._controller.computedMovement();
       p.grounded = this._controller.computedGrounded();
       if (p.grounded && p.vy < 0) p.vy = 0;
 
       const tr = p.body.translation();
-      p.body.setNextKinematicTranslation({ x: tr.x + mv.x, y: tr.y + mv.y, z: tr.z + mv.z });
+      const nx = tr.x + mv.x, ny = tr.y + mv.y, nz = tr.z + mv.z;
+      p.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+      // The controller's corrected result never enters geometry (it keeps `offset`
+      // clearance), so it is a valid collision-free anchor for the depenetration
+      // failsafe above. Recorded every substep so a restore only ever costs one frame.
+      p.safePos = { x: nx, y: ny, z: nz };
     }
 
     // Fixed substep — timestep is _fixedDt (set in the constructor); dt is always
@@ -528,6 +646,9 @@ export class PhysicsWorld {
     this.propBodies = [];
   }
 }
+
+// Identity rotation, reused by the depenetration intersection test (no per-call alloc).
+const IDENT_QUAT = { x: 0, y: 0, z: 0, w: 1 };
 
 // Quaternion for a yaw (rotation about +Y).
 function yawQuat(yaw) {

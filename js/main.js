@@ -556,8 +556,20 @@ function frame(now) {
     state.self.y = 0;
   }
 
-  // Disguise orientation lock: keep the frozen facing unless right-click is held.
-  if (!state.selfDisguised || input.rotUnlock) state.selfDispYaw = input.yaw;
+  // Disguise orientation lock (local own-model view). Undisguised: face where we look.
+  // Disguised + right-click: ease the facing toward look-yaw at the SAME capped rate the
+  // host uses (rules.disguiseRotSpeedDeg), so our own prop turns smoothly/continuously
+  // instead of snapping (Bug 3) and roughly matches the host-authoritative dispYaw
+  // everyone else sees. The host does the fit-gating; this is cosmetic self-view only.
+  if (!state.selfDisguised) {
+    state.selfDispYaw = input.yaw;
+  } else if (input.rotUnlock) {
+    const maxStep = (((state.cfg.rules.disguiseRotSpeedDeg || 270) * Math.PI) / 180) * dt;
+    let d = (input.yaw - state.selfDispYaw) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    else if (d < -Math.PI) d += Math.PI * 2;
+    state.selfDispYaw += Math.max(-maxStep, Math.min(maxStep, d));
+  }
 
   if (scene) {
     // Displayed position = predicted truth + the decaying correction offset.
