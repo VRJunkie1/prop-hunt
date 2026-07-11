@@ -180,12 +180,33 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   lock)** so it never contends with input.js's lock path. Select/move/rotate/scale/
   spawn/delete(+undelete); exports the edited layout as a drop-in `maps.json`.
   Detail: `memory/notes/level-editor.md`.
+- `js/debug.js` — **in-game debug menu (`?debug=1` only)**. Constructed by `main.js`
+  ONLY under the flag (lazy `import()`), so a normal page has zero debug DOM/listeners/
+  styles. A plain, phone-usable DOM overlay (thumb toggle + collapsible panel, styles
+  self-injected). Read-only displays (FPS, coords, local-player states, roster, per-peer
+  ping) read live client state. Host-authoritative actions (change team, reset, force-
+  morph) go through the referee's gated **`C2S.DEBUG`** family (see below). Local
+  rendering features — **free cam**, **focus box**, **click-to-inspect** — go through
+  explicit `scene.js` seams (`setFreeCam`/`updateFreeCam`/`debugPick`/`setFocusBox`), so
+  scene math stays in scene.js. The focus box is a magenta wireframe, its OWN box instance
+  (distinct from the green disguise highlight + the collider-debug wires) and NEVER added
+  to `scene.colliders`. Free cam is rendering-only: `main.js` freezes the physics player
+  (skips prediction, sends zeroed movement) while it's on. `tools/check-blindfold.mjs` was
+  widened to scan debug.js's `scene.*()` calls too (the "missing scene method blanks the
+  render loop" guard now covers this module). Detail: `memory/notes/debug-menu.md`.
 
 ## Shared (`shared/`)
 
 - `protocol.js` — **one protocol** now: `C2S`/`S2C`/`PHASE`/`ROLE` (client ↔
   referee). Dependency-free ESM. (The old `SIG` matchmaker-signaling protocol was
   deleted with the matchmaker; PeerJS's own connect/disconnect events replace it.)
+  **`C2S.DEBUG`** (2026-07-11) is the debug-menu family (`{action:'team'|'reset'|'morph'}`):
+  routed like any other message, but the referee DROPS it unless the HOST loaded with
+  `?debug=1` (`referee.debugEnabled`, read from the host tab's URL — the referee only ever
+  runs in the host tab). So a tampered guest can't inject debug commands into a normal
+  match. `js/net.js` also carries a debug-only `__ping`/`__pong` control pair (intercepted
+  BEFORE the referee; enabled only under `?debug=1` via `session.enablePing()`) that fills
+  a per-peer RTT map the debug panel reads — zero ping traffic in normal play.
 - `referee.js` — the authoritative referee (see above). Browser-only, transport-
   agnostic (unchanged by the PeerJS swap — it only ever saw `send` callbacks).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),

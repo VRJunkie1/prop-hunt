@@ -22,6 +22,15 @@ export const C2S = {
   //              otherwise a disguise keeps its locked orientation while moving.
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
   TAG: 'tag', // {}                            -> hunter attempts a tag
+  // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
+  // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
+  // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
+  // into a normal match. Payloads:
+  //   { action:'team', role:'hunter'|'prop' } -> switch the sender's team
+  //   { action:'reset' }                      -> host restarts the round
+  //   { action:'morph', type:'<catalogType>' }-> force-disguise the sender (bypasses range)
+  // See js/debug.js + shared/referee.js handleDebug. NOT part of normal play.
+  DEBUG: 'debug',
 };
 
 // Referee -> Client message types.

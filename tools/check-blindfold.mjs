@@ -47,12 +47,20 @@ console.log('blindfold + render-loop acceptance check');
 // ---------------------------------------------------------------------------
 const mainSrc = read('js', 'main.js');
 const sceneSrc = read('js', 'scene.js');
+// js/debug.js (?debug=1 menu) also calls scene.* methods (setFreeCam / updateFreeCam /
+// debugPick / setFocusBox). The original blindfold bug — a call to a scene method that
+// didn't exist blanking the render loop — can just as easily land from debug.js, which the
+// old check didn't scan. Widen the guard to cover it. debug.js uses a `scene` local (const
+// scene = this.getScene()), so the same alias regex catches its calls.
+const debugSrc = read('js', 'debug.js');
 
 // Collect method-call names on the scene object (`scene.NAME(` and the `s.NAME(`
 // alias from ensureScene().then((s) => s.NAME(...)). Property reads without a call
 // (scene.thirdPerson, s.renderer) are excluded by requiring a following `(`.
 const called = new Set();
-for (const m of mainSrc.matchAll(/(?:^|[^\w.])(?:scene|s)\.([a-zA-Z_]\w*)\s*\(/g)) called.add(m[1]);
+for (const src of [mainSrc, debugSrc]) {
+  for (const m of src.matchAll(/(?:^|[^\w.])(?:scene|s)\.([a-zA-Z_]\w*)\s*\(/g)) called.add(m[1]);
+}
 
 // A method is "defined" in scene.js if it appears as a class-method declaration:
 // `  NAME(args) {` (not preceded by a dot, which would be a call).
@@ -64,6 +72,12 @@ for (const name of called) ok(definedInScene(name), `scene.${name}() is defined 
 // Name the two that regressed explicitly, so the intent is obvious in the output.
 ok(definedInScene('aimedDisguiseTarget'), 'crosshair disguise: scene.aimedDisguiseTarget() exists');
 ok(definedInScene('highlightProp'), 'crosshair disguise: scene.highlightProp() exists');
+// Debug menu (?debug=1) scene seams — the free cam + focus box + inspect entry points
+// js/debug.js drives. A missing one would blank the render loop exactly like the original bug.
+ok(definedInScene('setFreeCam'), 'debug menu: scene.setFreeCam() exists');
+ok(definedInScene('updateFreeCam'), 'debug menu: scene.updateFreeCam() exists');
+ok(definedInScene('debugPick'), 'debug menu: scene.debugPick() exists');
+ok(definedInScene('setFocusBox'), 'debug menu: scene.setFocusBox() exists');
 
 // ---------------------------------------------------------------------------
 // 2) BLINDFOLD DECISION (client). main.js derives it fresh every snapshot/phase

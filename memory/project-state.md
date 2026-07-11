@@ -8,6 +8,48 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: IN-GAME DEBUG MENU behind `?debug=1` (2026-07-11, Jie, on `main`). Code + guards done; NOT live-tested (headless can't open a browser).
+
+An in-game developer/debug panel, gated on the SAME `?debug=1` switch as the collider
+wireframe view. OFF for normal play (zero debug DOM/listeners/styles without the flag).
+Full detail + how-to: `memory/notes/debug-menu.md`.
+
+- **New self-contained module `js/debug.js`** (`DebugMenu`) — plain, phone-usable DOM overlay
+  (thumb toggle + collapsible panel, self-injected styles, no framework, no imports). `main.js`
+  constructs it ONLY under `?debug=1` (lazy `import()`); `debugMenu` defaults null and every
+  hook (`onSnapshot`, per-frame `frame`) is null-guarded.
+- **Read-only displays** (can't break anything): smoothed FPS, live coords, velocity, the
+  local-player state list (role/phase/disguise/grounded/frozen-blind/alive/capsule r+half/vel),
+  the player roster, and per-peer **ping**.
+- **Ping** measured in the netcode layer (`js/net.js`): a debug-only `__ping`/`__pong` pair
+  intercepted BEFORE the referee, enabled only under the flag (`session.enablePing()`), filling
+  a `pings` map the panel reads. Zero ping traffic in normal play; "—" when unmeasurable.
+- **Host-authoritative actions** via a gated **`C2S.DEBUG`** family in the referee — change
+  team, reset game, force-morph. All route through the referee like normal state changes;
+  force-morph reuses `setPlayerCollider` (capsule resizes right), bypassing only the range
+  check. The referee **drops every `debug:` message unless the HOST loaded with `?debug=1`**
+  (`referee.debugEnabled`, read from the host tab's URL) — a tampered guest can't inject debug
+  commands into a normal match. "Exit game" is purely local.
+- **Free cam / focus box / click-to-inspect** via NEW `scene.js` seams (`setFreeCam`/
+  `updateFreeCam`/`debugPick`/`setFocusBox`) so camera + raycast math stay in scene.js. Free
+  cam is rendering-only (main.js freezes the physics player: skips prediction, sends zeroed
+  movement). Focus box is a MAGENTA box, its own instance, never in `scene.colliders`. Inspect
+  reveals a disguised player (the point of a debug tool); sleep state shows "host-only".
+- **Guard rails:** `tools/check-blindfold.mjs` WIDENED to also scan `debug.js`'s `scene.*()`
+  calls (the "missing scene method blanks the render loop" guard now covers this module) +
+  named the four new seams. NEW `tools/check-debug-menu.mjs` — the headless smoke check:
+  `debug.js` parses + exports, ZERO debug DOM/CSS without the flag, main.js gates
+  construction/ping behind the flag with null-guarded hooks, the referee host-gate, and the
+  protocol/net plumbing. **Not executed here (no shell)** — hand-traced; run both + a live
+  browser pass to close.
+- **Files:** `js/debug.js` (new), `js/main.js`, `js/net.js`, `js/scene.js`,
+  `shared/referee.js`, `shared/protocol.js`, `tools/check-blindfold.mjs`,
+  `tools/check-debug-menu.mjs` (new), `memory/notes/debug-menu.md` (new), architecture.
+- **OWED — live browser pass:** panel renders + phone-usable; team/reset/morph apply on host
+  & guest (debug host); free cam flies while the body stays put; focus box + inspect pick the
+  right entity + reveal a disguise; ping shows plausible RTT; and — the acceptance bar —
+  loading WITHOUT `?debug=1` shows zero debug UI and a clean console.
+
 ## Latest: PHYSICS PASS #4 — bouncy-invisible-wall ROOT CAUSE + `?debug=1` collider view + alignment guard (2026-07-11, Jie, on `main`). Geometry guard hand-traced GREEN; behavioural fix owes a live browser pass.
 
 Attempt #4. Jie: the relaunch made it WORSE — (1) still phases through props, (2) NEW "invisible

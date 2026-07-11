@@ -134,6 +134,52 @@ export class Session {
     // Guest-only:
     this.conn = null;
     this._connectTimer = null;
+
+    // ---- ping/pong RTT (debug menu only) ------------------------------------
+    // peerId -> last measured round-trip in ms. Filled by _sendPings()/the pong reply
+    // handler ONLY after enablePing() is called (js/main.js does that solely under
+    // ?debug=1), so normal play sends zero ping traffic. The pong REPLY handler is always
+    // present but only fires if a peer actually pings us — harmless in a normal match.
+    // The debug panel reads this map; peer ids equal player ids in this game.
+    this.pings = new Map();
+    this._pingOn = false;
+    this._pingTimer = null;
+  }
+
+  // Start measuring per-peer RTT (debug menu). A guest pings the host; a host pings each
+  // guest. Idempotent + safe to call before the link is open (sends no-op until it is).
+  enablePing() {
+    if (this._pingOn) return;
+    this._pingOn = true;
+    this._pingTimer = setInterval(() => this._sendPings(), 1000);
+  }
+
+  _sendPings() {
+    const ts = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (this.isHost) {
+      for (const { conn } of this.conns.values()) {
+        if (conn && conn.open) conn.send({ t: '__ping', ts });
+      }
+    } else if (this.conn && this.conn.open) {
+      this.conn.send({ t: '__ping', ts });
+    }
+  }
+
+  // Intercept the ping/pong control messages BEFORE they reach the referee/onMessage.
+  // Returns true if the message was a ping/pong (and was handled here). `peerId` is who
+  // sent it, `reply(obj)` sends back to that same peer.
+  _handlePingPong(m, peerId, reply) {
+    if (!m || typeof m !== 'object') return false;
+    if (m.t === '__ping') {
+      reply({ t: '__pong', ts: m.ts });
+      return true;
+    }
+    if (m.t === '__pong') {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (Number.isFinite(m.ts)) this.pings.set(peerId, Math.max(0, Math.round(now - m.ts)));
+      return true;
+    }
+    return false;
   }
 
   // ---- public API ---------------------------------------------------------
@@ -242,7 +288,9 @@ export class Session {
       });
     });
     conn.on('data', (m) => {
-      if (m && typeof m === 'object') this.referee.handleMessage(guestId, m);
+      if (!m || typeof m !== 'object') return;
+      if (this._handlePingPong(m, guestId, (o) => { if (conn.open) conn.send(o); })) return;
+      this.referee.handleMessage(guestId, m);
     });
     // Connection close is the authoritative "player left" signal (replaces the
     // old matchmaker's PEER_LEFT notice).
@@ -323,7 +371,9 @@ export class Session {
       this._reportLink(conn.peerConnection, this.selfId);
     });
     conn.on('data', (m) => {
-      if (m && typeof m === 'object') this.onMessage(m);
+      if (!m || typeof m !== 'object') return;
+      if (this._handlePingPong(m, conn.peer, (o) => { if (conn.open) conn.send(o); })) return;
+      this.onMessage(m);
     });
     // The host closing the connection (or leaving) ends the match for us — this
     // replaces the old matchmaker's HOST_LEFT notice.
@@ -354,6 +404,9 @@ export class Session {
   // ---- teardown -----------------------------------------------------------
   _teardown() {
     clearTimeout(this._connectTimer);
+    if (this._pingTimer) clearInterval(this._pingTimer);
+    this._pingTimer = null;
+    this._pingOn = false;
     if (this.referee) {
       this.referee.destroy();
       this.referee = null;

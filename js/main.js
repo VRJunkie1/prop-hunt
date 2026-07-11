@@ -20,6 +20,11 @@ import { loadRapier, PhysicsWorld } from '/shared/physics.js';
 const ui = new UI();
 let session = null; // created in boot() once config is loaded
 let editor = null; // lazily created on the first Ctrl+E (see editor.js)
+// In-game debug menu (js/debug.js). Constructed ONLY under ?debug=1 — the SAME single
+// switch as the collider wireframe view. Without the flag it stays null and every hook
+// below is a null-guarded no-op, so a normal page has zero debug DOM/listeners/styles.
+const DEBUG = typeof URLSearchParams !== 'undefined' && new URLSearchParams(location.search).get('debug') === '1';
+let debugMenu = null; // set in boot() when DEBUG
 const canvas = document.getElementById('view');
 // scene.js pulls Three.js from a CDN, so it is imported LAZILY (built on the
 // first match start, not at page load). That keeps a bare landing page free of
@@ -84,6 +89,11 @@ const state = {
   // Crosshair-based disguise: the prop id currently under the aim ray (or null), set
   // each frame by the render loop and consumed by tryDisguise() on Action. See frame().
   aimPropId: null,
+
+  // Debug FREE CAM (js/debug.js, ?debug=1 only). While true the render camera is flown
+  // locally by the debug module and the physics player is frozen (no prediction, zeroed
+  // movement sent), so the body stays put. Always false in normal play.
+  freeCam: false,
 };
 
 // ---- action routing -------------------------------------------------------
@@ -202,6 +212,7 @@ function handleGameMessage(msg) {
           ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
           input.lookFrozen = false;
           state.aimPropId = null;
+          resetDebugView(); // drop free cam / focus box between rounds
           resetReadyButton();
           destroyPredict();
           state.role = null;
@@ -319,10 +330,23 @@ function backToMenu(msg) {
   ui.setBlindfold(false); // clear any active blindfold overlay + release look
   input.lookFrozen = false;
   state.aimPropId = null;
+  resetDebugView(); // drop free cam / focus box so they don't bleed into the next match
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
   updateEditorButton(); // back on the landing screen (solo) → editor available again
+}
+
+// Turn off the debug free cam + focus box when leaving a match, so a persisted scene
+// doesn't start the next round with a frozen (free-cam) camera or a stale focus box.
+// No-op without ?debug=1.
+function resetDebugView() {
+  state.freeCam = false;
+  if (scene) {
+    if (scene.setFreeCam) scene.setFreeCam(false);
+    if (scene.setFocusBox) scene.setFocusBox(false);
+  }
+  if (debugMenu && debugMenu.resetView) debugMenu.resetView();
 }
 
 // Reset the lobby ready toggle to its default. The referee clears server-side
@@ -349,6 +373,7 @@ function onSnapshot(msg) {
   state.phase = msg.phase;
   ui.setHud(msg);
   updateBlindfold(msg.timeLeft);
+  if (debugMenu) debugMenu.onSnapshot(msg); // feed the debug panel (roster/states)
   if (scene) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
     if (msg.props) scene.syncProps(msg.props); // awake dynamic-prop transforms
@@ -563,8 +588,9 @@ function frameBody(now) {
   if (state.predict) {
     // Physics prediction: step our own body through the local Rapier world for this
     // frame's input, recording it for reconciliation. Real collide-and-slide against
-    // walls/fixtures happens right here, with zero network latency.
-    if (state.movable) {
+    // walls/fixtures happens right here, with zero network latency. Skipped while the
+    // debug free cam is on so the physics player stays put (main sends zeroed movement too).
+    if (state.movable && !state.freeCam) {
       state.seq++;
       const { mx, mz } = input.moveVector();
       const inp = { seq: state.seq, mx, mz, yaw: input.yaw, jump: input.jump, rotUnlock: input.rotUnlock, dt };
@@ -577,7 +603,7 @@ function frameBody(now) {
     state.corr.x *= 0.85;
     state.corr.y *= 0.75;
     state.corr.z *= 0.85;
-  } else if (state.movable) {
+  } else if (state.movable && !state.freeCam) {
     // Flat 2D fallback prediction (Rapier not loaded): integrate + nudge toward the
     // authoritative position. Identical to the pre-physics behaviour.
     const { mx, mz } = input.moveVector();
@@ -645,6 +671,9 @@ function frameBody(now) {
     // Advance remote-hunter animation mixers (needs real dt; interpolate uses a fixed
     // alpha). Drives the velocity-based idle/run state machine — see scene.updateAnimations.
     scene.updateAnimations(dt);
+    // Debug menu (?debug=1 only): updates its live displays and, when active, drives the
+    // free cam + focus-box raycast. Runs BEFORE render so the camera/box reflect this frame.
+    if (debugMenu) debugMenu.frame(dt);
     scene.render();
     // Drive the aim reticle off the referee's yaw-forward vector (where the tag
     // cone actually swings), not screen center — the third-person eye sits off the
@@ -659,7 +688,10 @@ function startInputLoop() {
     if (state.editing) return; // editor sandbox: stay detached from the match loop
     if (!session || !session.ready) return;
     if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
-    const { mx, mz } = input.moveVector();
+    // Debug free cam: send zeroed movement so the (frozen) physics player stays put while
+    // the local camera flies. The last real input.mx/mz would otherwise keep the referee
+    // driving the body forward, so we must actively send a stop.
+    const { mx, mz } = state.freeCam ? { mx: 0, mz: 0 } : input.moveVector();
     // seq = the latest predicted-frame id; the host echoes it back as `ack` so we
     // know which inputs it has applied. jump/rotUnlock drive physics + the disguise
     // orientation lock.
@@ -670,8 +702,8 @@ function startInputLoop() {
       mz,
       yaw: input.yaw,
       pitch: input.pitch,
-      jump: input.jump,
-      rotUnlock: input.rotUnlock,
+      jump: state.freeCam ? false : input.jump,
+      rotUnlock: state.freeCam ? false : input.rotUnlock,
     });
   }, 1000 / 20);
 }
@@ -830,11 +862,27 @@ function newSession() {
   session = new Session(state.cfg);
   session.onMessage = handleGameMessage;
   session.onStatus = handleStatus;
+  // Debug menu ping: only measure RTT when the debug panel is present (?debug=1). No ping
+  // traffic in normal play. Safe to call before the link opens (it no-ops until then).
+  if (DEBUG) session.enablePing();
 }
 
 // ---- boot -----------------------------------------------------------------
 (async function boot() {
   state.cfg = await loadConfig();
+  // Build the in-game debug menu ONLY under ?debug=1 (lazy import so a normal page never
+  // even fetches the module). It reads live state + drives host-authoritative debug
+  // commands through the referee's gated `debug:` family. See js/debug.js.
+  if (DEBUG) {
+    const { DebugMenu } = await import('./debug.js');
+    debugMenu = new DebugMenu({
+      state, input, ui, cfg: state.cfg,
+      C2S, ROLE, PHASE,
+      getScene: () => scene,
+      getSession: () => session,
+      onExit: () => backToMenu('Left the match (debug exit).'),
+    });
+  }
   newSession();
   wireMenu();
   updateEditorButton(); // show the dev editor button on the landing screen (desktop solo)

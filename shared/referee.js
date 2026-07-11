@@ -55,6 +55,16 @@ export class Referee {
     this.players = new Map(); // id -> player
     this.hostId = null;
 
+    // DEBUG GATE (?debug=1). The referee ALWAYS runs inside the HOST's browser tab, so
+    // reading the host's own URL here is exactly "does the HOST have debug on". The
+    // `debug:` message family (handleDebug) is dropped unless this is true — so a random
+    // guest (even a tampered one) can't push debug commands into a normal match. When the
+    // host IS in debug mode, the whole table has opted into a dev session. See js/debug.js.
+    this.debugEnabled =
+      typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined'
+        ? new URLSearchParams(location.search).get('debug') === '1'
+        : false;
+
     this.phase = PHASE.LOBBY;
     this.props = []; // authoritative prop instances for the active map
     // ---- physics (Rapier) ----------------------------------------------------
@@ -200,9 +210,70 @@ export class Referee {
       case C2S.TAG:
         this.applyTag(player);
         break;
+      case C2S.DEBUG:
+        this.handleDebug(player, msg);
+        break;
       default:
         break;
     }
+  }
+
+  // ---- debug commands (?debug=1 only) -------------------------------------
+  // The host-authoritative half of the in-game debug menu (js/debug.js). Every command
+  // routes through the referee exactly like a normal state change, so host and guests
+  // share ONE authoritative path. HARD GATE: dropped entirely unless the HOST loaded with
+  // ?debug=1 (this.debugEnabled) — a guest can send C2S.DEBUG all day, but a normal match's
+  // host ignores it. Only meaningful during a live round for team/morph; reset works from
+  // any phase.
+  handleDebug(player, msg) {
+    if (!this.debugEnabled) return; // host isn't in debug mode → this is a normal match
+    const action = msg && msg.action;
+    if (action === 'team') this.debugSetTeam(player, msg.role);
+    else if (action === 'reset') this.debugReset();
+    else if (action === 'morph') this.debugMorph(player, msg.type);
+  }
+
+  // CHANGE TEAMS: flip a player between hunter and prop, mid-round, host-authoritatively.
+  // Becoming a hunter drops any disguise and shrinks the physics capsule back to base;
+  // the player's private ROLE message updates their client, and the next snapshot carries
+  // the new hunter/alive flags to everyone. Keeps position (a debug teleport isn't wanted).
+  debugSetTeam(player, role) {
+    const r = role === ROLE.HUNTER ? ROLE.HUNTER : ROLE.PROP;
+    player.role = r;
+    player.alive = true;
+    if (r === ROLE.HUNTER) {
+      player.disguise = null;
+      if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, null);
+    }
+    player.dispYaw = player.yaw;
+    send(player, { t: S2C.ROLE, role: r });
+    // A team flip can end the round (e.g. the last prop became a hunter → no props left is
+    // NOT a hunter win; checkRoundOver only ends on "props existed and all are caught").
+    this.checkRoundOver();
+    this.broadcastLobby();
+  }
+
+  // RESET GAME: cleanly restart the round. Reuse the well-tested resetToLobby() teardown
+  // (roles/alive/disguise/physics world all cleared), then immediately start a fresh match
+  // when there are enough players (minPlayers=1, so a solo debug host just re-rolls). If a
+  // start isn't possible the group is left in the lobby to start manually.
+  debugReset() {
+    this.resetToLobby();
+    if (this.players.size >= this.rules.minPlayers) this.startMatch();
+  }
+
+  // FORCE MORPH INTO PROP X: force-disguise the sender as any catalog type, resizing the
+  // physics capsule through the SAME setPlayerCollider path applyDisguise uses (so the
+  // disguised body is solid at the right girth) — but bypassing the range / aimed-prop
+  // checks, which is the whole point of a debug morph. `type` must be a real catalog entry.
+  debugMorph(player, type) {
+    if (!type || !player.alive) return;
+    const c = this.propCatalog[type] || this.fixtureCatalog[type];
+    if (!c) return; // not a real catalog type
+    player.disguise = type;
+    if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, type);
+    player.dispYaw = player.yaw;
+    send(player, { t: S2C.EVENT, kind: 'disguised', type });
   }
 
   applyInput(player, msg) {

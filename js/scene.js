@@ -12,6 +12,10 @@ import { isStaticEntry, halfExtentsFor } from '/shared/physics.js';
 // what you SEE in debug is exactly what the guard checks and the engine builds.
 import { worldColliderBoxes } from '/shared/bounds.js';
 
+// Screen-centre (NDC) for the debug crosshair raycast (focus box / click-to-inspect).
+// Module-level so debugPick() allocates nothing per frame.
+const DEBUG_CENTER = new THREE.Vector2(0, 0);
+
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
 // disguised players.
@@ -198,6 +202,24 @@ export class Scene3D {
         : false;
     this.rules = null; // set by main.js (ensureScene) so the debug view can mirror thin-wall thickening
 
+    // ---- debug menu seams (?debug=1, driven by js/debug.js) ------------------
+    // FREE CAM: detach the render camera and fly it (setFreeCam/updateFreeCam). Purely
+    // rendering-side — the physics player never moves; nothing crosses the network.
+    // setCamera() early-returns while this is on so the follow-cam can't fight the fly-cam.
+    this._freeCam = false;
+    this._fcPos = new THREE.Vector3(); // fly-cam eye position (seeded from the live camera)
+    // FOCUS BOX + CLICK-TO-INSPECT: a magenta wireframe around the entity under the
+    // crosshair (debugPick), deliberately a DISTINCT colour from the green disguise
+    // highlight and the yellow/cyan/red collider-debug wires, and NEVER added to
+    // this.colliders (so it can't pollute the camera or disguise-aim raycasts).
+    this._focusBoxOn = false;
+    this._focusBox = null; // lazily built LineSegments
+    this._focusTarget = null; // Object3D currently boxed (or null)
+    this._fbBox = new THREE.Box3();
+    this._fbSize = new THREE.Vector3();
+    this._fbCenter = new THREE.Vector3();
+    this._fbEuler = new THREE.Euler();
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
     // Orientation changes on phones sometimes report the new size a beat late;
@@ -245,6 +267,9 @@ export class Scene3D {
     // target so it doesn't linger. The wireframe box is re-added lazily on demand
     // (its parent is now null → _ensureHighlightBox re-attaches it to this scene).
     this._highlightId = null;
+    // scene.clear() also dropped the debug focus box; forget any stale target so it
+    // isn't boxed into the fresh scene (the box itself re-adds lazily on the next pick).
+    this._focusTarget = null;
 
     this.scene.background = new THREE.Color(map.sky || '#87ceeb');
     this.scene.fog = new THREE.Fog(new THREE.Color(map.sky || '#87ceeb'), 40, 120);
@@ -300,6 +325,7 @@ export class Scene3D {
       built.mesh.scale.setScalar(s);
       built.mesh.position.set(f.x, built.baseY * s + (f.y || 0), f.z);
       built.mesh.rotation.y = f.rot || 0;
+      built.mesh.userData.debugFixtureType = f.type; // click-to-inspect: static fixture identity
       this.scene.add(built.mesh);
       this.colliders.push(built.mesh); // camera pulls in against fixtures too
       this._queueModel(f, built.mesh, catalog, null, 0, s); // swap in the real GLB if any
@@ -346,6 +372,7 @@ export class Scene3D {
       this.propMeshes.set(p.id, {
         container,
         primitive: built.mesh,
+        type: p.type, // click-to-inspect / focus-box entity identity
         baseY: built.baseY * s,
         // Only disguise-pool props are aimable targets; knockable fixtures
         // (disguisable:false) render here too but must never be a disguise choice.
@@ -490,6 +517,7 @@ export class Scene3D {
         if (entry) this.scene.remove(entry.mesh);
         const mesh = this.meshForPlayer(p, { animated: true });
         mesh.position.set(p.x, mesh.userData.baseY + (p.y || 0), p.z);
+        mesh.userData.debugPlayerId = p.id; // click-to-inspect / focus-box entity identity
         this.scene.add(mesh);
         entry = {
           mesh,
@@ -587,6 +615,7 @@ export class Scene3D {
       this._removeSelfMesh();
       this.selfMesh = this.meshForPlayer(p);
       this.selfKind = kind;
+      this.selfMesh.userData.debugPlayerId = p.id; // click-to-inspect / focus-box identity
       this.selfMesh.position.set(p.x, this.selfMesh.userData.baseY, p.z);
       this.scene.add(this.selfMesh);
     }
@@ -613,6 +642,10 @@ export class Scene3D {
   // from `yaw` (the look/camera yaw) only while disguised with the orientation lock
   // engaged — then the prop stays fixed even as the camera orbits. Defaults to yaw.
   setCamera(pos, yaw, pitch, selfYaw = yaw) {
+    // Free cam owns the camera while it's on (js/debug.js drives it via updateFreeCam);
+    // the normal follow-cam must not fight it. The self avatar simply stays where the last
+    // snapshot/prediction put it (the physics player isn't moving).
+    if (this._freeCam) return;
     const py = pos.y || 0; // jump height
     if (!this.thirdPerson) {
       this.camera.position.set(pos.x, 1.6 + py, pos.z);
@@ -1115,6 +1148,167 @@ export class Scene3D {
       group.add(w);
     }
     this.scene.add(group); // dropped by the next buildWorld's scene.clear()
+  }
+
+  // ---- debug menu: free cam (?debug=1) --------------------------------------
+  // Detach the camera and fly it locally. Rendering-only: the physics player stays put
+  // (js/main.js also stops feeding it movement while free cam is on), and nothing goes
+  // over the network. Seed the fly position from the live camera so enabling is seamless.
+  setFreeCam(on) {
+    this._freeCam = !!on;
+    if (this._freeCam) this._fcPos.copy(this.camera.position);
+  }
+
+  // Advance the fly-cam one frame from debug input. `inp`: { yaw, pitch, mx, mz, up, dt,
+  // boost } — yaw/pitch are absolute look angles (drag-to-look works on touch + desktop),
+  // mx/mz the planar move intent (WASD/joystick), up the vertical (jump = up), boost a
+  // speed multiplier. Uses the SAME forward/right convention as movement/aim.
+  updateFreeCam(inp) {
+    if (!this._freeCam) return;
+    const dt = inp.dt > 0 ? Math.min(0.05, inp.dt) : 0.016;
+    const yaw = inp.yaw || 0;
+    const pitch = Math.max(-1.4, Math.min(1.4, inp.pitch || 0));
+    const speed = inp.boost ? 20 : 8;
+    const cp = Math.cos(pitch);
+    const fx = -Math.sin(yaw) * cp, fy = Math.sin(pitch), fz = -Math.cos(yaw) * cp; // forward
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw); // right (planar)
+    const mz = inp.mz || 0, mx = inp.mx || 0, up = inp.up || 0;
+    const p = this._fcPos;
+    p.x += (fx * mz + rx * mx) * speed * dt;
+    p.y += (fy * mz + up) * speed * dt;
+    p.z += (fz * mz + rz * mx) * speed * dt;
+    if (p.y < 0.3) p.y = 0.3; // don't sink below the ground plane
+    this.camera.position.copy(p);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(p.x + fx, p.y + fy, p.z + fz);
+  }
+
+  // ---- debug menu: focus box + click-to-inspect (?debug=1) ------------------
+  // Raycast from the CAMERA CENTRE (crosshair) and return a plain info object describing
+  // the entity under it (or null). Also refreshes the magenta focus box onto that entity
+  // when the box is enabled. Reuses this._raycaster; targets are the prop primitives (still
+  // hittable when invisible after a GLB swap), player meshes, and static fixtures — NOT the
+  // arena walls. This reveals a disguised player's identity ON PURPOSE (that's the point of
+  // a debug inspector); it's gated behind ?debug=1 like everything else.
+  debugPick() {
+    if (!this.camera) return null;
+    this.camera.updateMatrixWorld(); // the fly-cam moved this frame; keep the ray current
+    this._raycaster.setFromCamera(DEBUG_CENTER, this.camera);
+    this._raycaster.far = 60;
+    const roots = this._debugTargets();
+    if (!roots.length) { this._setFocusTarget(null); return null; }
+    const hits = this._raycaster.intersectObjects(roots, true);
+    let info = null, root = null;
+    for (const h of hits) {
+      root = this._debugRoot(h.object);
+      if (root) { info = this._debugInfoFor(root); break; }
+    }
+    this._setFocusTarget(root);
+    return info;
+  }
+
+  // Enable/disable the focus box (the per-frame highlight). Inspect (debugPick's return
+  // value) works regardless; this only controls whether the box is drawn.
+  setFocusBox(on) {
+    this._focusBoxOn = !!on;
+    if (!this._focusBoxOn && this._focusBox) this._focusBox.visible = false;
+  }
+
+  _debugTargets() {
+    const roots = [];
+    if (this.propMeshes) for (const rec of this.propMeshes.values()) if (rec.primitive) roots.push(rec.primitive);
+    for (const entry of this.players.values()) if (entry.mesh) roots.push(entry.mesh);
+    if (this.selfMesh) roots.push(this.selfMesh);
+    for (const m of this.colliders) if (m.userData && m.userData.debugFixtureType) roots.push(m);
+    return roots;
+  }
+
+  // Climb from a raycast-hit child to the nearest ancestor carrying a debug identity.
+  _debugRoot(obj) {
+    let o = obj;
+    while (o) {
+      const u = o.userData;
+      if (u && (u.propId != null || u.debugPlayerId != null || u.debugFixtureType != null)) return o;
+      o = o.parent;
+    }
+    return null;
+  }
+
+  _debugInfoFor(root) {
+    const u = root.userData || {};
+    const wp = root.getWorldPosition(this._fbCenter); // updates the world matrix → accurate
+    const pos = { x: wp.x, y: wp.y, z: wp.z };
+    if (u.propId != null) {
+      const rec = this.propMeshes && this.propMeshes.get(u.propId);
+      const type = (rec && rec.type) || '?';
+      const c = (this.catalog && this.catalog[type]) || {};
+      const cont = rec && rec.container;
+      const rot = cont ? this._fbEuler.setFromQuaternion(cont.quaternion) : { x: 0, y: root.rotation.y, z: 0 };
+      return {
+        kind: 'prop', id: u.propId, type,
+        catalog: c.shape ? c.shape + (c.model ? ' · ' + c.model : '') : '(unknown)',
+        pos, rot: { x: rot.x, y: rot.y, z: rot.z },
+        body: rec && rec.disguisable === false ? 'dynamic (fixture)' : 'dynamic',
+        sleeping: 'host-only', disguisedPlayer: false,
+      };
+    }
+    if (u.debugFixtureType != null) {
+      const type = u.debugFixtureType;
+      const c = (this.catalog && this.catalog[type]) || {};
+      return {
+        kind: 'fixture', id: null, type,
+        catalog: c.shape ? c.shape + (c.model ? ' · ' + c.model : '') : '(unknown)',
+        pos, rot: { x: root.rotation.x, y: root.rotation.y, z: root.rotation.z },
+        body: 'static', sleeping: 'n/a (static)', disguisedPlayer: false,
+      };
+    }
+    // Player.
+    const id = u.debugPlayerId;
+    const isSelf = id === this.selfId;
+    const kind = isSelf ? this.selfKind : (this.players.get(id) && this.players.get(id).kind);
+    const disguised = !!(kind && kind.indexOf('d:') === 0);
+    const disguiseType = disguised ? kind.slice(2) : null;
+    const role = disguised ? 'prop' : (kind && kind.indexOf('hunter') === 0 ? 'hunter' : 'prop');
+    return {
+      kind: 'player', id, type: 'player' + (isSelf ? ' (you)' : ''),
+      catalog: disguised ? 'disguised as ' + disguiseType : (role === 'hunter' ? 'hunter avatar' : 'undisguised prop'),
+      pos, rot: { x: 0, y: root.rotation.y, z: 0 },
+      body: 'kinematic', sleeping: 'n/a', role, alive: root.visible,
+      disguisedPlayer: disguised, disguiseType,
+    };
+  }
+
+  _setFocusTarget(root) {
+    this._focusTarget = root || null;
+    this._updateFocusBox();
+  }
+
+  _updateFocusBox() {
+    if (!this._focusBoxOn) { if (this._focusBox) this._focusBox.visible = false; return; }
+    const root = this._focusTarget;
+    if (!root || !root.parent) { if (this._focusBox) this._focusBox.visible = false; return; }
+    const box = this._fbBox.setFromObject(root);
+    if (box.isEmpty()) { if (this._focusBox) this._focusBox.visible = false; return; }
+    const b = this._ensureFocusBox();
+    box.getSize(this._fbSize);
+    box.getCenter(this._fbCenter);
+    b.position.copy(this._fbCenter);
+    b.scale.set(this._fbSize.x || 0.1, this._fbSize.y || 0.1, this._fbSize.z || 0.1);
+    b.visible = true;
+  }
+
+  _ensureFocusBox() {
+    if (!this._focusBox) {
+      const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+      // Magenta — deliberately distinct from the green disguise highlight and the
+      // yellow/cyan/red collider-debug wires so four box systems read apart at a glance.
+      const mat = new THREE.LineBasicMaterial({ color: 0xff2fd0 });
+      this._focusBox = new THREE.LineSegments(geo, mat);
+      this._focusBox.renderOrder = 999;
+      this._focusBox.frustumCulled = false; // unit bounds; scaled per target
+    }
+    if (!this._focusBox.parent) this.scene.add(this._focusBox); // re-attach after scene.clear()
+    return this._focusBox;
   }
 
   render() {
