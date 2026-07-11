@@ -234,6 +234,18 @@ export class PhysicsWorld {
     this._pHalf = this.rules.playerHalfHeight != null ? this.rules.playerHalfHeight : 0.5;
     this._pCenterY = this._pRadius + this._pHalf; // capsule centre rests base at y=0
 
+    // FIX #5 tunables — NEW knobs with safe defaults, NOT a re-tune of existing feel/rules.
+    //  - _maxStuckSubsteps (Bug A escape hatch): how many CONSECUTIVE substeps the snap-to-
+    //    anchor failsafe may fail to clear penetration before the escape hatch fires. 20 @
+    //    60 Hz ≈ 0.33 s, so a wedged player with a poisoned anchor is freed well within 1 s.
+    //  - _propSkin / _propMaxPush (Bug B): the character-vs-prop depenetration's overlap
+    //    tolerance and the max per-substep push-out (a firm block, never a teleport-snap).
+    this._maxStuckSubsteps = this.rules.depenetrateMaxStuckSubsteps != null ? this.rules.depenetrateMaxStuckSubsteps : 20;
+    this._propSkin = this.rules.propDepenetrateSkin != null ? this.rules.propDepenetrateSkin : 0.03;
+    this._propMaxPush = this.rules.propDepenetrateMaxPush != null ? this.rules.propDepenetrateMaxPush : 0.2;
+    this._stuckPlayerIds = new Set(); // ids the escape hatch couldn't free → referee respawns
+    this._propObstacles = []; // per-prop {body|cx,cy,cz, hx,hy,hz} for character-vs-prop push-out
+
     this._buildStatic(map, catalog);
     this._buildProps(propInstances, catalog);
     this._buildController();
