@@ -251,6 +251,33 @@ export class PhysicsWorld {
         this.world.createCollider(fc);
         continue;
       }
+      // ANTI-TUNNEL for thin wall PANELS (Bug 2, solidity pass #3). A wide, thin static
+      // panel — the kitchen/dining divider headers (w3.7 d0.4) and the side walls
+      // (w6 d0.4) — is thinner front-to-back than the player capsule is wide. A fast jump
+      // INTO its broad face can, at the wrong angle, resolve the swept contact to the FAR
+      // side and pop the capsule through (then drop it through the floor beyond — the
+      // reported wall→floor fall-through). Grow ONLY the thin horizontal axis to a minimum
+      // half-thickness that clears the capsule radius, symmetric about the fixture centre,
+      // so the long axis (window/walkway spacing) and the visible mesh are untouched. This
+      // targets PANELS only (one horizontal axis ≥2× the other): narrow posts/pillars and
+      // bulky appliances are left exactly as authored (they can't tunnel a wider capsule,
+      // and thickening them would add annoying invisible collision). Guarded to box shapes.
+      const isBox = c.shape === 'box' || (c.measured && c.measured.w > 0 && c.measured.d > 0);
+      const minHalf = this.rules.minWallHalfThickness != null ? this.rules.minWallHalfThickness : 0.6;
+      let hx = halfExtentXZ(c, 'w');
+      let hz = halfExtentXZ(c, 'd');
+      const thin = Math.min(hx, hz);
+      const wide = Math.max(hx, hz);
+      const isThinPanel = isBox && thin < minHalf && wide >= 2 * thin;
+      if (isThinPanel) {
+        if (hx <= hz) hx = minHalf; else hz = minHalf; // grow the thin axis only
+        const wc = R.ColliderDesc.cuboid(hx, halfH, hz)
+          .setTranslation(f.x, halfH + (f.y || 0), f.z)
+          .setRestitution(rest);
+        if (f.rot) wc.setRotation(yawQuat(f.rot));
+        this.world.createCollider(wc);
+        continue;
+      }
       desc.setTranslation(f.x, halfH + (f.y || 0), f.z).setRestitution(rest);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
       this.world.createCollider(desc);
@@ -369,8 +396,12 @@ export class PhysicsWorld {
     const t0 = body.translation();
     // safePos = last collision-free capsule position, seeded at spawn. The depenetration
     // failsafe (Bug 2) snaps the capsule back here if a substep starts inside geometry.
+    // radius/half/disguiseType: the capsule's CURRENT girth. A disguised player's capsule
+    // is grown to their disguise footprint (solidity pass #3, setPlayerCollider) so a big
+    // disguise is solid instead of clipping into world props; base player size until then.
     this.players.set(id, {
       body, collider, vy: 0, grounded: false,
+      radius: this._pRadius, half: this._pHalf, disguiseType: null,
       input: { mx: 0, mz: 0, yaw: 0, jump: false },
       safePos: { x: t0.x, y: t0.y, z: t0.z },
     });
@@ -410,7 +441,60 @@ export class PhysicsWorld {
     const p = this.players.get(id);
     if (!p) return null;
     const t = p.body.translation();
+    // _pCenterY is the SAME for every player, disguised or not: setPlayerCollider keeps
+    // the capsule's total height constant (radius + half === _pCenterY always), so the
+    // body origin stays the geometric centre and the foot stays at y=0. Only girth changes.
     return { x: t.x, y: t.y - this._pCenterY, z: t.z, grounded: p.grounded };
+  }
+
+  // Capsule (radius, cylinder-half-height) for a player wearing `disguiseType`, or the
+  // base player size when null. THE Bug-1 (solidity pass #3) mechanism: a disguised
+  // player's physics body used to stay a fixed tiny capsule (r 0.4) no matter how big
+  // their disguise LOOKED, so they could shove that big silhouette into — and fully
+  // inside — world props while the little capsule slipped into the gap ("hide inside a
+  // prop"). Fitting the capsule GIRTH to the disguise footprint makes a crate-disguised
+  // player collide crate-to-crate: they rest against world props instead of tunnelling in.
+  //   - radius fits the SMALLER horizontal half-extent of the disguise (so the capsule
+  //     sits inside the silhouette), never below the base player radius, and is capped
+  //     for passability (rules.disguiseColliderMaxRadius, default 0.55 → diameter 1.1,
+  //     still clears the 1.2-wide doors/walkways).
+  //   - TOTAL height is held constant at 2*_pCenterY: half = _pCenterY - radius. So the
+  //     centre height, grounding, jump, autostep and snap-to-ground feel are byte-identical
+  //     to the base capsule — only the belly gets fatter. No re-seat needed.
+  // Measured bounds first (dormant today — asset-dims not wired), else the primitive.
+  _capsuleDimsFor(type) {
+    const baseR = this._pRadius;
+    const c = type && this.catalog[type];
+    if (!c) return { r: baseR, half: this._pHalf };
+    const m = c.measured;
+    let hw, hd;
+    if (m && m.w > 0 && m.d > 0) { hw = m.w / 2; hd = m.d / 2; }
+    else if (c.shape === 'cylinder' || c.shape === 'cone' || c.shape === 'sphere') { hw = hd = c.r || 0.5; }
+    else { hw = (c.w || 1) / 2; hd = (c.d || 1) / 2; }
+    const maxR = this.rules.disguiseColliderMaxRadius != null ? this.rules.disguiseColliderMaxRadius : 0.55;
+    // Keep maxR strictly below _pCenterY so `half` stays positive.
+    const cap = Math.min(maxR, this._pCenterY - 0.1);
+    const r = Math.min(cap, Math.max(baseR, Math.min(hw, hd)));
+    const half = Math.max(0.05, this._pCenterY - r);
+    return { r, half };
+  }
+
+  // Resize a player's capsule collider to match their current disguise (Bug 1). Called
+  // by the host referee (applyDisguise/undisguise) and by each client's OWN prediction
+  // world (main.js onSnapshot) whenever the disguise changes, so both sims step an
+  // identically-sized body and never rubber-band. No-op when the disguise is unchanged.
+  // Total height/centre are preserved (see _capsuleDimsFor), so nothing needs re-seating.
+  setPlayerCollider(id, disguiseType) {
+    const p = this.players.get(id);
+    if (!p) return;
+    const type = disguiseType || null;
+    if (p.disguiseType === type) return; // unchanged — skip the rebuild
+    const dims = this._capsuleDimsFor(type);
+    if (p.collider && this.world.removeCollider) this.world.removeCollider(p.collider, false);
+    p.collider = this.world.createCollider(this.R.ColliderDesc.capsule(dims.half, dims.r), p.body);
+    p.radius = dims.r;
+    p.half = dims.half;
+    p.disguiseType = type;
   }
 
   // Is the player capsule genuinely PENETRATING a solid collider right now? (Bug 2
@@ -423,8 +507,10 @@ export class PhysicsWorld {
     const R = this.R;
     if (typeof this.world.intersectionWithShape !== 'function' || !R.Capsule) return null;
     const skin = 0.05;
-    const hh = Math.max(0.02, this._pHalf - skin);
-    const rr = Math.max(0.02, this._pRadius - skin);
+    // Use the player's CURRENT capsule size (grown when disguised — solidity pass #3),
+    // not the base, so the skin-shrunk depenetration test matches the real body.
+    const hh = Math.max(0.02, (p.half != null ? p.half : this._pHalf) - skin);
+    const rr = Math.max(0.02, (p.radius != null ? p.radius : this._pRadius) - skin);
     try {
       const t = p.body.translation();
       const shape = new R.Capsule(hh, rr);
@@ -467,7 +553,8 @@ export class PhysicsWorld {
       const t = p.body.translation();
       // Box at capsule height, kept clear of the y=0 ground (half-height 0.8, centred at
       // the capsule centre ≈0.9 → spans ~0.1..1.7) so only walls/fixtures/props trip it.
-      const shape = new R.Cuboid(Math.max(hw, this._pRadius), 0.8, Math.max(hd, this._pRadius));
+      const pr = p.radius != null ? p.radius : this._pRadius;
+      const shape = new R.Cuboid(Math.max(hw, pr), 0.8, Math.max(hd, pr));
       const hit = this.world.intersectionWithShape(
         { x: t.x, y: t.y, z: t.z }, yawQuat(yaw), shape, this._moveFilter, undefined, p.collider, p.body
       );

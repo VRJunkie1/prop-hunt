@@ -8,6 +8,41 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: PHYSICS SOLIDITY PASS #3 — disguise-sized capsule + thin-wall min-thickness (2026-07-11, Jie/Teravortryx, on `main`). Code done; NOT live-tested (no shell / headless).
+
+Third pass at the known-hard collision area. Two players reported (1) a player prop passing
+through / hiding fully INSIDE world props and (2) jumping into a wall tunnelling through then
+falling through the floor. Passes #1/#2 already refuted the movement theories, so this pass
+TRACED the two remaining mechanisms and fixed those (not constant-tuning). Full detail:
+`memory/notes/physics.md` (top "SOLIDITY PASS #3").
+
+- **Bug 1 root cause = the accepted caveat, now fixed.** A disguised player's physics body
+  was a fixed tiny capsule (r0.4) regardless of disguise size, so a big disguise clipped into
+  / slid inside world props. New `PhysicsWorld._capsuleDimsFor` + `setPlayerCollider(id,type)`
+  grow the capsule GIRTH to the disguise footprint (clamped `[0.4, rules.disguiseColliderMaxRadius=0.55]`
+  for doorway passability), keeping TOTAL height/centre constant so grounding/jump feel is
+  unchanged. Wired host (`referee.applyDisguise` + load-race) AND each client's own prediction
+  (`main.js onSnapshot`) so authority + prediction match. Residual: 0.55 cap leaves ~0.2 m
+  edge-clip on the very widest disguises (was ~0.35) — bounded by door width; documented.
+- **Bug 2 root cause = thin wall panels.** Divider/side walls are d0.4 static boxes, thinner
+  than the capsule is wide → a fast jump into the face can pop through to the far side then
+  drop through the floor. `_buildStatic` now enforces `rules.minWallHalfThickness=0.6` on thin
+  wall PANELS only (wide+thin: kitchen_wall/wall_header/door/shelf); narrow posts/pillars and
+  bulky appliances untouched. Swept mover / CCD / depenetration / terminal-fall clamp kept.
+- **Anti-fall teleport now `console.warn`s** counts+map when it fires (should be ~never after
+  this pass → early regression signal). Kept as the last-resort net.
+- **NEW `tools/check-physics-solidity.mjs`** (authoring-only, LIVE-sim sibling to the static
+  checks): asserts prop-can't-penetrate-prop, player-at-jump-speed-can't-cross-wall, player-
+  never-below-floor. Rapier-in-Node caveat: tries dev-only `npm i --no-save
+  @dimforge/rapier3d-compat@0.14.0` then the CDN, else SKIP+exit 3. **Not executed here (no
+  shell)** — hand-traced; run it + a live phone playtest to close.
+- **Config:** `rules.json` +`disguiseColliderMaxRadius:0.55` +`minWallHalfThickness:0.6`.
+  **Files:** `shared/physics.js`, `shared/referee.js`, `js/main.js`, `shared/config/rules.json`,
+  `tools/check-physics-solidity.mjs` (new), notes.
+- **OWED — live playtest (Jie/Teravortryx, bring a phone):** disguised prop rests against world
+  props (no walk-through/hide-inside); wall jumps don't tunnel/fall-through; props still push +
+  trampleable; disguised movement fits through doors; console anti-fall warning stays silent.
+
 ## Latest: HUNTER CHARACTER MODEL v1 — animated SWAT soldier for remote hunters (2026-07-11, VRmike, on `main`). NOT live-tested (headless can't load a GLB / animate).
 
 Remote **hunters** now render as an animated third-person SWAT soldier — what OTHER

@@ -240,7 +240,10 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   with reconciliation, not lockstep.
 - **Players** are kinematic capsule character bodies (run/jump, real collide-and-
   slide vs walls/fixtures — FIXES the old pass-through gap — shove dynamic props,
-  can never be knocked over). **Map fixtures/walls/ground** are static colliders.
+  can never be knocked over). A disguised player's capsule GIRTH is grown to the
+  disguise footprint (solidity pass #3, `PhysicsWorld.setPlayerCollider`, capped at
+  `rules.disguiseColliderMaxRadius` for doorway fit; total height kept constant) so a
+  big disguise is solid instead of clipping into world props. **Map fixtures/walls/ground** are static colliders.
   **Dynamic props** are rigid bodies that get shoved (the TELL: real props tumble,
   a kinematic disguised player doesn't). A phone-safety cap
   (`rules.maxDynamicProps`, default 60) keeps extra props as static colliders.

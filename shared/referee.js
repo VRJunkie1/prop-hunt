@@ -241,6 +241,11 @@ export class Referee {
     const dz = live.z - player.pos.z;
     if (Math.hypot(dx, dz) > this.rules.disguiseRange) return;
     player.disguise = prop.type;
+    // Grow this player's authoritative collision capsule to the disguise footprint
+    // (solidity pass #3, Bug 1): a big disguise is now solid crate-to-crate instead of
+    // clipping into world props. Guarded — no-op on the 2D fallback (physics not up).
+    // The disguised player's OWN client mirrors this on its prediction body (main.js).
+    if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, prop.type);
     // Lock the disguise's facing to the player's current look direction. From here
     // it stays fixed while they move (a real prop doesn't spin as it slides) UNLESS
     // right-click is held (rotUnlock), which lets them re-aim it on yaw only — never
@@ -428,7 +433,12 @@ export class Referee {
         feel: this.feel,
       });
       for (const p of this.players.values()) {
-        if (p.alive && (p.role === ROLE.HUNTER || p.role === ROLE.PROP)) world.addPlayer(p.id, p.pos);
+        if (p.alive && (p.role === ROLE.HUNTER || p.role === ROLE.PROP)) {
+          world.addPlayer(p.id, p.pos);
+          // If a prop already disguised during the async WASM load (the match ran on the
+          // 2D fallback meanwhile), size their capsule to it now (solidity pass #3).
+          if (p.disguise) world.setPlayerCollider(p.id, p.disguise);
+        }
       }
       this.physics = world;
     } catch (e) {
@@ -596,14 +606,25 @@ export class Referee {
         this._lastFailsafe = now;
         const floorTop = 0; // every map's ground/floor surface sits at y=0
         const capsuleH = 2 * ((this.rules.playerRadius || 0.4) + (this.rules.playerHalfHeight || 0.5));
+        let fellPlayers = 0;
         for (const p of this.players.values()) {
           if (!p.alive || !p.spawn) continue;
           if ((p.pos.y || 0) + capsuleH < floorTop - 2) {
             p.pos = { x: p.spawn.x, y: 0, z: p.spawn.z };
             this.physics.setPlayerPosition(p.id, p.pos);
+            fellPlayers++;
           }
         }
-        this.physics.respawnEscaped(floorTop - 2);
+        const fellProps = this.physics.respawnEscaped(floorTop - 2);
+        // LOG when the last-resort net fires (solidity pass #3): after this pass it should
+        // basically never trigger, so a line here means we hear about a tunnelling/fall-
+        // through regression from the console before players report it. Kept as the net —
+        // logging it doesn't weaken the recovery, it just makes a silent failure loud.
+        if (fellPlayers > 0 || fellProps > 0) {
+          console.warn(
+            `[physics] anti-fall failsafe recovered ${fellPlayers} player(s) + ${fellProps} prop(s) from below the floor on map "${this.mapId}". This should be rare after solidity pass #3 — a repeat means a real collision regression.`
+          );
+        }
       }
       return;
     }

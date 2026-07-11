@@ -3,6 +3,75 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS SOLIDITY PASS #3 (on `main`) — Jie/Teravortryx: pass-through props + wall tunnel
+Third pass after two players reported (a) a player-controlled prop passing through /
+hiding fully INSIDE world props, and (b) jumping INTO a vertical wall tunnelling through
+then falling through the floor. Passes #1/#2 already REFUTED the obvious movement theories
+(the mover is swept `computeColliderMovement`, prediction shares the world, vertical is not
+raw-translated). So this pass traced the two remaining *mechanisms* and fixed those, rather
+than re-tuning constants (build #38's mistake). STILL NEEDS A LIVE PLAYTEST — nothing here
+is runtime-verified in the sandbox (no shell; see the new guard tool caveat).
+
+**Mechanism found for Bug 1 (pass-through / hide-inside).** World-prop colliders DO match
+their meshes (verified: crate `1.5×0.72×1.5` ≈ measured `2.0×0.966×2.0 ×0.75`; round/large
+tables likewise). The real cause is the previously-*accepted caveat*: a disguised player's
+physics body stayed a fixed **tiny capsule (r 0.4)** no matter how big the disguise LOOKED,
+so the big disguise silhouette clipped into — and, for a light dynamic world prop shoved
+aside, fully inside — world props while the little capsule slipped into the gap.
+  - **Fix: capsule girth now fits the disguise footprint.** New `PhysicsWorld._capsuleDimsFor(type)`
+    + `setPlayerCollider(id, type)` rebuild the player's capsule to the disguise's smaller
+    horizontal half-extent, clamped `[playerRadius, rules.disguiseColliderMaxRadius=0.55]`
+    (diameter 1.1, still clears the 1.2-wide doors/walkways). **Total capsule height is held
+    constant** (`half = _pCenterY − radius`), so centre height, grounding, jump, autostep and
+    snap-to-ground are byte-identical to before — only the belly gets fatter. `_pCenterY`
+    stays global (radius+half always == it) so `getPlayer`/`setPlayerPosition` are untouched;
+    `_isPenetrating`/`rotationWouldCollide` now read the per-player `p.radius`/`p.half`.
+  - **Wired both sims:** host `referee.applyDisguise` (+ the `_buildPhysics` load-race) calls
+    `setPlayerCollider`; each client's OWN prediction mirrors it in `main.js onSnapshot`
+    (`me.disguise` → `predict.setPlayerCollider(SELF_ID, …)`) so authority + prediction step
+    an identically-sized body and don't rubber-band. No netcode/protocol change.
+  - **Honest residual:** the 0.55 radius cap is a passability compromise — a very wide
+    disguise (a 1.5-wide crate, half 0.75) still leaves ~0.2 m of mesh able to overlap a
+    world prop (was ~0.35). "Fully inside" is gone; a little edge clip on the biggest
+    disguises remains, bounded by doorway width. Raise `disguiseColliderMaxRadius` if a
+    playtest wants more solidity at the cost of squeezing through doors.
+
+**Mechanism found for Bug 2 (wall tunnel → floor fall).** The kitchen/dining divider and
+side walls are built from **thin static box panels** (`kitchen_wall` d0.4, `wall_header`
+d0.4) — thinner front-to-back than the player capsule is wide. A fast jump into a broad
+thin face can resolve the swept contact to the FAR side and pop through (then drop through
+the floor beyond — exactly "pass through then fall through the ground").
+  - **Fix: minimum thickness on thin wall PANELS only** (`_buildStatic`). A static box whose
+    thin horizontal half-extent `< rules.minWallHalfThickness (0.6)` AND whose long axis is
+    `≥2×` the thin one is grown on its thin axis to 0.6 half (1.2 thick), symmetric about the
+    centre, long axis + visible mesh untouched. Targets `kitchen_wall`/`wall_header`/`door`/
+    `shelf`; **skips** narrow posts/pillars (thin in BOTH axes — a wider capsule can't tunnel
+    them and thickening adds annoying invisible collision) and bulky appliances (already thick).
+  - Kept as nets, unchanged: swept mover, CCD, terminal fall clamp, depenetration failsafe.
+
+**Anti-fall teleport now LOGGED.** `referee.integrate`'s below-floor failsafe still recovers
+players/props, but now `console.warn`s the counts + map when it fires — after this pass it
+should basically never trigger, so a line in the console is an early regression signal.
+
+**NEW guard tool `tools/check-physics-solidity.mjs`** (authoring-only, never shipped) — the
+LIVE-sim sibling to the static `check-blindfold`/`check-physics-feel`. Stands up the REAL
+`PhysicsWorld` and asserts the three reports: (A) a disguised prop rests against a world prop
+without deep penetration; (B) a player at jump speed never crosses a thin wall panel; (C) a
+player never ends below floor level (drop + wall-slam). **Rapier-in-Node caveat:** the game
+loads Rapier from a CDN (browser-only); the tool tries a dev-only `npm i --no-save
+@dimforge/rapier3d-compat@0.14.0` first, else the CDN, else prints SKIP + exits 3. **NOT run
+in this sandbox (no shell)** — authored + hand-traced against source; run it + a live phone
+playtest to close.
+
+**Config:** `rules.json` +`disguiseColliderMaxRadius:0.55` +`minWallHalfThickness:0.6`.
+**Files:** `shared/physics.js`, `shared/referee.js`, `js/main.js`,
+`shared/config/rules.json`, `tools/check-physics-solidity.mjs` (new).
+**LIVE RE-TEST OWED (Jie/Teravortryx):** a disguised prop now rests against world props
+(no walking through / hiding inside); jumping into the divider/side walls no longer tunnels
+or drops through the floor; props still push around and are still trampleable (stand/jump on
+top); disguised movement through doors/walkways still fits; watch the console for the anti-
+fall warning (should stay silent).
+
 ## 2026-07-11 PHYSICS SOLIDITY PASS #2 (on `main`) — Jie's three bugs
 Second solidity pass after a live playtest. Three specific bugs; scope limited to the
 player controller + disguise rotation + fall path (no map/netcode/editor changes). All

@@ -365,6 +365,11 @@ function onSnapshot(msg) {
 
     if (state.predict) {
       // Physics prediction path.
+      // Mirror the authoritative capsule-resize on our OWN prediction body (solidity
+      // pass #3, Bug 1): when we're disguised, our local collision capsule grows to the
+      // disguise footprint exactly as the host's does, so prediction and authority step
+      // an identically-sized body and don't rubber-band. No-op when unchanged.
+      if (state.predict.setPlayerCollider) state.predict.setPlayerCollider(state.SELF_ID, me.disguise || null);
       if (!state.spawned) {
         // First snapshot of the match: hard-place the local body at spawn.
         state.predict.setPlayerPosition(state.SELF_ID, { x: me.x, y: me.y || 0, z: me.z });

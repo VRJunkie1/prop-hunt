@@ -22,6 +22,8 @@
   "controllerOffset": 0.02,
   "snapDistance": 0.3,
   "disguiseRotSpeedDeg": 270,
+  "disguiseColliderMaxRadius": 0.55,
+  "minWallHalfThickness": 0.6,
   "mapRandomizeSkip": 0.2,
   "minPropsKept": 6
 }
