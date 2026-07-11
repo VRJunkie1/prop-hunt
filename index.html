@@ -82,6 +82,17 @@
         <div id="feed" class="feed"></div>
       </div>
       <div id="clickToPlay" class="overlay hidden">Click to play</div>
+      <!-- HUNTER BLINDFOLD (visual half). A blackout+blur shown ONLY to a hunter
+           during the HIDING phase so they can't watch props scatter. Props never see
+           it; it clears the instant HUNT begins. Shown/hidden by ui.setBlindfold(),
+           which main.js drives from a fresh (role===hunter && phase===HIDING) check —
+           so it can never latch on. The referee also withholds prop positions from a
+           blinded hunter (see shared/referee.js), so deleting this div reveals nothing. -->
+      <div id="blindfold" class="blindfold hidden" aria-hidden="true">
+        <div class="blindfold-title">BLINDFOLDED</div>
+        <div class="blindfold-sub">Props are hiding&hellip;</div>
+        <div id="blindfoldTimer" class="blindfold-timer">0</div>
+      </div>
     </div>
 
     <!-- Dev-only Map Editor launcher (desktop, host/solo only). Hidden by default;

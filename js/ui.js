@@ -26,6 +26,8 @@ export class UI {
       banner: $('banner'),
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
+      blindfold: $('blindfold'),
+      blindfoldTimer: $('blindfoldTimer'),
     };
     // Diagnostic: peerId -> true(relayed)/false(direct). Painted in the lobby so
     // a playtest can see whether the free TURN relay is being leaned on. Purely
@@ -179,5 +181,19 @@ export class UI {
   setClickToPlay(visible, message) {
     this.el.clickToPlay.textContent = message || 'Click to play';
     this.el.clickToPlay.classList.toggle('hidden', !visible);
+  }
+
+  // HUNTER BLINDFOLD (visual half). main.js derives `blind` fresh every snapshot /
+  // phase event from (role === hunter && phase === HIDING) and calls this — so it is
+  // a plain show/hide, never a latched toggle. Props always arrive with blind=false
+  // (overlay hidden → they see the world), a hunter gets blind=true only during
+  // HIDING, and it clears the instant HUNT begins. `seconds` is the HIDING countdown
+  // remaining (float); shown rounded up. The referee also withholds prop positions
+  // from a blinded hunter, so removing this overlay reveals nothing to peek at.
+  setBlindfold(blind, seconds) {
+    if (blind && Number.isFinite(seconds)) {
+      this.el.blindfoldTimer.textContent = Math.max(0, Math.ceil(seconds));
+    }
+    this.el.blindfold.classList.toggle('hidden', !blind);
   }
 }

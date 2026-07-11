@@ -8,6 +8,30 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HUNTER BLINDFOLD visual half restored on `main` (2026-07-11, VRmike bugfix)
+
+Reported as "everyone loads into a solid blue/blindfold screen that never clears — props
+too." Root cause was NOT a mis-gated overlay: `js/main.js` already derived the blindfold
+correctly (`role === HUNTER && phase === HIDING`, driven off both snapshot and phase event),
+`shared/referee.js` already withheld prop positions from a blinded hunter correctly, and
+`js/input.js` `lookFrozen` was wired. **The visual half was simply missing** — `ui.setBlindfold`
+was called but never defined in `js/ui.js`, and there was no overlay div/CSS. So *every*
+client (props included) threw `ui.setBlindfold is not a function` on the first snapshot,
+breaking the game for everyone.
+
+Fix (additive, no gate/referee/netcode changes):
+- `index.html`: added `#blindfold` overlay div (+ `#blindfoldTimer`) inside `#game`.
+- `css/style.css`: added `.blindfold` — dark blackout + `backdrop-filter: blur`, z-index:12,
+  `pointer-events:none`.
+- `js/ui.js`: registered the two elements and added `setBlindfold(blind, seconds)` — a plain
+  show/hide + countdown, driven by main.js's existing derived condition (never latches).
+
+Acceptance verified by reading the flow (no live run available in sandbox): props always
+compute `blind=false` → world visible at all times; a hunter sees the blackout through HIDING;
+the phase event flips `state.phase=HUNTING` and re-derives `blind=false` → overlay clears the
+instant HUNT starts. Edge cases (solo/host-start prop, mid-phase hunter joiner) fall out of the
+derived condition. Full detail: `memory/notes/anti-cheat-blindfold.md`.
+
 ## Status: PHYSICS SOLIDITY PASS #2 on `main` (2026-07-11, Jie) — three specific bugs. Code/wiring done; all three need a LIVE re-test (headless can't verify runtime physics).
 
 Second solidity pass after Jie's playtest. Scope: player controller + disguise rotation +

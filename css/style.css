@@ -196,6 +196,34 @@ button.ghost:hover { background: #3d2a66; }
   z-index: 10; /* above the touch controls (z-index:5) so it always gets the tap */
 }
 
+/* HUNTER BLINDFOLD overlay — a dark, blurred blackout with a centered countdown,
+   shown only to a hunter during the HIDING phase (js/ui.js setBlindfold). Sits above
+   the "click to play" overlay (z-index:10) and touch controls (z-index:5) so a
+   blindfolded hunter sees nothing but this. pointer-events:none — it's a pure visual
+   blackout, not interactive (look is frozen separately in js/input.js). Near-opaque
+   plus blur so nothing of the world leaks through even before render. */
+.blindfold {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  color: #eaf2ff;
+  background: #060a12ee;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  z-index: 12;
+}
+.blindfold-title { font-size: 34px; font-weight: 800; letter-spacing: 2px; }
+.blindfold-sub { font-size: 16px; opacity: 0.75; }
+.blindfold-timer { font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+
 /* ---- touch controls (only built/shown on touch devices; see js/input.js) ----
    The joystick zone (bottom-left) and action button (bottom-right) are layered
    over the canvas; the uncovered screen is the drag-to-look zone. Positions are

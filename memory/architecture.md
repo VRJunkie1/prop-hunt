@@ -156,7 +156,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   (overlay up while uncaptured, down once the browser confirms lock, back on
   release; `msg` explains a refusal). Also paints a
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
-  connection-type is *detected* in `net.js`, never here.
+  connection-type is *detected* in `net.js`, never here. Also owns the hunter
+  **blindfold** overlay via `setBlindfold(blind, seconds)` — a plain show/hide of the
+  `#blindfold` blackout that `main.js` drives from a fresh
+  `role === HUNTER && phase === HIDING` derivation (never latched). Anti-cheat detail:
+  `memory/notes/anti-cheat-blindfold.md`.
 - `js/config.js` — fetches `shared/config`; the host passes it into the `Referee`.
 - `js/editor.js` — **in-game level editor (desktop debug tool)**, toggled by
   **Ctrl+E** (`input.js` fires `onToggleEdit`; `main.js` gates + wires). A
