@@ -1,0 +1,36 @@
+{
+  "_comment": "CHARACTER-MODEL REGISTRY — animated third-person player-character models. DELIBERATELY separate from props.json / fixtures.json: those catalogs feed the collider-baking + measured-bounds physics pipeline, which a player character must NEVER pass through (it would grow a physics collider it shouldn't have). Nothing here is disguisable or collidable — these are pure view models drawn over the networked player capsule. Loaded by js/config.js into cfg.characterModels and consumed only by js/scene.js. Both GLBs are CC0 by Quaternius (via poly.pizza).",
+
+  "hunter": {
+    "_comment": "SWAT soldier shown to OTHER players for a REMOTE hunter (the local hunter stays first-person and never renders this). Clips are 'CharacterArmature|<name>' in the GLB — matched by SUFFIX in scene.js, so the prefix here is advisory only.",
+    "model": "713f6535-f4f3-4367-a4c6-ced126ae0936.glb",
+    "heightMeters": 1.8,
+    "_yawComment": "yawOffsetDeg rotates the model about vertical so its FRONT faces the networked facing yaw. HOT-TUNABLE: if the soldier runs backwards / sideways relative to travel in a live browser, adjust this (e.g. 180) — no rebuild. Defaults to 0 (Quaternius characters usually face the game's forward).",
+    "yawOffsetDeg": 0,
+    "clipPrefix": "CharacterArmature|",
+    "clips": {
+      "idle": "Idle_Gun",
+      "forward": "Run_Shoot",
+      "backward": "Run_Back",
+      "left": "Run_Left",
+      "right": "Run_Right"
+    },
+    "anim": {
+      "_comment": "moveThreshold (u/s): below this the hunter plays idle. refSpeed (u/s): the speed at which run clips play at timeScale 1 — matches rules.moveSpeed (6). timeScale is clamped to [minTimeScale,maxTimeScale]. crossfadeSeconds: blend time between clips (no popping).",
+      "moveThreshold": 0.6,
+      "refSpeed": 6.0,
+      "minTimeScale": 0.5,
+      "maxTimeScale": 1.8,
+      "crossfadeSeconds": 0.15
+    },
+    "weapon": {
+      "_comment": "Assault rifle parented to the right-wrist bone. position (bone-local units), rotationDeg (bone-local degrees) and scale are HOT-TUNABLE grip nudges — Quaternius gun + Quaternius character align close out of the box, so these default to a light nudge; adjust here (no rebuild) if the grip looks off in a live browser. attachBone must match a bone name in the GLB (Wrist.R / Wrist.L exist).",
+      "model": "9a0e478c-de82-4773-9b70-a0219bb0057c.glb",
+      "attachBone": "Wrist.R",
+      "visibleByDefault": true,
+      "position": { "x": 0, "y": 0, "z": 0 },
+      "rotationDeg": { "x": 0, "y": 0, "z": 0 },
+      "scale": 1.0
+    }
+  }
+}

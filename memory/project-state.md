@@ -8,6 +8,46 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HUNTER CHARACTER MODEL v1 — animated SWAT soldier for remote hunters (2026-07-11, VRmike, on `main`). NOT live-tested (headless can't load a GLB / animate).
+
+Remote **hunters** now render as an animated third-person SWAT soldier — what OTHER
+players (props) see. The LOCAL hunter is UNTOUCHED (first-person, no own body this pass).
+Props untouched (still their disguise). No netcode/protocol/physics/collider changes —
+reuses the existing position/yaw snapshot state. Full detail:
+`memory/notes/hunter-character-model.md`.
+
+- **Assets fetched** (both CC0, Quaternius via poly.pizza; auto-added to
+  `assets/manifest.json` + `CREDITS.md`): SWAT body
+  `assets/713f6535-f4f3-4367-a4c6-ced126ae0936.glb` (24 `CharacterArmature|*` clips,
+  `Wrist.R` bone) + assault rifle `assets/9a0e478c-de82-4773-9b70-a0219bb0057c.glb`.
+- **NEW registry `shared/config/character-models.json`** — separate from
+  `props.json`/`fixtures.json` ON PURPOSE (those feed collider-baking; a player character
+  must not get a collider). Holds body/weapon GLB paths, capsule-match `heightMeters`,
+  the 5 clip suffixes, anim tunables, and the HOT-TUNABLE rifle grip offset + facing
+  (`yawOffsetDeg`) — grip/facing fixable without a rebuild. `js/config.js` loads it into
+  `cfg.characterModels` (tolerant of absence → capsule fallback).
+- **`js/scene.js` subsystem** (view-only): lazy GLTFLoader + `SkeletonUtils`; per-hunter
+  **rig-safe `SkeletonUtils.clone`** (a plain `.clone()` breaks skinned rigs — avoided);
+  sized to the capsule (feet at origin); rifle parented to `Wrist.R`; `AnimationMixer`
+  with a velocity-driven idle/run state machine (`Idle_Gun` / `Run_Shoot` / `Run_Back` /
+  `Run_Left` / `Run_Right`), timeScale by speed, ~0.15s crossfades. **Velocity is DERIVED
+  from successive snapshots** in `syncPlayers` (snapshot has none). Clips matched by
+  SUFFIX (guards the `CharacterArmature|` prefix). Only REMOTE players get the model
+  (`meshForPlayer(p,{animated:true})`); self stays a capsule. Model-ready state folded
+  into the entry kind (`hunter:cap`→`hunter:swat`) so it rebuilds when the GLB lands;
+  failed load stays capsule. `setWeaponVisible(bool)` (default visible) hides the rifle
+  for later tool-switching. `js/main.js` passes the registry to `buildWorld` + calls
+  `scene.updateAnimations(dt)` each frame.
+- **Verification (static only — honest):** `node tools/check-hunter-model.mjs` (new,
+  authoring-only) asserts assets present+registered+real glTF, registry self-consistent
+  + separate from props/fixtures, clip suffixes are real pack clips, scene methods +
+  rig-safe clone + wiring exist. `tools/check-blindfold.mjs`'s "every `scene.X()` is
+  defined" guard covers `updateAnimations`. **OWED — live browser pass:** props see the
+  animated soldier, idle/run play without console errors, rifle sits in the hand, model
+  tracks the capsule, local hunter still sees no own body. Then tune grip/facing.
+- **Files:** `shared/config/character-models.json` (new), `js/config.js`, `js/scene.js`,
+  `js/main.js`, `tools/check-hunter-model.mjs` (new), notes + architecture.
+
 ## Latest: "STUCK BLINDFOLD" bugfix #2 — REAL root cause was a render-loop crash, NOT the blindfold (2026-07-11, VRmike, on `main`)
 
 The prior two sessions kept "re-verifying the blindfold" and finding it correct — because

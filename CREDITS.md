@@ -21,3 +21,9 @@ mapping and `memory/notes/restaurant-map.md` for the loader wiring.
 
 ## Menu / UI art
 - `assets/attached_*.{jpg,png,webp}` — provided with the project (see README/menu).
+- **713f6535-f4f3-4367-a4c6-ced126ae0936.glb** — https://static.poly.pizza/713f6535-f4f3-4367-a4c6-ced126ae0936.glb
+  - license: CC0
+  - added: 2026-07-11 (requested by VRmike)
+- **9a0e478c-de82-4773-9b70-a0219bb0057c.glb** — https://static.poly.pizza/9a0e478c-de82-4773-9b70-a0219bb0057c.glb
+  - license: CC0
+  - added: 2026-07-11 (requested by VRmike)

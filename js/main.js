@@ -235,7 +235,7 @@ function handleGameMessage(msg) {
       // one type→shape/model lookup for scene.js. Fixture types are only ever
       // referenced by map.fixtures, so this merge never widens the disguise pool.
       const catalog = { ...state.cfg.props, ...state.cfg.fixtures };
-      ensureScene().then((s) => s.buildWorld(state.map, state.props, catalog));
+      ensureScene().then((s) => s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels));
       // Stand up the local prediction world (real wall/prop collision for our own
       // movement). Fire-and-forget: until it resolves — or forever, if Rapier can't
       // load — the frame loop uses the flat 2D prediction. See buildPredict().
@@ -610,6 +610,9 @@ function frame(now) {
     }
 
     scene.interpolate(0.25);
+    // Advance remote-hunter animation mixers (needs real dt; interpolate uses a fixed
+    // alpha). Drives the velocity-based idle/run state machine — see scene.updateAnimations.
+    scene.updateAnimations(dt);
     scene.render();
     // Drive the aim reticle off the referee's yaw-forward vector (where the tag
     // cone actually swings), not screen center — the third-person eye sits off the

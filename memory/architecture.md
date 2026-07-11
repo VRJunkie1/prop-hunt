@@ -149,7 +149,13 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   collider). Missing/failed GLB → primitive stays visible (per-item fallback). Only
   the active map's referenced GLBs load, only on the viewing client, never at boot
   (the `three/addons/` importmap entry only declares). Detail:
-  `memory/notes/restaurant-map.md`.
+  `memory/notes/restaurant-map.md`. **Animated hunter model (2026-07-11):** a REMOTE
+  hunter renders as an animated SWAT soldier (what props see) via a self-contained
+  subsystem here — rig-safe `SkeletonUtils.clone` per hunter, an `AnimationMixer` whose
+  idle/run state machine is driven by velocity DERIVED from successive snapshots, and a
+  rifle parented to the `Wrist.R` bone. The LOCAL hunter never renders it (stays
+  first-person). Registry: `cfg.characterModels`. Detail:
+  `memory/notes/hunter-character-model.md`.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
   "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
   msg?)`, called from `main.js` in response to `input.js` pointer-lock events
@@ -197,6 +203,15 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   `config.js` loads it into `cfg.feel` and both the host world and every client
   prediction world derive feel from that ONE object via `physics.js resolveFeel()`,
   so tuning can never desync a match.
+- **`character-models.json`** (2026-07-11) — the **character-model registry** for
+  animated third-person PLAYER models (the SWAT hunter). DELIBERATELY separate from
+  `props.json`/`fixtures.json`: those feed the collider-baking + measured-bounds physics
+  pipeline, which a player character must never enter (it would grow a collider it
+  shouldn't). Holds body/weapon GLB paths, capsule-match height, movement clip suffixes,
+  anim tunables, and the hot-tunable rifle grip offset + facing (`yawOffsetDeg`).
+  `config.js` loads it into `cfg.characterModels`; ONLY `scene.js` consumes it (view
+  only — no referee/physics/protocol involvement). Detail:
+  `notes/hunter-character-model.md`.
 - **Static vs dynamic in a map** (added with the `restaurant` map): a map may
   carry an optional **`fixtures[]`** array (immovable building pieces — walls,
   counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable

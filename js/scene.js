@@ -127,6 +127,22 @@ export class Scene3D {
     this._modelSlots = []; // this match's primitives still awaiting their GLB
     this._buildToken = 0; // bumped each buildWorld so stale async loads no-op
 
+    // ---- animated character models (the SWAT hunter) ------------------------
+    // The soldier model OTHER players see for a REMOTE hunter (the local hunter
+    // stays first-person and never renders their own body this pass). Registry comes
+    // from shared/config/character-models.json via cfg.characterModels — DELIBERATELY
+    // NOT the props/fixtures catalogs, so a player character never enters the disguise
+    // pool or the collider-baking pipeline. Both GLB body (with its animation clips)
+    // and the weapon are loaded once per match and rig-safe cloned per hunter.
+    this.characterModels = null;
+    this._charCache = new Map(); // '/assets/…​.glb' -> {scene, animations} | 'loading' | 'failed'
+    this._skeletonUtils = null; // lazily imported; SkeletonUtils.clone keeps skinned rigs intact
+    this._weaponVisible = true; // setWeaponVisible() toggles the rifle on every hunter
+    // Movement for a remote hunter's animation state machine is DERIVED from the
+    // difference between successive snapshots (the snapshot carries no velocity), once
+    // per snapshot arrival in syncPlayers — not guessed per render frame.
+    this._lastSnapT = 0; // performance.now() of the previous syncPlayers call
+
     // ---- third-person follow camera -----------------------------------------
     // The local player now sees their OWN model from a camera orbiting behind and
     // slightly above them (default). yaw/pitch (from mouse-look / touch drag) orbit
@@ -189,8 +205,11 @@ export class Scene3D {
   }
 
   // Rebuild the world for a new match.
-  buildWorld(map, propInstances, catalog) {
+  buildWorld(map, propInstances, catalog, characterModels = null) {
     this.catalog = catalog;
+    // Animated character-model registry (the SWAT hunter). Config doesn't change
+    // between matches, so keep any already-set registry when a new build omits it.
+    if (characterModels) this.characterModels = characterModels;
     // Measured uniform scale for this map's real meshes (see shared/config/asset-dims.json).
     this.modelScale = typeof map.modelScale === 'number' ? map.modelScale : null;
     // A new match: invalidate any in-flight GLB loads from a previous build and
@@ -322,6 +341,15 @@ export class Scene3D {
     // primitives are already on screen, so the map is playable instantly and each
     // GLB pops in as it arrives (or never, leaving its primitive — the fallback).
     this._loadModels().catch(() => {});
+
+    // Reset the per-match snapshot-timing used to derive hunter movement velocity,
+    // seed the default weapon visibility from config, and kick off the character-model
+    // load. Fire-and-forget: a remote hunter shows the neutral capsule until the GLB
+    // arrives (then rebuilds to the animated soldier), or forever if it fails to load.
+    this._lastSnapT = 0;
+    const hcfg = this.characterModels && this.characterModels.hunter;
+    this._weaponVisible = !(hcfg && hcfg.weapon && hcfg.weapon.visibleByDefault === false);
+    this._loadCharacterModels().catch(() => {});
   }
 
   // Record a primitive that has a real GLB to swap in later. `entry` is the map's
@@ -367,8 +395,16 @@ export class Scene3D {
     this.selfId = id;
   }
 
-  // Create a mesh matching how a player should currently look.
-  meshForPlayer(p) {
+  // Create a mesh matching how a player should currently look. `opts.animated` is
+  // set only for REMOTE players (never self): a remote hunter renders as the animated
+  // SWAT soldier — this is what props see. The LOCAL hunter is drawn by _syncSelf
+  // WITHOUT opts.animated, so they keep the neutral capsule and their first-person
+  // view is untouched this pass (you don't see your own body yet).
+  meshForPlayer(p, opts = {}) {
+    if (opts.animated && p.hunter && !p.disguise && this._hunterModelReady()) {
+      const soldier = this._buildHunterModel(this.characterModels.hunter);
+      if (soldier) return soldier; // else fall through to the capsule (load pending/failed)
+    }
     if (p.disguise && this.catalog[p.disguise]) {
       const c = this.catalog[p.disguise];
       // If the disguise's real GLB has already been loaded for this map, wear the
@@ -399,27 +435,56 @@ export class Scene3D {
   // Reconcile meshes against a snapshot's player list.
   syncPlayers(players) {
     const seen = new Set();
+    // Snapshot cadence (seconds) since the last syncPlayers call — the denominator for
+    // deriving a remote hunter's movement velocity (snapshots carry no velocity). Clamp
+    // to sane bounds so a paused tab / dropped snapshot can't produce a wild speed.
+    const nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    let snapDt = this._lastSnapT ? (nowT - this._lastSnapT) / 1000 : 1 / 15;
+    this._lastSnapT = nowT;
+    snapDt = Math.min(0.5, Math.max(0.02, snapDt));
     for (const p of players) {
       seen.add(p.id);
       if (p.id === this.selfId) {
         // In third-person the local player sees their OWN model (built via the same
         // disguise/role path everyone else is drawn with, so it matches what the
         // referee and other clients believe this player is). In first-person there
-        // is no self avatar (the camera is the eyes).
+        // is no self avatar (the camera is the eyes). NOTE: no `animated` flag here —
+        // the local hunter never renders the SWAT model (stays first-person).
         this._syncSelf(p);
         continue;
       }
 
       let entry = this.players.get(p.id);
-      const kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+      // `hunter:swat` vs `hunter:cap` fold the model-ready state INTO the kind, so an
+      // entry showing the capsule fallback rebuilds into the animated soldier the moment
+      // the GLB finishes loading (and a failed load stays a capsule forever).
+      let kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+      if (kind === 'hunter') kind = this._hunterModelReady() ? 'hunter:swat' : 'hunter:cap';
       if (!entry || entry.kind !== kind) {
-        // New player, or appearance changed (disguised / role) -> rebuild mesh.
+        // New player, or appearance changed (disguised / role / model loaded) -> rebuild.
         if (entry) this.scene.remove(entry.mesh);
-        const mesh = this.meshForPlayer(p);
+        const mesh = this.meshForPlayer(p, { animated: true });
         mesh.position.set(p.x, mesh.userData.baseY + (p.y || 0), p.z);
         this.scene.add(mesh);
-        entry = { mesh, kind, target: { x: p.x, y: p.y || 0, z: p.z, yaw: p.yaw } };
+        entry = {
+          mesh,
+          kind,
+          target: { x: p.x, y: p.y || 0, z: p.z, yaw: p.yaw },
+          // Animation controller (mixer + actions + weapon) when this is the animated
+          // soldier; null for capsules/disguises. animVel is the derived movement.
+          hunterCtl: mesh.userData.hunterCtl || null,
+          animVel: null,
+        };
         this.players.set(p.id, entry);
+      }
+      // Derive velocity from this snapshot's displacement BEFORE overwriting target
+      // (target still holds the previous snapshot's pose). Smoothed to damp net jitter.
+      if (entry.hunterCtl) {
+        const vx = (p.x - entry.target.x) / snapDt;
+        const vz = (p.z - entry.target.z) / snapDt;
+        if (!entry.animVel) entry.animVel = { x: 0, z: 0 };
+        entry.animVel.x += (vx - entry.animVel.x) * 0.5;
+        entry.animVel.z += (vz - entry.animVel.z) * 0.5;
       }
       entry.target.x = p.x;
       entry.target.y = p.y || 0;
@@ -684,19 +749,28 @@ export class Scene3D {
   // dynamic CDN import done here on the first match start — never at page boot — so
   // the headless load check makes zero external requests (same rule as three.js /
   // PeerJS). Any GLB that is missing or errors just leaves its primitive in place.
+  // Lazily import + construct the CDN GLTFLoader (once). Returns true on success,
+  // false if the import is blocked (offline / headless) — callers then keep their
+  // primitive / capsule fallback. Shared by the prop-mesh loader and the character
+  // (hunter) loader so neither fetches anything at page boot.
+  async _ensureGltfLoader() {
+    if (this._gltfLoader) return true;
+    try {
+      const mod = await import('three/addons/loaders/GLTFLoader.js');
+      this._gltfLoader = new mod.GLTFLoader();
+      return true;
+    } catch (e) {
+      console.warn('[scene] GLTFLoader unavailable — keeping primitive shapes / capsule', e);
+      return false;
+    }
+  }
+
   async _loadModels() {
     const slots = this._modelSlots;
     if (!slots.length) return;
     const token = this._buildToken;
-    if (!this._gltfLoader) {
-      try {
-        const mod = await import('three/addons/loaders/GLTFLoader.js');
-        this._gltfLoader = new mod.GLTFLoader();
-      } catch (e) {
-        // CDN unreachable / import blocked: every item keeps its primitive fallback.
-        console.warn('[scene] GLTFLoader unavailable — keeping primitive shapes', e);
-        return;
-      }
+    if (!(await this._ensureGltfLoader())) {
+      return;
     }
     if (token !== this._buildToken) return; // a newer match started while importing
     // Group by GLB path so each file downloads once, then applies to all its uses.
@@ -762,6 +836,224 @@ export class Scene3D {
   // so existing call sites are unchanged). See instantiateModel above.
   _instantiateModel(template, target, dims, scale) {
     return instantiateModel(template, target, dims, scale);
+  }
+
+  // ---- animated character models (the SWAT hunter) --------------------------
+  // Load every GLB the character registry references (body + weapon) once per match.
+  // Bodies keep their animation clips (needed for the mixer); the weapon is a static
+  // mesh. Uses the same lazy CDN GLTFLoader as the prop meshes (nothing at page boot)
+  // plus a lazily-imported SkeletonUtils (its .clone keeps skinned rigs intact — a
+  // plain .clone() would break the animated skeleton). Any failure leaves hunters as
+  // the neutral capsule (a per-file 'failed' marker, no retry).
+  async _loadCharacterModels() {
+    const reg = this.characterModels;
+    if (!reg) return;
+    const token = this._buildToken;
+    const paths = new Set();
+    for (const key of Object.keys(reg)) {
+      const cm = reg[key];
+      if (!cm || typeof cm !== 'object') continue;
+      if (cm.model) paths.add('/assets/' + cm.model);
+      if (cm.weapon && cm.weapon.model) paths.add('/assets/' + cm.weapon.model);
+    }
+    if (!paths.size) return;
+    if (!(await this._ensureGltfLoader())) return; // offline/headless -> capsule fallback
+    if (token !== this._buildToken) return;
+    if (!this._skeletonUtils) {
+      try {
+        this._skeletonUtils = await import('three/addons/utils/SkeletonUtils.js');
+      } catch (e) {
+        console.warn('[scene] SkeletonUtils unavailable — hunters keep the capsule', e);
+        return;
+      }
+    }
+    if (token !== this._buildToken) return;
+    for (const path of paths) this._loadCharacterGlb(path);
+  }
+
+  _loadCharacterGlb(path) {
+    if (this._charCache.has(path)) return; // loaded, loading, or known-failed
+    this._charCache.set(path, 'loading');
+    this._gltfLoader.load(
+      path,
+      (gltf) => this._charCache.set(path, { scene: gltf.scene, animations: gltf.animations || [] }),
+      undefined,
+      (err) => {
+        console.warn('[scene] character GLB failed, hunters keep the capsule:', path, err);
+        this._charCache.set(path, 'failed');
+      }
+    );
+  }
+
+  // Is the hunter BODY GLB loaded and ready to clone? (The weapon is optional — it
+  // attaches if its own GLB is ready, else the soldier just holds no rifle yet.)
+  _hunterModelReady() {
+    const cm = this.characterModels && this.characterModels.hunter;
+    if (!cm || !cm.model || !this._skeletonUtils) return false;
+    const body = this._charCache.get('/assets/' + cm.model);
+    return !!body && body !== 'failed' && body !== 'loading';
+  }
+
+  // Build one animated hunter instance: rig-safe clone of the body, sized to match the
+  // hunter capsule (feet at the group origin), an AnimationMixer with the movement
+  // clips resolved by suffix, and the rifle parented to the wrist bone. Returns a Group
+  // whose userData.hunterCtl is the animation controller (mixer/actions/weapon), which
+  // syncPlayers stores on the player entry and updateAnimations drives each frame.
+  _buildHunterModel(cm) {
+    const body = this._charCache.get('/assets/' + cm.model);
+    if (!body || body === 'failed' || body === 'loading' || !this._skeletonUtils) return null;
+    // Rig-safe clone — SkeletonUtils.clone rebinds SkinnedMesh to the cloned skeleton
+    // (a plain THREE.Object3D.clone() shares/breaks the rig, freezing the animation).
+    const inner = this._skeletonUtils.clone(body.scene);
+
+    // Scale so the model's HEIGHT matches the hunter capsule (CapsuleGeometry(0.4,1.0)
+    // => ~1.8 tall), then rest the feet on the group origin and centre x/z — so the
+    // caller (baseY 0) plants the soldier where the networked capsule actually is.
+    const box = new THREE.Box3().setFromObject(inner);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const targetH = cm.heightMeters > 0 ? cm.heightMeters : 1.8;
+    const s = size.y > 1e-4 ? targetH / size.y : 1;
+    inner.scale.setScalar(s);
+    const box2 = new THREE.Box3().setFromObject(inner);
+    const c = new THREE.Vector3();
+    box2.getCenter(c);
+    inner.position.set(-c.x, -box2.min.y, -c.z);
+    // Hot-tunable facing correction: the model's native forward may not equal the
+    // game's forward (-Z). Rotating about the vertical axis through the centred model
+    // keeps it centred (its x/z centroid sits on that axis). So the group faces the
+    // networked yaw and this offset aligns the soldier's front with travel.
+    if (cm.yawOffsetDeg) inner.rotation.y = (cm.yawOffsetDeg * Math.PI) / 180;
+    inner.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.frustumCulled = false; // skinned bounds can under-report; don't cull mid-anim
+      }
+    });
+
+    const group = new THREE.Group();
+    group.add(inner);
+    group.userData.baseY = 0; // feet on the ground; the caller adds jump-y
+
+    // Rifle: parent to the named wrist bone with the config grip nudge (hot-tunable).
+    let weaponRoot = null;
+    const wcfg = cm.weapon;
+    if (wcfg && wcfg.model) {
+      const wc = this._charCache.get('/assets/' + wcfg.model);
+      if (wc && wc !== 'failed' && wc !== 'loading') {
+        let bone = null;
+        inner.traverse((o) => { if (!bone && o.name === wcfg.attachBone) bone = o; });
+        if (bone) {
+          weaponRoot = wc.scene.clone(true); // static mesh: plain clone is fine (no skin)
+          const pos = wcfg.position || {};
+          const rot = wcfg.rotationDeg || {};
+          const D = Math.PI / 180;
+          weaponRoot.position.set(pos.x || 0, pos.y || 0, pos.z || 0);
+          weaponRoot.rotation.set((rot.x || 0) * D, (rot.y || 0) * D, (rot.z || 0) * D);
+          weaponRoot.scale.setScalar(wcfg.scale > 0 ? wcfg.scale : 1);
+          weaponRoot.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+          weaponRoot.visible = this._weaponVisible;
+          bone.add(weaponRoot);
+        } else {
+          console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
+        }
+      }
+    }
+
+    // AnimationMixer + the movement actions, clips matched by SUFFIX so the file's
+    // 'CharacterArmature|' prefix is handled (see _resolveClip).
+    const mixer = new THREE.AnimationMixer(inner);
+    const clips = body.animations || [];
+    const map = cm.clips || {};
+    const actions = {};
+    for (const stateName of ['idle', 'forward', 'backward', 'left', 'right']) {
+      const clip = this._resolveClip(clips, map[stateName]);
+      if (clip) actions[stateName] = mixer.clipAction(clip);
+    }
+    const a = cm.anim || {};
+    const ctl = {
+      mixer,
+      actions,
+      weaponRoot,
+      current: null,
+      refSpeed: a.refSpeed > 0 ? a.refSpeed : 6,
+      moveThreshold: a.moveThreshold >= 0 ? a.moveThreshold : 0.6,
+      minTS: a.minTimeScale > 0 ? a.minTimeScale : 0.5,
+      maxTS: a.maxTimeScale > 0 ? a.maxTimeScale : 1.8,
+      fade: a.crossfadeSeconds >= 0 ? a.crossfadeSeconds : 0.15,
+    };
+    group.userData.hunterCtl = ctl;
+    // Start on idle so a fresh hunter isn't frozen in bind pose for a beat.
+    this._playHunterState(ctl, 'idle', 1);
+    return group;
+  }
+
+  // Find a clip by name, GUARDING the 'CharacterArmature|<clip>' prefix the GLB uses:
+  // exact match, then any clip whose name ends in '|<suffix>', then any ending in the
+  // suffix. Returns null when the clip is absent (caller degrades to idle).
+  _resolveClip(clips, suffix) {
+    if (!suffix || !clips || !clips.length) return null;
+    return (
+      clips.find((c) => c.name === suffix) ||
+      clips.find((c) => c.name.endsWith('|' + suffix)) ||
+      clips.find((c) => c.name.endsWith(suffix)) ||
+      null
+    );
+  }
+
+  // Crossfade a hunter to `stateName` at `timeScale`. Same clip already active -> just
+  // update its speed. Missing clip (e.g. Run_Shoot absent) -> degrade to idle. Uses
+  // fadeOut/fadeIn (~ctl.fade) so transitions don't pop.
+  _playHunterState(ctl, stateName, timeScale) {
+    const next = ctl.actions[stateName] || ctl.actions.idle;
+    if (!next) return;
+    if (ctl.current === next) {
+      next.setEffectiveTimeScale(timeScale);
+      return;
+    }
+    const prev = ctl.current;
+    ctl.current = next;
+    if (prev) prev.fadeOut(ctl.fade);
+    next.reset().setEffectiveWeight(1).setEffectiveTimeScale(timeScale).fadeIn(ctl.fade).play();
+  }
+
+  // Advance every hunter's animation by dt and pick its clip from the DERIVED velocity
+  // (computed once per snapshot in syncPlayers) relative to the player's facing:
+  // stationary -> idle; else forward/back/left/right by the dominant axis, playback
+  // speed scaled by actual speed. Called each render frame from main.js.
+  updateAnimations(dt) {
+    if (!(dt > 0)) return;
+    for (const entry of this.players.values()) {
+      const ctl = entry.hunterCtl;
+      if (!ctl) continue;
+      const v = entry.animVel || { x: 0, z: 0 };
+      const speed = Math.hypot(v.x, v.z);
+      if (speed < ctl.moveThreshold) {
+        this._playHunterState(ctl, 'idle', 1);
+      } else {
+        const yaw = entry.target.yaw || 0;
+        // forward = (-sin yaw, -cos yaw); right = (cos yaw, -sin yaw) — the shared
+        // movement convention. Project velocity onto them to pick the clip.
+        const fwd = v.x * -Math.sin(yaw) + v.z * -Math.cos(yaw);
+        const rgt = v.x * Math.cos(yaw) + v.z * -Math.sin(yaw);
+        let stateName;
+        if (Math.abs(fwd) >= Math.abs(rgt)) stateName = fwd >= 0 ? 'forward' : 'backward';
+        else stateName = rgt >= 0 ? 'right' : 'left';
+        const ts = Math.min(ctl.maxTS, Math.max(ctl.minTS, speed / ctl.refSpeed));
+        this._playHunterState(ctl, stateName, ts);
+      }
+      ctl.mixer.update(dt);
+    }
+  }
+
+  // Show/hide the rifle on EVERY hunter (current + future), keeping the gun-holding
+  // pose. Default visible; later tool-switching can call this to hide the weapon.
+  setWeaponVisible(visible) {
+    this._weaponVisible = !!visible;
+    for (const entry of this.players.values()) {
+      const ctl = entry.hunterCtl;
+      if (ctl && ctl.weaponRoot) ctl.weaponRoot.visible = this._weaponVisible;
+    }
   }
 
   render() {

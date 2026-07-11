@@ -5,7 +5,7 @@ let cache = null;
 
 export async function loadConfig() {
   if (cache) return cache;
-  const [maps, props, fixtures, rules, assetDims, feel] = await Promise.all([
+  const [maps, props, fixtures, rules, assetDims, feel, characterModels] = await Promise.all([
     fetch('/shared/config/maps.json').then((r) => r.json()),
     fetch('/shared/config/props.json').then((r) => r.json()),
     fetch('/shared/config/fixtures.json').then((r) => r.json()),
@@ -20,6 +20,12 @@ export async function loadConfig() {
     // prediction world (see net.js → Referee, main.js → buildPredict), so the two
     // sims can never derive mismatched feel and rubber-band. See notes/physics.md.
     fetch('/shared/config/physics-feel.json').then((r) => r.json()).catch(() => ({})),
+    // Character-model registry (animated third-person player models — the SWAT hunter).
+    // DELIBERATELY separate from props/fixtures so a player character never enters the
+    // disguise pool or the collider-baking pipeline. Tolerate absence — scene.js simply
+    // falls back to the neutral capsule avatar if it's missing/malformed. See
+    // shared/config/character-models.json + notes/hunter-character-model.md.
+    fetch('/shared/config/character-models.json').then((r) => r.json()).catch(() => ({})),
   ]);
   // props = the disguise catalog (movable items only, per referee's disguise pool);
   // fixtures = the static building-piece catalog. Kept as separate files so a
@@ -38,6 +44,6 @@ export async function loadConfig() {
     if (props[type]) props[type].measured = measured;
     if (fixtures[type]) fixtures[type].measured = measured;
   }
-  cache = { maps, props, fixtures, rules, feel };
+  cache = { maps, props, fixtures, rules, feel, characterModels };
   return cache;
 }
