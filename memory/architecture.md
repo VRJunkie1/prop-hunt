@@ -187,7 +187,12 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   separate files so a fixture can never enter the disguise pool — the referee builds
   the pool from `map.props` only; `scene.js` merges the two catalogs purely for
   rendering. Adding maps/props needs no engine change; the lobby map picker renders
-  any new map automatically.
+  any new map automatically. **`physics-feel.json`** (2026-07-11) holds the physics
+  FEEL tunables (restitution / solver iterations / prop damping / anti-bob) — a
+  physics-owned file, NOT `rules.json` (which is the referee's game rules);
+  `config.js` loads it into `cfg.feel` and both the host world and every client
+  prediction world derive feel from that ONE object via `physics.js resolveFeel()`,
+  so tuning can never desync a match.
 - **Static vs dynamic in a map** (added with the `restaurant` map): a map may
   carry an optional **`fixtures[]`** array (immovable building pieces — walls,
   counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable

@@ -5,7 +5,7 @@ let cache = null;
 
 export async function loadConfig() {
   if (cache) return cache;
-  const [maps, props, fixtures, rules, assetDims] = await Promise.all([
+  const [maps, props, fixtures, rules, assetDims, feel] = await Promise.all([
     fetch('/shared/config/maps.json').then((r) => r.json()),
     fetch('/shared/config/props.json').then((r) => r.json()),
     fetch('/shared/config/fixtures.json').then((r) => r.json()),
@@ -14,6 +14,12 @@ export async function loadConfig() {
     // bounding-box normalization build). Tolerate absence — if the file is
     // missing/malformed, colliders simply fall back to the primitive footprints.
     fetch('/shared/config/asset-dims.json').then((r) => r.json()).catch(() => ({ dims: {} })),
+    // Physics FEEL tuning (restitution / solver iterations / prop damping). Tolerate
+    // absence — physics.js applies safe defaults if it's missing/malformed. This ONE
+    // object flows to BOTH the host's authoritative world and every client's
+    // prediction world (see net.js → Referee, main.js → buildPredict), so the two
+    // sims can never derive mismatched feel and rubber-band. See notes/physics.md.
+    fetch('/shared/config/physics-feel.json').then((r) => r.json()).catch(() => ({})),
   ]);
   // props = the disguise catalog (movable items only, per referee's disguise pool);
   // fixtures = the static building-piece catalog. Kept as separate files so a
@@ -32,6 +38,6 @@ export async function loadConfig() {
     if (props[type]) props[type].measured = measured;
     if (fixtures[type]) fixtures[type].measured = measured;
   }
-  cache = { maps, props, fixtures, rules };
+  cache = { maps, props, fixtures, rules, feel };
   return cache;
 }

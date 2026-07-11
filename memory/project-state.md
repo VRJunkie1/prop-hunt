@@ -8,6 +8,36 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: PHYSICS FEEL TUNING on `main` (2026-07-11, Jie) — three dials + anti-bob. Config/wiring done; FEEL still owed a live playtest (can't be verified headless).
+
+Small focused feel pass after a live playtest: players push deep INTO props before they
+react; standing on objects bobs up/down; everything feels bouncy/jello. No architecture
+change — tuning constants + one minimal controller-grounding tweak. Full detail:
+`memory/notes/physics.md` (top "FEEL TUNING" section). Exact values set:
+
+- **NEW `shared/config/physics-feel.json`** (physics-owned tunables, NOT `rules.json`).
+  `config.js` loads it into `cfg.feel`; that ONE object flows to the host's authoritative
+  world (`referee.js`) AND every client's prediction world (`main.js buildPredict`), so
+  the two sims can't derive mismatched feel and rubber-band. `physics.js resolveFeel()`
+  is the single derivation point (null-safe defaults).
+- **Restitution → 0** on ALL colliders (ground, walls, static + floor fixtures, dynamic
+  props, static-overflow props), from `feel.restitution`. Player capsule is kinematic →
+  restitution is a no-op there, so not pretend-edited. Swept: no stray non-zero values.
+- **Solver iterations 4 → 12**, `numAdditionalFrictionIterations → 4`
+  (`world.integrationParameters`, Rapier 0.14 TGS-soft API, feature-detected + guarded
+  with a pre-TGS fallback). Main fix for sink-into-props + most bobbing.
+- **Prop damping:** linear 0.5 → **0.4**, angular 0.7 → **0.4** (from config).
+- **Anti-bob (`feel.capGroundedImpulse`, default ON):** a player grounded AND standing
+  still stops feeding impulses into the prop underfoot (kills the push-down/spring-back
+  bob loop); walking into a prop still shoves it (tell preserved).
+- **`tools/check-physics-feel.mjs`** (new, authoring-only, never shipped): asserts
+  host==client feel derivation + range-checks the dials. `node tools/check-physics-feel.mjs`.
+- Files: `shared/config/physics-feel.json` (new), `js/config.js`, `shared/physics.js`,
+  `shared/referee.js`, `js/main.js`, `tools/check-physics-feel.mjs` (new), notes.
+- **OWED — live feel-test (Jie):** props stop sinking / feel rigid; standing bob gone;
+  shoved props settle without wobble; a real shove still reads as a tell. **Bring a
+  phone** — if the host phone drops below 60fps, lower `numSolverIterations` first (12→8).
+
 ## Status: POLISH/FIX PASS on `main` — 7-item playtest punch list (2026-07-10, VRmike+Jie). Structural-verified; physics FEEL + button VISUALS still owed a live playtest.
 
 Post-merge fix pass on `main` from a VRmike+Jie playtest. All seven landed; the

@@ -41,6 +41,28 @@ export function isStaticEntry(c) {
   return !!(c && (c.static || c.decor));
 }
 
+// FEEL TUNING (2026-07). The single derivation point for the physics-feel knobs,
+// used by BOTH the host's authoritative world and every client's prediction world.
+// Both sims call this with the SAME `feel` object (config.js loads one
+// physics-feel.json into the shared cfg), so they can never derive mismatched feel
+// and rubber-band a match. Defaults here match Rapier's own defaults (restitution 0,
+// solver 4/friction 4) EXCEPT the two we deliberately raise, so a missing/partial
+// config still yields sane, rigid behaviour. Pure + side-effect-free so the offline
+// parity check (tools/check-physics-feel.mjs) can import and diff it. See
+// notes/physics.md (feel-tuning section).
+export function resolveFeel(feel) {
+  const f = feel || {};
+  const num = (v, d) => (Number.isFinite(v) ? v : d);
+  return {
+    restitution: num(f.restitution, 0.0),
+    numSolverIterations: num(f.numSolverIterations, 12),
+    numAdditionalFrictionIterations: num(f.numAdditionalFrictionIterations, 4),
+    propLinearDamping: num(f.propLinearDamping, 0.4),
+    propAngularDamping: num(f.propAngularDamping, 0.4),
+    capGroundedImpulse: f.capGroundedImpulse !== false, // default ON
+  };
+}
+
 // Load + init Rapier exactly once. Returns the ready RAPIER namespace, or throws
 // if the CDN is unreachable (callers fall back to the non-physics path).
 export async function loadRapier() {
@@ -106,11 +128,32 @@ export class PhysicsWorld {
   constructor(RAPIER, map, propInstances, catalog, opts = {}) {
     this.R = RAPIER;
     this.rules = opts.rules || {};
+    // FEEL knobs (restitution / solver iterations / prop damping / anti-bob), derived
+    // through the ONE shared resolveFeel() so host + client are byte-identical.
+    this.feel = resolveFeel(opts.feel);
     this.dynamicProps = !!opts.dynamicProps;
     this.map = map;
 
     const g = this.rules.gravity != null ? this.rules.gravity : 22;
     this.world = new RAPIER.World({ x: 0, y: -g, z: 0 });
+
+    // SOLVER STIFFNESS (feel dial 2). Raise the contact-solver iteration counts so
+    // stiff contacts resolve fully in one step — the main fix for BOTH the
+    // sink-into-props penetration and most of the standing-on-object bobbing. The
+    // knob names differ across Rapier versions (numSolverIterations is the current
+    // @dimforge/rapier3d-compat 0.14 TGS-soft API; older builds used
+    // maxVelocity/PositionIterations), so we feature-detect each property before
+    // writing it — an API mismatch silently no-ops instead of throwing, and the sim
+    // just runs at Rapier's default iteration count. `in` sees the class
+    // getters/setters on integrationParameters' prototype.
+    const ip = this.world.integrationParameters;
+    if (ip) {
+      if ('numSolverIterations' in ip) ip.numSolverIterations = this.feel.numSolverIterations;
+      if ('numAdditionalFrictionIterations' in ip) ip.numAdditionalFrictionIterations = this.feel.numAdditionalFrictionIterations;
+      // Older-API fallbacks (pre-TGS-soft): only touched if the modern knob is absent.
+      if (!('numSolverIterations' in ip) && 'maxVelocityIterations' in ip) ip.maxVelocityIterations = this.feel.numSolverIterations;
+      if (!('numSolverIterations' in ip) && 'maxPositionIterations' in ip) ip.maxPositionIterations = Math.max(1, Math.round(this.feel.numSolverIterations / 3));
+    }
     // FIXED physics timestep. step(dt) banks real elapsed time in _acc and runs
     // whole _fixedDt steps only — never a variable partial step — so the sim is
     // frame-rate independent and reconciliation replay is deterministic. Render
@@ -137,13 +180,14 @@ export class PhysicsWorld {
   _buildStatic(map, catalog) {
     const R = this.R;
     const half = map.size / 2;
+    const rest = this.feel.restitution; // 0 = nothing bounces (feel dial 1)
 
     // Ground: a thick fixed slab whose TOP face sits exactly at y=0. Extended well
     // DOWNWARD (3 m thick, top unchanged) so a fast/falling body can't punch through
     // the floor between substeps (fix #5). Render is unaffected (the visible ground
     // is a separate flat plane at y=0).
     this.world.createCollider(
-      R.ColliderDesc.cuboid(half + 2, 1.5, half + 2).setTranslation(0, -1.5, 0).setFriction(0.9)
+      R.ColliderDesc.cuboid(half + 2, 1.5, half + 2).setTranslation(0, -1.5, 0).setFriction(0.9).setRestitution(rest)
     );
 
     // Boundary walls. Thickened to ~1.5 m and EXTENDED OUTWARD (the inner, arena-
@@ -162,7 +206,7 @@ export class PhysicsWorld {
       [cOut, wallHY, 0, wallTZ, wallHY, along],
     ];
     for (const [x, y, z, hx, hy, hz] of walls) {
-      this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z));
+      this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z).setRestitution(rest));
     }
 
     // Static fixtures — ONLY the genuinely bolted-in pieces (`static`). Knockable
@@ -183,12 +227,13 @@ export class PhysicsWorld {
         const hz = halfExtentXZ(c, 'd');
         const fc = R.ColliderDesc.cuboid(hx, thick / 2, hz)
           .setTranslation(f.x, top - thick / 2, f.z)
-          .setFriction(0.9);
+          .setFriction(0.9)
+          .setRestitution(rest);
         if (f.rot) fc.setRotation(yawQuat(f.rot));
         this.world.createCollider(fc);
         continue;
       }
-      desc.setTranslation(f.x, halfH + (f.y || 0), f.z);
+      desc.setTranslation(f.x, halfH + (f.y || 0), f.z).setRestitution(rest);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
       this.world.createCollider(desc);
     }
@@ -229,16 +274,18 @@ export class PhysicsWorld {
           : p.rot
             ? yawQuat(p.rot)
             : { x: 0, y: 0, z: 0, w: 1 };
+        // DAMPING (feel dial 3): props settle instead of oscillating/wiggling. From
+        // physics-feel.json so a playtest can retune without a rebuild.
         const bodyDesc = R.RigidBodyDesc.dynamic()
           .setTranslation(p.x, spawnY, p.z)
           .setRotation(spawnQ)
-          .setLinearDamping(0.5)
-          .setAngularDamping(0.7);
+          .setLinearDamping(this.feel.propLinearDamping)
+          .setAngularDamping(this.feel.propAngularDamping);
         // CCD (fix #6): a shoved prop can move fast enough in one substep to skip
         // through a thin collider — swept detection closes that hole. Method-guarded.
         if (bodyDesc.setCcdEnabled) bodyDesc.setCcdEnabled(true);
         const body = this.world.createRigidBody(bodyDesc);
-        this.world.createCollider(desc.setFriction(0.8).setRestitution(0.0).setDensity(dens), body);
+        this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
         // Keep the spawn transform so the failsafe can respawn a prop that escapes the
         // world below the floor (fix #4). See respawnEscaped.
         this.propBodies.push({ id: p.id, body, spawn: { x: p.x, y: spawnY, z: p.z, q: spawnQ } });
@@ -250,7 +297,7 @@ export class PhysicsWorld {
         //    where a prop has actually been shoved elsewhere.
         //  - Host past the dynamic cap: same solid collider, simply not simulated
         //    (phone-safety — still fully collidable, just not shovable).
-        desc.setTranslation(p.x, cy, p.z);
+        desc.setTranslation(p.x, cy, p.z).setRestitution(this.feel.restitution);
         if (moved) desc.setRotation({ x: p.qx, y: p.qy, z: p.qz, w: p.qw });
         else if (p.rot) desc.setRotation(yawQuat(p.rot));
         this.world.createCollider(desc);
@@ -390,6 +437,19 @@ export class PhysicsWorld {
         if (ctl.disableSnapToGround) ctl.disableSnapToGround();
       } else {
         ctl.enableSnapToGround(this._snapDist);
+      }
+
+      // ANTI-BOBBING (feel dial 3b): when a player is grounded AND standing still,
+      // stop feeding impulses into whatever dynamic prop is underfoot. Otherwise the
+      // capsule's weight pushes the prop down, the prop springs back next frame, and
+      // snap-to-ground chases it → the constant up/down bob reported in the playtest.
+      // While MOVING (len > 0) impulses stay ON so walking into a prop still shoves it
+      // (the prop-vs-disguise tell is preserved). Feature-guarded; only meaningful on
+      // the host (guests have static props), but harmless either way. Toggled per
+      // player right before its compute — the controller is shared but used serially.
+      if (this.feel.capGroundedImpulse && ctl.setApplyImpulsesToDynamicBodies) {
+        const standingStill = p.grounded && !inp.jump && len < 1e-3;
+        ctl.setApplyImpulsesToDynamicBodies(!standingStill);
       }
 
       // Resolve how far the capsule CAN move BEFORE moving it: computeCollider

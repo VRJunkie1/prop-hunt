@@ -1,0 +1,17 @@
+{
+  "_doc": "Physics FEEL tuning — the small set of knobs a live playtest tweaks to make the restaurant feel rigid/solid instead of bouncy. Read by shared/physics.js (via config.js) and applied identically to BOTH the host's authoritative world and every client's prediction world (one source, so tuning can never desync). Feel cannot be verified headless — these are the dials to turn between playtests. See memory/notes/physics.md (feel-tuning section).",
+  "restitution": 0.0,
+  "numSolverIterations": 12,
+  "numAdditionalFrictionIterations": 4,
+  "propLinearDamping": 0.4,
+  "propAngularDamping": 0.4,
+  "capGroundedImpulse": true,
+  "_notes": {
+    "restitution": "0 = nothing bounces. A restaurant has no trampolines. Applied to every collider (dynamic props, static fixtures, floor, walls, ground). Rapier's default is already 0, so this is belt-and-suspenders + a single dial if a future map ever wants bounce.",
+    "numSolverIterations": "Contact-solver iterations (Rapier default 4). Raised to make stiff contacts resolve fully in one step — the main fix for both sinking-into-props penetration and standing-on-object bobbing. 12-16 is the useful range; higher costs CPU every frame. If a PHONE HOST dips below 60fps, THIS is the first dial to back down (try 8).",
+    "numAdditionalFrictionIterations": "Extra friction-solver iterations (Rapier default 4). Kept at 4; more helps props not slide/creep on tables.",
+    "propLinearDamping": "Dynamic-prop linear damping (0.3-0.5). Higher = a nudged prop coasts less and settles sooner. Player capsule is kinematic and unaffected.",
+    "propAngularDamping": "Dynamic-prop angular damping (~0.4). Higher = less spinning/wobble after a shove. Was 0.7; lowered so a real shove still tumbles a little (the prop-vs-disguise tell) but stops oscillating.",
+    "capGroundedImpulse": "Anti-bobbing for standing ON a dynamic prop. When true, a player who is grounded AND standing still stops pushing impulses into the prop underfoot (which the prop would spring back from next frame = the bob). Walking INTO a prop still shoves it (impulses stay on while moving), so the tell is preserved. Kinematic capsule is otherwise untouched."
+  }
+}

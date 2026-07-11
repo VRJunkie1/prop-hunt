@@ -34,6 +34,11 @@ export class Referee {
   constructor(config, code) {
     this.rules = config.rules;
     this.maps = config.maps;
+    // Physics FEEL knobs (restitution / solver iterations / prop damping). The SAME
+    // object every client loaded, so the host's authoritative world and each guest's
+    // prediction world derive identical feel (see js/main.js buildPredict). null-safe:
+    // physics.js applies defaults if absent.
+    this.feel = config.feel;
     // Shape catalogs (props = disguise pool, fixtures = static scenery). The referee
     // never uses these to build the disguise pool (that's map.props only) — it needs
     // them purely to hand the physics world collider dimensions for each type. Kept
@@ -392,6 +397,7 @@ export class Referee {
       const world = new PhysicsWorld(RAPIER, map, this.props, { ...this.propCatalog, ...this.fixtureCatalog }, {
         dynamicProps: true,
         rules: this.rules,
+        feel: this.feel,
       });
       for (const p of this.players.values()) {
         if (p.alive && (p.role === ROLE.HUNTER || p.role === ROLE.PROP)) world.addPlayer(p.id, p.pos);

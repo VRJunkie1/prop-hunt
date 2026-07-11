@@ -439,7 +439,7 @@ async function buildPredict(map, props, catalog) {
   }
   if (token !== _predictToken) return; // superseded (match ended / new match)
   try {
-    const world = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: false, rules: state.cfg.rules });
+    const world = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: false, rules: state.cfg.rules, feel: state.cfg.feel });
     world.addPlayer(state.SELF_ID, { x: state.self.x, y: state.self.y, z: state.self.z });
     state.predict = world;
   } catch {

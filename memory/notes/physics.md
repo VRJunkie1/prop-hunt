@@ -3,6 +3,68 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 PHYSICS FEEL TUNING (on `main`) — Jie's three dials + anti-bob
+Small focused feel pass after a live playtest reported: players push deep INTO props
+before they react; standing on objects causes constant up/down bobbing; everything
+feels bouncy/jello. NO architecture change — only tuning constants + one minimal
+controller-grounding tweak. **Feel itself is NOT verified (can't be, headless)** — the
+values below are the starting point for Jie's next live playtest.
+
+- **NEW config file `shared/config/physics-feel.json`** — physics-owned tunables so a
+  feel-test can retune without a rebuild. Put here (NOT `rules.json`, which is the
+  referee's game rules) because these are physics internals. `config.js` fetches it
+  (tolerant of absence) into the shared `cfg.feel`; that ONE object flows to BOTH the
+  host's authoritative world (`referee.js` → `PhysicsWorld({feel})`) and every client's
+  prediction world (`main.js buildPredict` → `PhysicsWorld({feel})`), so the two sims
+  can never derive mismatched feel and rubber-band. `shared/physics.js` `resolveFeel()`
+  is the ONE derivation point (defaults baked in; null-safe if the file is missing).
+- **Dial 1 — restitution 0 on ALL colliders.** `feel.restitution` (0) applied
+  explicitly to the ground slab, boundary walls, static + floor fixtures, dynamic prop
+  colliders, AND the static-overflow prop colliders. Rapier's default is already 0, so
+  this is belt-and-suspenders + a single future dial. The player capsule is KINEMATIC —
+  restitution is meaningless on it, so it's deliberately not "set" there (no pretend
+  edit). Swept the tree: the only pre-existing `setRestitution` was the dynamic prop
+  line (already 0.0) — now sourced from config; no stray non-zero values anywhere.
+- **Dial 2 — solver stiffness.** `world.integrationParameters.numSolverIterations`
+  raised 4→**12** and `numAdditionalFrictionIterations` set to **4** (Rapier 0.14 is
+  TGS-soft, so these are the right knob names — verified against the pinned
+  `@dimforge/rapier3d-compat@0.14.0` API, not guessed). FEATURE-DETECTED via `'x' in ip`
+  before writing, with a pre-TGS `maxVelocity/maxPositionIterations` fallback, so an API
+  mismatch silently no-ops instead of throwing. This is the main fix for both
+  sink-into-props penetration and most of the bobbing. **Perf watch:** higher iterations
+  cost CPU every frame — if a PHONE HOST dips below 60fps, this is the FIRST dial to back
+  down (try 8). Applies to host + client identically.
+- **Dial 3 — prop damping.** Dynamic props now read `feel.propLinearDamping` (**0.4**)
+  and `feel.propAngularDamping` (**0.4**, was hardcoded 0.7) so a nudged prop settles
+  instead of oscillating. Linear was 0.5 → 0.4. Player capsule unaffected (kinematic).
+- **Dial 3b — standing-on-prop anti-bob (`_substep`).** The reported standing bob is a
+  feedback loop: a kinematic capsule resting on a dynamic prop pushes it down via the
+  controller's impulses, the prop springs back next frame, snap-to-ground chases it. Fix
+  (`feel.capGroundedImpulse`, default ON): when a player is grounded AND standing still
+  (`len < 1e-3`, not jumping), `setApplyImpulsesToDynamicBodies(false)` for that player's
+  compute — no push-down → no bob. While MOVING, impulses stay ON so walking into a prop
+  still shoves it (the prop-vs-disguise TELL is preserved). Toggled per-player right
+  before its `computeColliderMovement` (the controller is shared but used serially);
+  method-guarded. Simpler than tracking which body is underfoot, and can only ADD
+  stability (never introduces instability).
+- **Invariant lock (headless-verifiable) — `tools/check-physics-feel.mjs`** (NEW,
+  authoring-only, never shipped/imported, like `measure-glbs.mjs`). Runs the SAME
+  `resolveFeel()` both sims use, asserts host==client derivation, that empty config
+  degrades to rigid defaults, and range-checks the dials (restitution 0, iterations
+  8..16, damping 0.2..0.8). Feel can't be tested headless; config PARITY between the two
+  sims can — a future mismatch fails this check instead of desyncing a match. Run:
+  `node tools/check-physics-feel.mjs`.
+- **Files:** `shared/config/physics-feel.json` (new), `js/config.js`,
+  `shared/physics.js` (`resolveFeel` + integration params + restitution/damping/anti-bob
+  wiring), `shared/referee.js` (`this.feel` → opts), `js/main.js` (feel → predict world),
+  `tools/check-physics-feel.mjs` (new).
+- **STILL NEEDS A LIVE FEEL-TEST (Jie):** do props now stop sinking / resolve rigidly;
+  is the standing-on-a-crate bob gone; do shoved props settle without wobble; does a real
+  shove still read as a tell. Bring a PHONE — if the host phone drops below 60fps with
+  12 solver iterations, lower `numSolverIterations` first.
+
+---
+
 ## 2026-07-10 PLAYTEST FIX PASS (on `main`) — anti-tunnel, failsafe, static flags
 Post-merge punch-list fixes (VRmike+Jie). Structural-verified; feel owed a playtest.
 
