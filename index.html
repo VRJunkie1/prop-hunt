@@ -84,6 +84,12 @@
       <div id="clickToPlay" class="overlay hidden">Click to play</div>
     </div>
 
+    <!-- Dev-only Map Editor launcher (desktop, host/solo only). Hidden by default;
+         main.js reveals it when the level editor is enterable (never mid-multiplayer,
+         never on touch). Clicking it opens the editor with the help panel shown. The
+         Ctrl+E hotkey still works independently. -->
+    <button id="editBtn" class="dev-btn hidden" type="button">🛠 Map Editor (dev use only)</button>
+
     <script type="module" src="/js/main.js"></script>
   </body>
 </html>

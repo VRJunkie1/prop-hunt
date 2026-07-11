@@ -124,6 +124,7 @@ export class Referee {
     player.disguise = null;
     player.input = { mx: 0, mz: 0, jump: false };
     player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
+    player.spawn = { x: player.pos.x, z: player.pos.z }; // fall-through failsafe target (fix #4)
     player.dispYaw = player.yaw;
     // If the world's physics is already up, give the newcomer a body immediately
     // (otherwise integrate() adds it on the next tick via the join-race guard).
@@ -355,6 +356,9 @@ export class Referee {
         const s = map.spawns[spawnIdx++ % map.spawns.length];
         player.pos = { x: s.x, y: 0, z: s.z };
       }
+      // Remember this player's spawn so the fall-through failsafe can send them back
+      // here if they slip below the floor (fix #4).
+      player.spawn = { x: player.pos.x, z: player.pos.z };
       send(player, { t: S2C.ROLE, role: player.role });
     });
 
@@ -512,6 +516,27 @@ export class Referee {
           const l = this.propLive.get(q.id);
           if (l) { l.x = q.x; l.z = q.z; }
         }
+      }
+
+      // FALL-THROUGH FAILSAFE (fix #4): a cheap ~0.5 s sweep, host-authoritative. If a
+      // player's capsule is ENTIRELY below the floor (capsule top < floor top - 2)
+      // they've slipped through a seam — teleport them back to spawn at ground height
+      // with motion zeroed. Any dynamic prop that fell below the world respawns at its
+      // map position. Runs ONLY here in the host's referee tick; the correction lands
+      // on every client through the normal per-tick snapshot (never a client teleport).
+      const now = Date.now();
+      if (now - (this._lastFailsafe || 0) >= 500) {
+        this._lastFailsafe = now;
+        const floorTop = 0; // every map's ground/floor surface sits at y=0
+        const capsuleH = 2 * ((this.rules.playerRadius || 0.4) + (this.rules.playerHalfHeight || 0.5));
+        for (const p of this.players.values()) {
+          if (!p.alive || !p.spawn) continue;
+          if ((p.pos.y || 0) + capsuleH < floorTop - 2) {
+            p.pos = { x: p.spawn.x, y: 0, z: p.spawn.z };
+            this.physics.setPlayerPosition(p.id, p.pos);
+          }
+        }
+        this.physics.respawnEscaped(floorTop - 2);
       }
       return;
     }

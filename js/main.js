@@ -287,6 +287,9 @@ function handleGameMessage(msg) {
       else ui.menuError(msg.msg);
       break;
   }
+  // Connection/phase transitions change whether the editor is enterable (e.g. a guest
+  // joins → host now has guests → hide the button). Refresh after every game message.
+  updateEditorButton();
 }
 
 // Connection status (not gameplay) — surfaced to the UI.
@@ -302,6 +305,7 @@ function handleStatus(kind, detail) {
   } else if (kind === 'closed') {
     backToMenu(detail || 'Disconnected.');
   }
+  updateEditorButton(); // a link forming/closing can change editor availability
 }
 
 // Return to the landing screen and arm a fresh Session so the player can start
@@ -321,6 +325,7 @@ function backToMenu(msg) {
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
+  updateEditorButton(); // back on the landing screen (solo) → editor available again
 }
 
 // Reset the lobby ready toggle to its default. The referee clears server-side
@@ -624,7 +629,7 @@ function currentScreen() {
   return 'menu';
 }
 
-async function enterEditor() {
+async function enterEditor(forceHelp) {
   if (state.editing || state._enteringEditor || !state.cfg) return; // busy / not ready
   if (!canEnterEditor()) {
     ui.feed('Level editor is available only in solo/local play — not during a multiplayer match.');
@@ -632,13 +637,13 @@ async function enterEditor() {
   }
   state._enteringEditor = true; // guard the async gap (import + build) against double-enter
   try {
-    await _enterEditorInner();
+    await _enterEditorInner(forceHelp);
   } finally {
     state._enteringEditor = false;
   }
 }
 
-async function _enterEditorInner() {
+async function _enterEditorInner(forceHelp) {
   // ensureScene() guarantees the single WebGLRenderer exists (the editor renders its
   // own scene through it). Cheap no-op if a match already built the scene.
   const s = await ensureScene();
@@ -660,7 +665,12 @@ async function _enterEditorInner() {
   ui.el.hud.classList.add('hidden');
   ui.el.crosshair.classList.add('hidden');
   await editor.enter(id, map);
+  // Opened from the on-screen dev button → always show the help/instructions panel
+  // (controls + how to export edits back to DevBot). Ctrl+E keeps its first-open-only
+  // auto-show inside editor.enter().
+  if (forceHelp && editor.showHelp) editor.showHelp();
   state.editing = true;
+  updateEditorButton();
 }
 
 function exitEditor() {
@@ -671,6 +681,19 @@ function exitEditor() {
   // underlying solo match, so returning to 'game' simply resumes it.
   ui.show(state.editorPrevScreen || 'menu');
   if (state.editorPrevScreen === 'game') ui.setClickToPlay(!input.locked);
+  updateEditorButton();
+}
+
+// Show the "Map Editor (dev use only)" button only when the editor is actually
+// enterable: desktop, config loaded, not already editing, and solo/local play
+// (canEnterEditor gates out touch, guests, and a host with guests). Called on every
+// screen/connection transition so it appears in the menu + solo lobby/match and
+// disappears the moment someone joins.
+function updateEditorButton() {
+  const btn = document.getElementById('editBtn');
+  if (!btn) return;
+  const show = !!state.cfg && !input.touch && !state.editing && canEnterEditor();
+  btn.classList.toggle('hidden', !show);
 }
 
 // ---- menu wiring ----------------------------------------------------------
@@ -693,6 +716,10 @@ function wireMenu() {
     ui.el.readyBtn.textContent = ui.el.readyBtn._ready ? 'Not ready' : 'Ready';
   });
   ui.el.startBtn.addEventListener('click', () => session.send({ t: C2S.START }));
+  // Dev-only Map Editor launcher (desktop, host/solo). Opens the editor WITH the help
+  // panel; visibility is managed by updateEditorButton() on every state transition.
+  const editBtn = document.getElementById('editBtn');
+  if (editBtn) editBtn.addEventListener('click', () => enterEditor(true));
   // Map picker: the UI renders the list from the shared maps catalog and, when the
   // host taps a map, hands the choice back here to send as a C2S.PICK_MAP. The
   // referee is the gate (host-only, LOBBY-only, real map); we just relay the tap.
@@ -735,6 +762,7 @@ function newSession() {
   state.cfg = await loadConfig();
   newSession();
   wireMenu();
+  updateEditorButton(); // show the dev editor button on the landing screen (desktop solo)
   startInputLoop();
   requestAnimationFrame(frame);
   tryJoinFromHash();

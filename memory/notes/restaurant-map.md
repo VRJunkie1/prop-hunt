@@ -1,5 +1,25 @@
 # Restaurant map + the static/dynamic (fixtures vs props) split
 
+## 2026-07-10 PLAYTEST FIX PASS (on `main`) — jars, divider wall, static flags
+- **Static flags:** `fixtures.json` on `main` had lost all `static`/`decor` flags
+  (merge regression), so everything was dynamic. Re-added `"static": true` to the
+  built-ins only; all tables + tabletop clutter stay dynamic. See `notes/physics.md`.
+- **Jars → canisters (fix #2):** the three `jars` placements (one on the back counter,
+  two on the divider edge at x=±11) used `jars.glb`, a merged multi-jar cluster with a
+  single 0.6³ box collider — it read as one floating/vibrating object. Replaced each
+  with a row of 3 individual `canister` fixtures (primitive cylinder r0.16×h0.5, no
+  model, dynamic/knockable, non-disguisable), 9 total. `jars` catalog entry removed;
+  `jars.glb` is now unreferenced (inert on disk).
+- **Divider service-window wall (fix #7):** the kitchen/dining divider was only a
+  waist-high counter line. No wall-with-window GLB exists (modular_walls is an unusable
+  multi-panel kit), so the wall is built from plain static boxes at true height: the
+  existing divider counters (z=−4.5) are the window SILLS, new `wall_post` verticals
+  (0.36×2.8×0.4, z=−5.0) frame the bays, `wall_header` lintels (3.7×0.55×0.4, base
+  y2.1, z=−5.0) close the tops → open SERVICE WINDOWS facing +z (dining), between the
+  0.75 sill top and the 2.1 header base. The two existing walkway gaps (x≈−7.5, +7.5)
+  are kept clear; `pillar_b` at x=0 doubles as the centre post. Hand-set sizes,
+  eyeball-check owed in the playtest (post/header spacing, whether the wall reads right).
+
 ## THIRD PASS — bounding-box normalization / measured scales (2026-07-10, vrmike)
 Stops guessing per-object scale. Every restaurant GLB is now sized from its MEASURED
 native bounding box instead of a hand-tuned `modelSize`. Prereq for the physics build

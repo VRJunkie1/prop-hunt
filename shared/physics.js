@@ -138,19 +138,28 @@ export class PhysicsWorld {
     const R = this.R;
     const half = map.size / 2;
 
-    // Ground: a thin fixed slab whose top face sits at y=0.
+    // Ground: a thick fixed slab whose TOP face sits exactly at y=0. Extended well
+    // DOWNWARD (3 m thick, top unchanged) so a fast/falling body can't punch through
+    // the floor between substeps (fix #5). Render is unaffected (the visible ground
+    // is a separate flat plane at y=0).
     this.world.createCollider(
-      R.ColliderDesc.cuboid(half + 2, 0.5, half + 2).setTranslation(0, -0.5, 0).setFriction(0.9)
+      R.ColliderDesc.cuboid(half + 2, 1.5, half + 2).setTranslation(0, -1.5, 0).setFriction(0.9)
     );
 
-    // Boundary walls (match the renderer's enclosing box: 3 tall, centred at 1.5).
-    const t = 0.5; // wall thickness
-    const wallY = 1.5;
+    // Boundary walls. Thickened to ~1.5 m and EXTENDED OUTWARD (the inner, arena-
+    // facing face stays exactly where it was) and taller (5 m, base at y=0) so a
+    // high-speed run into a wall can't tunnel and nobody flies over (fix #5). The
+    // render meshes (scene.js enclosing box) are untouched.
+    const wallInset = 0.5; // inner collider face sits this far inside the map edge (unchanged)
+    const wallTZ = 0.75; // half-thickness -> 1.5 m thick
+    const wallHY = 2.5; // half-height -> 5 m tall
+    const cOut = half - wallInset + wallTZ; // centre distance from origin (pushed OUTWARD)
+    const along = half + wallTZ; // long-axis half-extent (covers the corners)
     const walls = [
-      [0, wallY, -half, half + t, 1.5, t],
-      [0, wallY, half, half + t, 1.5, t],
-      [-half, wallY, 0, t, 1.5, half + t],
-      [half, wallY, 0, t, 1.5, half + t],
+      [0, wallHY, -cOut, along, wallHY, wallTZ],
+      [0, wallHY, cOut, along, wallHY, wallTZ],
+      [-cOut, wallHY, 0, wallTZ, wallHY, along],
+      [cOut, wallHY, 0, wallTZ, wallHY, along],
     ];
     for (const [x, y, z, hx, hy, hz] of walls) {
       this.world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z));
@@ -158,14 +167,27 @@ export class PhysicsWorld {
 
     // Static fixtures — ONLY the genuinely bolted-in pieces (`static`). Knockable
     // fixtures are promoted into the dynamic prop stream by the referee (fix #2), so
-    // they're not built here. `decor` pieces (tiny garnish) are visual-only: NO
-    // collider — otherwise, once a dynamic table is knocked away, their fixed
-    // colliders would linger as invisible floating obstacles. Cheap: fixed colliders
-    // don't simulate.
+    // they're not built here. Cheap: fixed colliders don't simulate.
     for (const f of map.fixtures || []) {
       const c = catalog[f.type];
       if (!c || !c.static) continue;
       const { desc, halfH } = shapeFor(R, c);
+      if (c.floor) {
+        // FLOOR PIECE (fix #5): grow the collider to ~1 m thick, extended DOWNWARD so
+        // its visible TOP surface stays at exactly the same height (top = 2*halfH +
+        // f.y). Height grows AND the centre drops by half the added depth. The render
+        // mesh keeps its thin look; only the physics shell thickens.
+        const top = 2 * halfH + (f.y || 0);
+        const thick = Math.max(1.0, 2 * halfH);
+        const hx = halfExtentXZ(c, 'w');
+        const hz = halfExtentXZ(c, 'd');
+        const fc = R.ColliderDesc.cuboid(hx, thick / 2, hz)
+          .setTranslation(f.x, top - thick / 2, f.z)
+          .setFriction(0.9);
+        if (f.rot) fc.setRotation(yawQuat(f.rot));
+        this.world.createCollider(fc);
+        continue;
+      }
       desc.setTranslation(f.x, halfH + (f.y || 0), f.z);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
       this.world.createCollider(desc);
@@ -201,15 +223,25 @@ export class PhysicsWorld {
       if (this.dynamicProps && dynCount < cap) {
         // Host: a real rigid body that can be knocked around and settles to sleep.
         // Spawn a hair above rest (SPAWN_EPS) so nothing starts interpenetrating.
+        const spawnY = moved ? cy : cy + SPAWN_EPS;
+        const spawnQ = moved
+          ? { x: p.qx, y: p.qy, z: p.qz, w: p.qw }
+          : p.rot
+            ? yawQuat(p.rot)
+            : { x: 0, y: 0, z: 0, w: 1 };
         const bodyDesc = R.RigidBodyDesc.dynamic()
-          .setTranslation(p.x, moved ? cy : cy + SPAWN_EPS, p.z)
+          .setTranslation(p.x, spawnY, p.z)
+          .setRotation(spawnQ)
           .setLinearDamping(0.5)
           .setAngularDamping(0.7);
-        if (moved) bodyDesc.setRotation({ x: p.qx, y: p.qy, z: p.qz, w: p.qw });
-        else if (p.rot) bodyDesc.setRotation(yawQuat(p.rot));
+        // CCD (fix #6): a shoved prop can move fast enough in one substep to skip
+        // through a thin collider — swept detection closes that hole. Method-guarded.
+        if (bodyDesc.setCcdEnabled) bodyDesc.setCcdEnabled(true);
         const body = this.world.createRigidBody(bodyDesc);
         this.world.createCollider(desc.setFriction(0.8).setRestitution(0.0).setDensity(dens), body);
-        this.propBodies.push({ id: p.id, body });
+        // Keep the spawn transform so the failsafe can respawn a prop that escapes the
+        // world below the floor (fix #4). See respawnEscaped.
+        this.propBodies.push({ id: p.id, body, spawn: { x: p.x, y: spawnY, z: p.z, q: spawnQ } });
         dynCount++;
       } else {
         // Fixed obstacle. Three cases land here:
@@ -261,6 +293,11 @@ export class PhysicsWorld {
     const body = this.world.createRigidBody(
       R.RigidBodyDesc.kinematicPositionBased().setTranslation(spawn.x, this._pCenterY + (spawn.y || 0), spawn.z)
     );
+    // CCD (fix #6): enable continuous collision detection on the character capsule so
+    // high-speed motion (a hard fall, a fast run at a thin wall) is swept rather than
+    // sampled — it can't tunnel through a collider between substeps. Method-guarded so
+    // an older Rapier build can't throw here.
+    if (body.enableCcd) body.enableCcd(true);
     // Slightly smaller collider than the visual capsule so it slips through gaps a
     // touch more forgivingly and never wedges on its own body offset.
     const collider = this.world.createCollider(R.ColliderDesc.capsule(this._pHalf, this._pRadius), body);
@@ -401,6 +438,26 @@ export class PhysicsWorld {
     return out;
   }
 
+  // FALL-THROUGH FAILSAFE for props (fix #4). Any dynamic prop whose body centre has
+  // dropped below `minY` (it escaped the world through a seam) is teleported back to
+  // its spawn transform with all velocity zeroed, so a lost chair reappears where it
+  // belongs instead of falling forever. Host only (guests have no dynamic bodies).
+  // Returns the number respawned (for logging). Cheap: one translation read per prop.
+  respawnEscaped(minY) {
+    let n = 0;
+    for (const pb of this.propBodies) {
+      const t = pb.body.translation();
+      if (t.y >= minY) continue;
+      const s = pb.spawn;
+      pb.body.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
+      pb.body.setRotation(s.q, true);
+      pb.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      pb.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      n++;
+    }
+    return n;
+  }
+
   destroy() {
     try {
       this.world.free();
@@ -415,4 +472,13 @@ export class PhysicsWorld {
 // Quaternion for a yaw (rotation about +Y).
 function yawQuat(yaw) {
   return { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
+}
+
+// X or Z half-extent of a catalog entry's footprint, measured bounds first, else the
+// primitive w/d. Used to size a thickened floor collider (fix #5) without reaching
+// into shapeFor's opaque ColliderDesc.
+function halfExtentXZ(c, axis) {
+  const m = c.measured;
+  if (m && m.w > 0 && m.d > 0) return (axis === 'w' ? m.w : m.d) / 2;
+  return ((axis === 'w' ? c.w : c.d) || 1) / 2;
 }

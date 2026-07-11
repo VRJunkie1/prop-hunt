@@ -1,5 +1,16 @@
 # Level editor (in-game, debug mode)
 
+## 2026-07-10 — on-screen launcher button added (fix #3)
+The editor was previously reachable only via Ctrl+E; the on-screen button had gone
+missing on PC. Added `#editBtn` ("🛠 Map Editor (dev use only)", index.html) styled by
+`.dev-btn` (css/style.css, fixed bottom-left). `main.js` `updateEditorButton()` toggles
+it visible on **desktop host/solo only** (reuses `canEnterEditor` → hidden on touch, as
+a guest, or as a host with guests) and refreshes on every screen/connection transition.
+Clicking calls `enterEditor(true)`, and the `true` forces the help/instructions panel
+open via a new public `editor.showHelp()` — so a dev opening it from the button always
+sees the controls + how-to-export note. Ctrl+E is unchanged (keeps its first-open-only
+auto-help). `js/editor.js` is genuinely reachable (main.js lazy-imports it on enter).
+
 A desktop-only debug tool baked into the client: press **Ctrl+E** to walk around
 inside a map and fix fixture/prop placement, rotation and scale by eye, then export
 the result back to `maps.json`. Built 2026-07-10. Files: `js/editor.js` (new, the whole

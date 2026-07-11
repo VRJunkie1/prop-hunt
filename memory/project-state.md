@@ -8,6 +8,63 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Status: POLISH/FIX PASS on `main` — 7-item playtest punch list (2026-07-10, VRmike+Jie). Structural-verified; physics FEEL + button VISUALS still owed a live playtest.
+
+Post-merge fix pass on `main` from a VRmike+Jie playtest. All seven landed; the
+headless caveat holds (items about physics feel / button visuals can't be eye-tested
+here). Per-item:
+
+1. **Tabletop clutter dynamic / built-ins static — ROOT CAUSE FOUND.** `fixtures.json`
+   had **no `static`/`decor` flags at all** on `main` (a merge dropped them), so
+   `isStaticEntry()` returned false for EVERYTHING → floors, walls, pillars, doors,
+   appliances were all becoming DYNAMIC rigid bodies (biggest-first, so the floor/walls
+   won the dynamic-cap budget and the room collapsed; tables sank into the jittering
+   floor tiles). Fix: re-added `"static": true` to the genuine built-ins ONLY (floor,
+   walls, pillars, door, the new divider wall, oven/stove(s)/fridge/cabinets/extractor
+   hood/counters/sinks/shelf). Everything else — **all tables** (dining + prep + bar),
+   dishrack, every plate/bowl/pot/pan/lid/dish/food/condiment/canister — is left
+   UNFLAGGED = dynamic/knockable. The now-dynamic tables settle on a SOLID static floor
+   with their clutter instead of fighting it. Files: `shared/config/fixtures.json`.
+2. **Jar/cannister rows split.** `jars.glb` is a merged multi-jar cluster with ONE box
+   collider (the float/vibrate tell — mesh wider than its single box, one dynamic body).
+   No single-jar GLB exists and a baked GLB can't be decomposed here, so per the plan's
+   fallback each `jars` placement was replaced with a ROW of individual `canister`
+   bodies (primitive cylinders, r0.16×h0.5), each its own dynamic rigid body + matching
+   collider. 3 spots × 3 canisters = 9. `jars` catalog entry removed; `jars.glb` now
+   inert on disk. Files: `fixtures.json`, `maps.json`.
+3. **Dev Map Editor button on PC.** Added `#editBtn` "🛠 Map Editor (dev use only)"
+   (index.html) + `.dev-btn` CSS; `main.js` `updateEditorButton()` shows it on desktop
+   host/solo (never touch, guest, or host-with-guests — reuses `canEnterEditor`) and
+   refreshes on every transition. Click → `enterEditor(true)` which forces the help
+   panel open (new public `editor.showHelp()`); Ctrl+E keeps its first-open-only
+   auto-help. Editor is reachable (main.js already lazy-imports `js/editor.js`).
+4. **Fall-through failsafe** (host referee, `integrate` physics branch, ~0.5 s throttle):
+   any live player whose capsule top < floorTop(0) − 2 → teleported to their stored
+   `player.spawn` at y0, velocity zeroed (via `physics.setPlayerPosition`); any dynamic
+   prop below y=−2 → `physics.respawnEscaped()` sends it back to its spawn transform,
+   velocities zeroed. Host-authoritative only; correction rides the normal snapshot (no
+   client teleport). Files: `shared/referee.js`, `shared/physics.js`.
+5. **Thick floors + outer walls** (`physics.js` `_buildStatic`): ground slab → 3 m thick
+   extended DOWN (top still y=0); boundary walls → 1.5 m thick pushed OUTWARD (inner
+   face unchanged) + 5 m tall (base y0, can't be jumped/flown over); floor fixtures
+   flagged `"floor": true` get a ≥1 m collider extended DOWNWARD with the visible top
+   held flush (top = 2·halfH + y). Render meshes untouched.
+6. **CCD** enabled on the player capsule (`body.enableCcd(true)`) and on dynamic prop
+   bodies (`setCcdEnabled(true)`), both method-guarded. `physics.js`.
+7. **Kitchen divider service-window wall** (`fixtures.json` + `maps.json`): no wall-with-
+   window GLB exists (modular_walls is an unusable multi-panel kit), so per the approved
+   plan it's built from plain static boxes at true height (~2.8 u): the existing divider
+   COUNTERS are the waist-high window sills, new `wall_post` verticals frame the bays,
+   `wall_header` lintels (base y2.1) close the tops → open service windows facing +z
+   (dining), with the two existing walkway gaps (x≈±7.5) kept clear.
+
+**HEADLESS CAVEAT (unchanged rule):** items 1/2/5/7 are verified STRUCTURALLY (right
+flags, right sizes, tops flush, wall geometry in the data) — NOT by eye. Physics FEEL
+(tables settling, jars behaving, no residual jitter), the divider wall LOOK, and the dev
+button's on-screen placement need the live playtest. A small follow-up nudge on wall
+placement or table/jar behaviour is a realistic outcome. Detail in
+`memory/notes/{physics,restaurant-map,level-editor}.md`.
+
 ## Status: IN-GAME LEVEL EDITOR (debug mode) COMPLETE + COMMITTED (attempt 3, 2026-07-10, vrmike). Desktop-only, not live-tested (headless).
 
 ## Status: PHYSICS FIX PASS — controller + knockable world + calm start (2026-07-10, on `physics-net`). NOT feel-tested.

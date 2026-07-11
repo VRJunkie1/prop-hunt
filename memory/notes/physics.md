@@ -3,6 +3,39 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-10 PLAYTEST FIX PASS (on `main`) — anti-tunnel, failsafe, static flags
+Post-merge punch-list fixes (VRmike+Jie). Structural-verified; feel owed a playtest.
+
+- **STATIC FLAGS WERE MISSING on `main` (the real fix #1).** `fixtures.json` shipped
+  with NO `static`/`decor` flags, so `isStaticEntry()` was false for every fixture →
+  the referee promoted floors/walls/pillars/doors/appliances into the DYNAMIC prop
+  stream (biggest-first, so they claimed the cap and the room collapsed; tables sank
+  into jittering dynamic floor tiles). Re-added `"static": true` to the genuine
+  built-ins ONLY: `floor_kitchen`, `kitchen_wall`, `pillar`/`pillar_b`, `door`,
+  `wall_post`/`wall_header` (new divider), `oven`, `stove`/`stove_plain`/`stove_single`,
+  `fridge`, `cabinet`/`cabinet_corner`, `extractor`, `counter`, `prep_sink`/`table_sink`,
+  `shelf`. Everything else stays unflagged = dynamic: **all tables** (round/kitchen/
+  table_food/large/small), dishrack, and every plate/bowl/pot/pan/lid/dish/food/
+  condiment/canister. `isStaticEntry` (`c.static || c.decor`) is unchanged — only the
+  DATA was missing.
+- **Thick floors + outer walls (fix #5, `_buildStatic`).** Ground slab is now 3 m thick
+  extended DOWN (top still y=0). Boundary walls are 1.5 m thick pushed OUTWARD (inner
+  arena-facing face unchanged, so player collision is identical) and 5 m tall (base y0,
+  no jump/fly-over). Fixtures flagged `"floor": true` get a ≥1 m collider extended
+  DOWNWARD, visible top held flush (top = 2·halfH + f.y → centre drops by half the
+  added depth). `halfExtentXZ()` helper reads the floor's w/d. Render meshes untouched.
+- **CCD (fix #6).** `body.enableCcd(true)` on the kinematic character capsule (swept vs
+  tunneled) and `RigidBodyDesc.setCcdEnabled(true)` on dynamic prop bodies. Both
+  method-guarded so an older Rapier build can't throw.
+- **Fall-through failsafe (fix #4).** `PhysicsWorld.respawnEscaped(minY)` teleports any
+  dynamic prop whose centre fell below `minY` back to a stored spawn transform
+  (`propBodies[].spawn = {x,y,z,q}`), velocities zeroed. The player half lives in the
+  referee (host-authoritative, ~0.5 s throttle) using `setPlayerPosition`. See
+  `referee.js` integrate + notes.
+
+---
+(Everything below documents the earlier passes and is still current.)
+
 ## 2026-07-10 FIX PASS (physics-net) — controller, knockable world, calm start
 Playtest-driven fixes. All in `shared/physics.js` + `shared/referee.js` + the two
 readers (`js/scene.js`, `js/main.js`) + catalog flags (`shared/config/*`).

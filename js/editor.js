@@ -798,6 +798,14 @@ export class Editor {
     card.querySelector('#edHelpClose').addEventListener('click', () => this._hideHelp());
   }
 
+  // Public: force the help/instructions panel open. Used when the editor is opened
+  // from the on-screen "Map Editor (dev use only)" button so a first-time dev always
+  // sees the controls + how-to-save note, regardless of the first-open localStorage
+  // flag (which only governs the automatic Ctrl+E auto-show).
+  showHelp() {
+    this._showHelp();
+  }
+
   _showHelp() {
     if (this._helpEl) this._helpEl.classList.remove('hidden');
   }

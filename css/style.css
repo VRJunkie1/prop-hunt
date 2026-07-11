@@ -441,3 +441,25 @@ button.ghost:hover { background: #3d2a66; }
 .ed-help-list b { color: #ffef6b; font-weight: bold; }
 .ed-help-actions { margin-top: 18px; text-align: right; }
 .ed-help-actions .ed-btn { pointer-events: auto; }
+
+/* Dev-only Map Editor launcher (fix #3). Small, unobtrusive, bottom-left corner, on
+   top of whatever screen is showing. main.js toggles .hidden based on whether the
+   editor is enterable (host/solo desktop only). */
+.dev-btn {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 60;
+  padding: 7px 12px;
+  border: 1px solid #ffffff33;
+  border-radius: 8px;
+  background: #000000aa;
+  color: #e9dcff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.75;
+  pointer-events: auto;
+}
+.dev-btn:hover { opacity: 1; background: #1a1030dd; }
+.dev-btn.hidden { display: none; }
