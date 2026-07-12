@@ -594,3 +594,83 @@ button.ghost:hover { background: #3d2a66; }
 .spectate.hidden { display: none; }
 .spectate-title { font-size: 34px; font-weight: 800; color: #ff6b6b; text-shadow: 0 0 8px #000; }
 .spectate-sub { font-size: 16px; color: #e9dcffcc; text-shadow: 0 0 6px #000; }
+
+/* PAUSE MENU (Escape / ☰). The ☰ button sits top-right in-game; the overlay is a menu
+   (NOT a real pause — the world runs on the host) with a live scoreboard + controls. */
+.pause-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #12081fdd;
+  color: #f0e6ff;
+  font: bold 18px/1 monospace;
+  box-shadow: 0 2px 8px #0008;
+  cursor: pointer;
+  z-index: 44;
+  pointer-events: auto;
+}
+.pause-btn:active { transform: scale(.96); }
+.pause-menu {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50; /* above the HUD / toolbar / overlays */
+  background: #060010cc;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  pointer-events: auto;
+}
+.pause-menu.hidden { display: none; }
+.pause-card {
+  width: min(94vw, 420px);
+  max-height: 88dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #170b28f2;
+  border: 1px solid #ff2fd055;
+  border-radius: 14px;
+  padding: 16px 16px 18px;
+  box-shadow: 0 8px 28px #000a;
+  text-align: center;
+}
+.pause-card h2 { margin: 0 0 2px; letter-spacing: 3px; color: #ff8ae8; }
+.pause-sub { margin: 0 0 10px; font-size: 12px; color: #b9a9dd; }
+.pause-sec-label {
+  margin: 10px 0 4px;
+  font: bold 11px/1 monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #ff8ae8;
+  text-align: left;
+}
+.pause-scores { list-style: none; margin: 0; padding: 0; text-align: left; }
+.pause-scores li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 6px;
+  border-bottom: 1px solid #ffffff12;
+  font-size: 13px;
+}
+.pause-scores .ps-name { color: #ece3ff; word-break: break-word; }
+.pause-scores .ps-name.ps-dead { opacity: .5; text-decoration: line-through; }
+.pause-scores .ps-hp { color: #7be38b; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pause-scores .ps-hp.crit { color: #ff6b6b; }
+.pause-scores .ps-empty { justify-content: center; color: #9a86c4; }
+.pause-help { text-align: left; }
+.pause-help.hidden { display: none; }
+.pause-help-body { display: flex; flex-direction: column; gap: 2px; }
+.pause-help-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 2px 4px; }
+.pause-help-row b { color: #8ad9ff; font-weight: 600; }
+.pause-help-row span { color: #ded2ff; text-align: right; }
+.pause-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.pause-btns button { flex: 1 1 auto; min-height: 40px; }
+.pause-btns .warn { background: #4a1b2a; color: #ff9ab0; }

@@ -31,7 +31,22 @@ export class UI {
       clickToPlay: $('clickToPlay'),
       blindfold: $('blindfold'),
       blindfoldTimer: $('blindfoldTimer'),
+      pauseBtn: $('pauseBtn'),
+      pauseMenu: $('pauseMenu'),
+      pauseScores: $('pauseScores'),
+      pauseResume: $('pauseResume'),
+      pauseHelp: $('pauseHelp'),
+      pauseExit: $('pauseExit'),
+      pauseHelpPanel: $('pauseHelpPanel'),
+      pauseHelpBody: $('pauseHelpBody'),
     };
+    // Pause-menu callbacks, injected by main.js (no game logic in the UI). Resume re-locks
+    // the pointer / dismisses the menu; Exit leaves the match.
+    this.onPauseResume = () => {};
+    this.onPauseExit = () => {};
+    if (this.el.pauseResume) this.el.pauseResume.addEventListener('click', () => this.onPauseResume());
+    if (this.el.pauseExit) this.el.pauseExit.addEventListener('click', () => this.onPauseExit());
+    if (this.el.pauseHelp) this.el.pauseHelp.addEventListener('click', () => this._togglePauseHelp());
     // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
     // main.js injects the real handler (selectTool). No game logic lives in the UI.
     this.onSelectTool = () => {};
@@ -250,6 +265,88 @@ export class UI {
       this.el.blindfoldTimer.textContent = Math.max(0, Math.ceil(seconds));
     }
     this.el.blindfold.classList.toggle('hidden', !blind);
+  }
+
+  // ---- pause menu (Escape / ☰) ----------------------------------------------
+  // A menu OVERLAY, not a real pause — the world runs on the host. Shows a live scoreboard
+  // (everyone + health), a controls/help panel, Resume, and Exit. main.js drives visibility
+  // and feeds the roster from each snapshot while it's open.
+  showPause(players, selfId) {
+    this.updatePauseScoreboard(players, selfId);
+    if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden'); // help starts collapsed
+    if (this.el.pauseMenu) this.el.pauseMenu.classList.remove('hidden');
+  }
+
+  hidePause() {
+    if (this.el.pauseMenu) this.el.pauseMenu.classList.add('hidden');
+    if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden');
+  }
+
+  // Rebuild the scoreboard rows: every player with their role/disguise + current health.
+  updatePauseScoreboard(players, selfId) {
+    const list = this.el.pauseScores;
+    if (!list) return;
+    list.innerHTML = '';
+    for (const p of players || []) {
+      const li = document.createElement('li');
+      const who = document.createElement('span');
+      who.className = 'ps-name';
+      const roleTxt = p.disguise ? `prop · ${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+      who.textContent = `${p.name || (p.id || '').slice(0, 4)}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
+      if (!p.alive) who.classList.add('ps-dead');
+      const hp = document.createElement('span');
+      hp.className = 'ps-hp';
+      const v = Math.max(0, Math.round(p.health == null ? 100 : p.health));
+      hp.textContent = p.alive ? `❤ ${v}%` : '☠ dead';
+      if (p.alive && v <= 25) hp.classList.add('crit');
+      li.append(who, hp);
+      list.appendChild(li);
+    }
+    if (!list.childElementCount) list.appendChild(this._li('No players.'));
+  }
+
+  _li(text) {
+    const li = document.createElement('li');
+    li.className = 'ps-empty';
+    li.textContent = text;
+    return li;
+  }
+
+  _togglePauseHelp() {
+    const panel = this.el.pauseHelpPanel;
+    if (!panel) return;
+    if (panel.classList.contains('hidden')) {
+      if (this.el.pauseHelpBody) this.el.pauseHelpBody.innerHTML = this._controlsHtml();
+      panel.classList.remove('hidden');
+    } else {
+      panel.classList.add('hidden');
+    }
+  }
+
+  _controlsHtml() {
+    const touch = (typeof window !== 'undefined' && 'ontouchstart' in window) ||
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+    const rows = touch
+      ? [
+          ['Left joystick', 'Move'],
+          ['Drag (right side)', 'Look'],
+          ['ACTION (hold)', 'Hunter: fire the rifle · Prop: disguise as what you aim at'],
+          ['JUMP', 'Jump'],
+          ['ROTATE (hold)', 'Turn a disguise'],
+          ['☰', 'This menu'],
+        ]
+      : [
+          ['WASD / Arrows', 'Move'],
+          ['Mouse', 'Look (click the view to capture the mouse)'],
+          ['Left-click (hold)', 'Hunter: rapid-fire the rifle · Prop: disguise as what you aim at'],
+          ['Right-click (hold)', 'Turn a disguise'],
+          ['Space', 'Jump'],
+          ['E', 'Disguise (prop)'],
+          ['1 / 2', 'Pick hunter tool'],
+          ['V', 'Toggle view'],
+          ['Esc', 'This menu (releases the mouse; Resume re-locks)'],
+        ];
+    return rows.map(([k, v]) => `<div class="pause-help-row"><b>${k}</b><span>${v}</span></div>`).join('');
   }
 
   // Crosshair aim feedback for PROPs. main.js calls this every frame with

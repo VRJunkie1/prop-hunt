@@ -227,6 +227,66 @@ console.log('\nD) win conditions');
 }
 
 // ---------------------------------------------------------------------------
+// E) DAMAGE MULTIPLIER RECOMPUTES ON RE-DISGUISE (the confirmed live bug). A prop that goes
+//    SMALL then re-disguises LARGE must immediately take LARGE-object damage — never keep the
+//    small-object multiplier. This drives the REAL authoritative path (applyDisguise ->
+//    _applyShotDamage) through a small->large re-disguise and asserts the per-hit damage
+//    tracks the CURRENT prop. This is the single behavioural gate for the bug.
+// ---------------------------------------------------------------------------
+console.log('\nE) size multiplier recomputes on re-disguise (small -> large)');
+{
+  const ref = makeRef();
+  ref.phase = PHASE.HUNTING;
+  const hunter = addPlayer(ref, 'H', ROLE.HUNTER);
+  const prop = addPlayer(ref, 'P', ROLE.PROP, { disguise: null, input: {} });
+  // Two disguisable props at the player's position (in range): a tiny burger + a big table.
+  ref.props = [
+    { id: 1, type: 'burger', disguisable: true, x: 0, z: 0 },
+    { id: 2, type: 'kitchen_table', disguisable: true, x: 0, z: 0 },
+  ];
+  ref.propLive = new Map([[1, { x: 0, z: 0 }], [2, { x: 0, z: 0 }]]);
+
+  ref.applyDisguise(prop, 1); // become SMALL
+  ok(prop.disguise === 'burger', 'disguises as the small prop (burger)');
+  const smallMult = multiplierForDisguise(prop.disguise, catalog, dcfg);
+  prop.health = startHealth;
+  ref._applyShotDamage(hunter, { kind: 'player', id: 'P' });
+  const smallDmg = startHealth - prop.health;
+
+  ref.applyDisguise(prop, 2); // RE-disguise LARGE
+  ok(prop.disguise === 'kitchen_table', 're-disguise updates the disguise to the large prop');
+  const largeMult = multiplierForDisguise(prop.disguise, catalog, dcfg);
+  prop.health = startHealth;
+  ref._applyShotDamage(hunter, { kind: 'player', id: 'P' });
+  const largeDmg = startHealth - prop.health;
+
+  ok(largeMult < smallMult, `large prop has a smaller size multiplier than small (${largeMult.toFixed(2)} < ${smallMult.toFixed(2)})`);
+  ok(near(largeDmg, dcfg.base * largeMult),
+    `after re-disguise, per-hit damage matches the CURRENT (large) prop (${largeDmg.toFixed(2)}) — NOT the stale small multiplier`);
+  ok(largeDmg < smallDmg,
+    `re-disguised large prop now takes LESS per hit than it did while small (${largeDmg.toFixed(2)} < ${smallDmg.toFixed(2)}) — no cached multiplier`);
+  // And the referee's own derivation helper agrees (the path applyShot actually uses).
+  ok(near(ref._playerHitDamage(prop), dcfg.base * largeMult), 'referee._playerHitDamage derives fresh from the current disguise');
+  ref.destroy();
+}
+
+// ---------------------------------------------------------------------------
+// F) RAPID-FIRE config: the tunable exists, is in a sane full-auto band, and the host derives
+//    its authoritative rate cap from it (config check per the plan — not a live fire test).
+// ---------------------------------------------------------------------------
+console.log('\nF) rapid-fire config');
+{
+  ok(Number.isFinite(rules.fireRateRpm) && rules.fireRateRpm >= 300 && rules.fireRateRpm <= 1200,
+    `rules.fireRateRpm (${rules.fireRateRpm}) is set and in a sane assault-rifle/SMG range (300-1200)`);
+  const ref = makeRef();
+  const cap = ref._fireCooldownMs();
+  ref.destroy();
+  ok(cap > 0 && cap < 1000, `host derives a fire cooldown from rpm (${cap}ms between shots)`);
+  ok(Math.round(60000 / cap) >= rules.fireRateRpm,
+    `host cap admits at least the configured rate (~${Math.round(60000 / cap)} rpm ceiling >= ${rules.fireRateRpm})`);
+}
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\ncombat check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

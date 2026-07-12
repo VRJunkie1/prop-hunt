@@ -115,9 +115,18 @@ export class DebugMenu {
     const viewBtns = el('div', 'dbg-btns');
     this._bFreeCam = el('button', 'dbg-btn', 'Free cam');
     this._bFocus = el('button', 'dbg-btn', 'Focus box');
+    // Collider view: show ALL bounding boxes / collision meshes for EVERYTHING — props,
+    // players (capsules), static fixtures, and world architecture. Reuses the SAME wireframe
+    // builders + shared collider-size source (shared/bounds.js) the ?debug=1 overlay uses, so
+    // what you see is exactly what the engine builds and the headless guard checks; it just
+    // adds player capsules (not drawn before) and makes it a LIVE build/teardown toggle.
+    this._bColliders = el('button', 'dbg-btn', 'Colliders');
+    this._collidersOn = !!(this.ctx && this.ctx.debugFlag); // ?debug=1 builds the overlay at load
+    this._bColliders.classList.toggle('on', this._collidersOn);
     this._bFreeCam.addEventListener('click', () => this._toggleFreeCam());
     this._bFocus.addEventListener('click', () => this._toggleFocus());
-    viewBtns.append(this._bFreeCam, this._bFocus);
+    this._bColliders.addEventListener('click', () => this._toggleColliders());
+    viewBtns.append(this._bFreeCam, this._bFocus, this._bColliders);
     panel.appendChild(viewBtns);
 
     const morphRow = el('div', 'dbg-btns');
@@ -159,7 +168,11 @@ export class DebugMenu {
     panel.appendChild(this._inspectBody);
 
     document.body.append(toggle, panel);
-    this._collapsed = false;
+    // Start COLLAPSED (2026-07-12, VRmike): only the small DEBUG button shows top-left; the
+    // full panel opens on click. (Nothing else changes — the menu is still on by default.)
+    this._collapsed = true;
+    this._panel.classList.add('hidden');
+    this._toggle.textContent = 'DEBUG ▸';
   }
 
   _kv(parent, label) {
@@ -213,6 +226,16 @@ export class DebugMenu {
     this._focusOn = !this._focusOn;
     scene.setFocusBox(this._focusOn);
     this._bFocus.classList.toggle('on', !!this._focusOn);
+  }
+
+  // Toggle the ALL-colliders wireframe overlay (props / players / fixtures / architecture),
+  // built + torn down live via the SAME scene builders the ?debug=1 overlay uses.
+  _toggleColliders() {
+    const scene = this.ctx.getScene();
+    if (!scene || !scene.setColliderView) { if (this.ctx.ui) this.ctx.ui.feed('Colliders: start a match first.'); return; }
+    this._collidersOn = !this._collidersOn;
+    scene.setColliderView(this._collidersOn);
+    this._bColliders.classList.toggle('on', !!this._collidersOn);
   }
 
   // Reset the local view toggles' button state (main.js already turned the scene flags

@@ -1,5 +1,25 @@
 # Hunter Tools v1 + Health / Damage (2026-07-12, VRmike)
 
+## 2026-07-12 addendum — damage-multiplier PROOF + RAPID FIRE
+
+- **Size-multiplier "bug" — the referee was already correct; proven, not re-patched.** VRmike
+  reported a prop that goes small then re-disguises large keeps the small multiplier and dies
+  fast. Investigation (a probe driving the real `Referee`, plus `git_diff` of the damage commits,
+  plus the client `tryDisguise` path) showed `_applyShotDamage` has ALWAYS derived the multiplier
+  FRESH from `target.disguise` at damage time — there is NO cached per-player multiplier anywhere,
+  and the client allows + sends a re-disguise. The probe confirmed the multiplier updates 10 → 0.34
+  (damage 50 → 1.7) on a small→large re-disguise. Made the guarantee explicit via
+  `referee._playerHitDamage(target)` and LOCKED it with `check-combat.mjs` **section E**
+  (small → re-disguise large → assert per-hit damage matches the LARGE prop, not the stale small
+  one). If it still reproduces live, the deployed build predates this branch or the cause is
+  elsewhere (client not sending the re-disguise) — recommend an instrumented build, not a 2nd
+  blind patch.
+- **RAPID FIRE.** `rules.fireRateRpm` (700, config-tunable). Host cap `referee._fireCooldownMs()`
+  = `max(10, 60000/rpm − 20)` (grace so a legit client isn't throttled below rate; still caps a
+  cheat). Client paces held-fire off the same rpm. Damage/bullet unchanged (5%). See
+  `notes/pause-menu.md` for the input/mouse-lock/pause side.
+
+
 The build that adds an on-screen hunter **tool bar**, an **assault rifle** (muzzle flash +
 tracer visible to everyone), a no-op **prop finder** (proves tool switching), a
 host-authoritative **health/damage** system, and the **all-hunters-dead → props win** round

@@ -1,5 +1,17 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-12 (VRmike) upgrades:** (a) the menu now **starts COLLAPSED** — only the small
+`DEBUG ▸` button shows top-left; the panel opens on click (`_buildDom` sets `_collapsed=true`
+and hides `#dbgPanel`). (b) A new **"Colliders" toggle** (`_toggleColliders`) drives a new
+`scene.setColliderView(on)` that BUILDS/TEARS DOWN the full collider wireframe overlay live —
+props, players (CAPSULES, new geometry sized from the same collider source as physics), static
+fixtures, and world architecture — reusing the exact `shared/bounds.js` source + `_wireBox`/
+`_buildStaticColliderDebug`/`_addPropColliderWire` builders the `?debug=1` load-time overlay
+uses (so "the overlay can't lie" holds). The button seeds ON under `?debug=1` (the overlay is
+already built at load). Guards: `check-debug-menu.mjs` (collapsed default + toggle +
+`setColliderView`/`_addPlayerColliderWire` defined); `check-blindfold.mjs` covers the new
+`scene.setColliderView` seam.
+
 Added 2026-07-11 (requested by Jie). A lightweight in-game developer/debug panel.
 
 **2026-07-12 (VRmike): the MENU is now ON BY DEFAULT — no `?debug=1` needed.** `main.js`

@@ -111,6 +111,31 @@
         <div class="spectate-title">YOU ARE DEAD</div>
         <div class="spectate-sub">Spectating &mdash; look around while the round finishes.</div>
       </div>
+      <!-- PAUSE MENU button (top-right). Opens the pause overlay; the main way in on touch
+           (no Escape/pointer-lock there). On desktop, Escape releases the mouse and opens the
+           same overlay via the pointer-lock change. -->
+      <button id="pauseBtn" class="pause-btn" type="button" aria-label="Menu">&#9776;</button>
+      <!-- PAUSE MENU overlay. NOT a real pause (multiplayer: the world keeps running on the
+           host) — a menu with a live scoreboard (everyone + health), a controls/help panel,
+           Resume (re-locks the mouse), and Exit. Shown/hidden by ui.showPause()/hidePause();
+           the scoreboard refreshes from each snapshot while it's open. -->
+      <div id="pauseMenu" class="pause-menu hidden" aria-hidden="true">
+        <div class="pause-card">
+          <h2>PAUSED</h2>
+          <p class="pause-sub">The match is still running &mdash; this is just a menu.</p>
+          <div class="pause-sec-label">Scoreboard</div>
+          <ul id="pauseScores" class="pause-scores"></ul>
+          <div id="pauseHelpPanel" class="pause-help hidden">
+            <div class="pause-sec-label">Controls</div>
+            <div id="pauseHelpBody" class="pause-help-body"></div>
+          </div>
+          <div class="pause-btns">
+            <button id="pauseResume" class="primary" type="button">Resume</button>
+            <button id="pauseHelp" type="button">Controls</button>
+            <button id="pauseExit" class="warn" type="button">Exit to menu</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Dev-only Map Editor launcher (desktop, host/solo only). Hidden by default;

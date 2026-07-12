@@ -86,6 +86,18 @@ ok(/if \(debugMenu\) debugMenu\.frame\(/.test(mainSrc), 'main.js null-guards the
 ok(/if \(DEBUG\) session\.enablePing\(\)/.test(mainSrc), 'main.js enables ping ONLY under ?debug=1 (no ping traffic in normal play)');
 
 // ---------------------------------------------------------------------------
+// 3b) MENU STARTS COLLAPSED (2026-07-12): only the DEBUG button shows; the panel opens on
+//     click. And the menu drives a LIVE collider-view toggle that reuses the scene overlay.
+// ---------------------------------------------------------------------------
+ok(/this\._collapsed = true/.test(debugSrc) && /_panel\.classList\.add\('hidden'\)/.test(debugSrc),
+  'debug menu starts COLLAPSED (panel hidden; only the DEBUG button shows until clicked)');
+ok(/_toggleColliders\s*\(\)/.test(debugSrc) && /setColliderView\(/.test(debugSrc),
+  'debug menu has a "Colliders" toggle that drives scene.setColliderView (show ALL colliders)');
+const sceneSrc2 = read('js', 'scene.js');
+ok(/setColliderView\s*\([^)]*\)\s*\{/.test(sceneSrc2), 'scene.js defines setColliderView() — live build/teardown of the collider overlay');
+ok(/_addPlayerColliderWire\s*\([^)]*\)\s*\{/.test(sceneSrc2), 'scene.js draws player CAPSULE colliders (new geometry for the all-colliders view)');
+
+// ---------------------------------------------------------------------------
 // 4) HOST-AUTHORITATIVE GATE. The referee reads the HOST's own ?debug=1 and drops the
 //    whole debug family otherwise; the three actions route through it.
 // ---------------------------------------------------------------------------

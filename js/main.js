@@ -110,6 +110,14 @@ const state = {
   tool: 'rifle',
   alive: true, // local player's authoritative alive flag (for the tool bar + spectator view)
 
+  // Pause menu overlay (Escape / ☰). paused === menu shown; hasLocked tracks whether the
+  // pointer was ever captured this game (so the first unlock shows "Click to play", a later
+  // unlock shows the pause menu). lastPlayers is the newest snapshot roster for the pause
+  // scoreboard. The simulation is NEVER paused (multiplayer) — this only gates local input.
+  paused: false,
+  hasLocked: false,
+  lastPlayers: null,
+
   // Debug FREE CAM (js/debug.js, ?debug=1 only). While true the render camera is flown
   // locally by the debug module and the physics player is frozen (no prediction, zeroed
   // movement sent), so the body stays put. Always false in normal play.
@@ -128,19 +136,55 @@ input.onAction = (name) => {
   if (name === 'fire') tryFire();
 };
 
-// Overlay visibility follows the browser's real pointer-lock state (input.js
-// events), so it hides only once capture is confirmed and comes back on its
-// own when the mouse is released (Esc, alt-tab) — clickable to re-capture.
+// Overlay visibility follows the browser's real pointer-lock state (input.js events).
+// Two distinct unlocked states in-game:
+//   - never captured yet this session  -> the "Click to play" prompt (first entry);
+//   - captured, then released (Esc / alt-tab) -> the PAUSE MENU (Escape's job).
+// Locking (or Resume) hides both. The world keeps running underneath either way — this is
+// a menu overlay, not a real pause (multiplayer). See openPause()/closePause().
 input.onLockChange = (locked) => {
-  if (state.editing) return; // editor owns the view; no "click to play" overlay
+  if (state.editing) return; // editor owns the view; no overlay
   const inGame = !ui.el.game.classList.contains('hidden');
-  ui.setClickToPlay(inGame && !locked);
+  if (locked) {
+    state.hasLocked = true;
+    closePause(false); // re-locked -> drop the pause overlay
+    ui.setClickToPlay(false);
+    return;
+  }
+  if (!inGame || input.touch) return;
+  if (state.hasLocked) openPause(); // Esc after playing -> pause menu
+  else ui.setClickToPlay(true); // haven't captured yet -> the entry prompt
 };
 input.onLockError = (reason) => {
   if (state.editing) return;
   const inGame = !ui.el.game.classList.contains('hidden');
-  if (inGame) ui.setClickToPlay(true, reason);
+  if (inGame && !state.paused) ui.setClickToPlay(true, reason);
 };
+
+// ---- pause menu (Escape / on-screen button) -------------------------------
+// A menu OVERLAY — it does NOT pause the simulation (multiplayer: the world runs on the
+// host). Escape releases the pointer lock (browser-native) which opens this via onLockChange;
+// the on-screen ☰ button opens it on touch (no pointer lock there). Contents live in ui.js:
+// a live scoreboard (everyone + health), a controls/help panel, Resume, and Exit. While open
+// we send ZEROED movement so the avatar holds still at the menu (see the input loop + frame).
+function openPause() {
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (state.paused || !inGame || state.editing) return;
+  state.paused = true;
+  if (document.pointerLockElement) document.exitPointerLock(); // release the mouse (no-op on touch)
+  ui.setClickToPlay(false);
+  ui.showPause(state.lastPlayers || [], state.selfId);
+}
+function closePause(relock) {
+  if (!state.paused) return;
+  state.paused = false;
+  ui.hidePause();
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (inGame && !input.touch) {
+    if (relock) canvas.requestPointerLock(); // Resume re-locks (a user gesture)
+    else ui.setClickToPlay(!input.locked);
+  }
+}
 // Touch has no pointer lock: tapping the overlay dismisses it and NOW brings up
 // the on-screen controls + joystick (deferred to here so the controls never sit
 // on top of the "Tap to play" overlay and steal its tap). Audio is unlocked inside
@@ -221,11 +265,22 @@ function tryDisguise() {
 // screen-centre ray the disguise pick uses) — the HOST re-runs the shot against its
 // authoritative world, decides the hit + damage, and broadcasts the tracer to everyone.
 function tryFire() {
-  if (state.role !== ROLE.HUNTER || !state.movable) return;
+  if (state.role !== ROLE.HUNTER || !state.movable || state.paused) return;
   if (state.tool !== 'rifle') return; // prop finder does nothing (yet)
   const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
   if (!dir) return;
   session.send({ t: C2S.SHOOT, dx: dir.x, dy: dir.y, dz: dir.z });
+  lastFireAt = performance.now(); // paces the hold-to-fire auto-repeat (see frameBody)
+}
+
+// RAPID FIRE cadence (ms between shots) the CLIENT paces its held-fire auto-repeat off —
+// the SAME rounds-per-minute the host caps with (rules.fireRateRpm). Damage/bullet is
+// unchanged (host-side). Falls back to the legacy cooldown if rpm is absent.
+let lastFireAt = 0;
+function fireIntervalMs() {
+  const r = state.cfg && state.cfg.rules;
+  if (r && r.fireRateRpm > 0) return 60000 / r.fireRateRpm;
+  return (r && r.fireCooldownMs) || 250;
 }
 
 // Select a hunter tool by id (from the tool bar or a number key). Hunters only; updates
@@ -272,6 +327,9 @@ function handleGameMessage(msg) {
         if (wasInGame) {
           input.exitGame();
           releaseWakeLock();
+          state.paused = false;
+          state.hasLocked = false;
+          ui.hidePause();
           ui.setClickToPlay(false);
           ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
           input.lookFrozen = false;
@@ -403,6 +461,9 @@ function backToMenu(msg) {
   releaseWakeLock();
   destroyPredict();
   resetReadyButton();
+  state.paused = false;
+  state.hasLocked = false;
+  ui.hidePause();
   ui.setBlindfold(false); // clear any active blindfold overlay + release look
   input.lookFrozen = false;
   state.aimPropId = null;
@@ -453,6 +514,10 @@ function onSnapshot(msg) {
   state.phase = msg.phase;
   ui.setHud(msg);
   updateBlindfold(msg.timeLeft);
+  // Newest roster for the pause scoreboard; refresh it live if the pause menu is open (the
+  // world keeps running underneath, so health/roster keep updating behind the overlay).
+  state.lastPlayers = msg.players;
+  if (state.paused) ui.updatePauseScoreboard(msg.players, state.selfId);
   if (debugMenu) debugMenu.onSnapshot(msg); // feed the debug panel (roster/states)
   if (scene) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
@@ -688,12 +753,23 @@ function frameBody(now) {
     return;
   }
 
+  // RAPID FIRE: while the primary is HELD, auto-repeat the rifle at the configured RPM for a
+  // live hunter. The host still enforces its own rate cap, so this only paces client sends.
+  if (
+    input.primaryHeld && !state.paused &&
+    state.role === ROLE.HUNTER && state.alive && state.movable && state.tool === 'rifle' &&
+    now - lastFireAt >= fireIntervalMs()
+  ) {
+    tryFire(); // sets lastFireAt
+  }
+
   if (state.predict) {
     // Physics prediction: step our own body through the local Rapier world for this
     // frame's input, recording it for reconciliation. Real collide-and-slide against
     // walls/fixtures happens right here, with zero network latency. Skipped while the
     // debug free cam is on so the physics player stays put (main sends zeroed movement too).
-    if (state.movable && !state.freeCam) {
+    // Also skipped while paused, so the avatar holds still at the menu (world runs on host).
+    if (state.movable && !state.freeCam && !state.paused) {
       state.seq++;
       const { mx, mz } = input.moveVector();
       const inp = { seq: state.seq, mx, mz, yaw: input.yaw, jump: input.jump, rotUnlock: input.rotUnlock, dt };
@@ -706,7 +782,7 @@ function frameBody(now) {
     state.corr.x *= 0.85;
     state.corr.y *= 0.75;
     state.corr.z *= 0.85;
-  } else if (state.movable && !state.freeCam) {
+  } else if (state.movable && !state.freeCam && !state.paused) {
     // Flat 2D fallback prediction (Rapier not loaded): integrate + nudge toward the
     // authoritative position. Identical to the pre-physics behaviour.
     const { mx, mz } = input.moveVector();
@@ -795,7 +871,10 @@ function startInputLoop() {
     // Debug free cam: send zeroed movement so the (frozen) physics player stays put while
     // the local camera flies. The last real input.mx/mz would otherwise keep the referee
     // driving the body forward, so we must actively send a stop.
-    const { mx, mz } = state.freeCam ? { mx: 0, mz: 0 } : input.moveVector();
+    // Free cam OR the pause menu -> send zeroed movement so the (frozen) body stays put while
+    // the local view is detached; the world keeps running on the host regardless.
+    const halt = state.freeCam || state.paused;
+    const { mx, mz } = halt ? { mx: 0, mz: 0 } : input.moveVector();
     // seq = the latest predicted-frame id; the host echoes it back as `ack` so we
     // know which inputs it has applied. jump/rotUnlock drive physics + the disguise
     // orientation lock.
@@ -806,8 +885,8 @@ function startInputLoop() {
       mz,
       yaw: input.yaw,
       pitch: input.pitch,
-      jump: state.freeCam ? false : input.jump,
-      rotUnlock: state.freeCam ? false : input.rotUnlock,
+      jump: halt ? false : input.jump,
+      rotUnlock: halt ? false : input.rotUnlock,
     });
   }, 1000 / 20);
 }
@@ -938,6 +1017,12 @@ function wireMenu() {
   ui.onPickMap = (mapId) => session.send({ t: C2S.PICK_MAP, mapId });
   // Copy a one-click invite link (room code in the URL hash) so the host can
   // paste it in chat and friends just click to join.
+  // Pause menu wiring (Resume re-locks / Exit leaves the match). The ☰ button opens it on
+  // touch (and works on desktop when unlocked); Escape opens it on desktop via onLockChange.
+  ui.onPauseResume = () => closePause(true);
+  ui.onPauseExit = () => backToMenu('Left the match.');
+  const pauseBtn = document.getElementById('pauseBtn');
+  if (pauseBtn) pauseBtn.addEventListener('click', () => openPause());
   ui.el.copyLinkBtn.addEventListener('click', async () => {
     if (!state.room) return;
     const link = `${location.origin}${location.pathname}#${state.room}`;
@@ -984,6 +1069,7 @@ function newSession() {
     debugMenu = new DebugMenu({
       state, input, ui, cfg: state.cfg,
       C2S, ROLE, PHASE,
+      debugFlag: DEBUG, // ?debug=1: the collider overlay is already built at load
       getScene: () => scene,
       getSession: () => session,
       onExit: () => backToMenu('Left the match (debug exit).'),

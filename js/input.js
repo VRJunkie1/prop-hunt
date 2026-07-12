@@ -65,6 +65,10 @@ export class Input {
     this.jump = false; // held: Space (desktop) / jump button (touch)
     this.rotUnlock = false; // held: right-click (desktop) / rotate button (touch) —
     //   lets a disguised prop rotate on yaw only (never tips)
+    // RAPID FIRE: true while the primary (left-click / touch ACTION) is HELD. main.js reads
+    // this each frame to auto-repeat a hunter's rifle at the configured RPM (hold-to-fire).
+    // Cleared on release and whenever pointer lock is lost (so a hold can't "stick" firing).
+    this.primaryHeld = false;
 
     this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag' | 'primary'
     this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
@@ -104,6 +108,7 @@ export class Input {
 
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
+      if (!this.locked) this.primaryHeld = false; // releasing the mouse (Esc/alt-tab) stops held fire
       this.onLockChange(this.locked);
     });
     document.addEventListener('pointerlockerror', () => {
@@ -119,12 +124,13 @@ export class Input {
     });
     canvas.addEventListener('mousedown', (e) => {
       if (!this.locked) return;
-      if (e.button === 0) this.onAction('primary'); // left: tag / disguise
+      if (e.button === 0) { this.primaryHeld = true; this.onAction('primary'); } // left: fire (held) / disguise
       if (e.button === 2) this.rotUnlock = true; // right: unlock disguise yaw rotation
     });
-    // Right-click is held to rotate a disguise; catch the release even off-canvas,
-    // and stop the browser context menu from popping over the captured game.
+    // Right-click is held to rotate a disguise; left-click is HELD to rapid-fire. Catch the
+    // release even off-canvas, and stop the browser context menu from popping over the game.
     window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.primaryHeld = false;
       if (e.button === 2) this.rotUnlock = false;
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -191,6 +197,7 @@ export class Input {
     this._lookLast = null;
     this.jump = false;
     this.rotUnlock = false;
+    this.primaryHeld = false;
   }
 
   // Build the on-screen controls once: a joystick zone (bottom-left) and an action
@@ -214,12 +221,20 @@ export class Input {
     action.textContent = 'ACTION';
     // pointerdown (not click) for zero-latency taps, and so it never bubbles to the
     // canvas look zone underneath.
+    // pointerdown fires immediately AND arms hold-to-fire (main.js auto-repeats a hunter's
+    // rifle while primaryHeld); pointerup/cancel/leave disarm it. A prop's single disguise
+    // still happens on the initial pointerdown (main.js only auto-repeats for hunters).
     action.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
       unlockAudio();
-      this.onAction('primary'); // main.js maps 'primary' to tag/disguise by role
+      this.primaryHeld = true;
+      this.onAction('primary'); // main.js maps 'primary' to fire/disguise by role
     });
+    const actionUp = () => { this.primaryHeld = false; };
+    action.addEventListener('pointerup', actionUp);
+    action.addEventListener('pointercancel', actionUp);
+    action.addEventListener('pointerleave', actionUp);
 
     // Jump button (held): sets the same jump flag Space does on desktop.
     const jump = document.createElement('button');

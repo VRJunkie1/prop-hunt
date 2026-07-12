@@ -377,6 +377,29 @@ export class Referee {
     return { ...this.propCatalog, ...this.fixtureCatalog };
   }
 
+  // RAPID FIRE (2026-07-12): the host's authoritative minimum time (ms) between a hunter's
+  // shots — the rate CAP a modified client can't beat. Derived from rules.fireRateRpm
+  // (rounds/minute; 600-800 is the real assault-rifle band) as 60000/rpm, minus a small
+  // grace so a legit client firing exactly on-cadence isn't throttled BELOW the intended
+  // rate by timer/network jitter (the grace still caps a cheat: e.g. 700 rpm => ~86ms => cap
+  // ~66ms => ~900 rpm hard ceiling, not thousands). Falls back to the legacy fireCooldownMs.
+  _fireCooldownMs() {
+    const rpm = this.rules.fireRateRpm;
+    if (Number.isFinite(rpm) && rpm > 0) return Math.max(10, Math.round(60000 / rpm) - 20);
+    return this.rules.fireCooldownMs != null ? this.rules.fireCooldownMs : 250;
+  }
+
+  // DAMAGE MULTIPLIER — always derived FRESH from a player's CURRENT disguise, never a cached
+  // value from an earlier disguise. This is the authoritative fix for the size-multiplier bug
+  // (a prop that goes small then re-disguises large must immediately take large-object damage,
+  // not keep the small-object multiplier): there is NO per-player multiplier state anywhere —
+  // this reads target.disguise at the instant damage is applied and re-runs the size curve.
+  // tools/check-combat.mjs proves it across a small->large re-disguise. See shared/damage.js.
+  _playerHitDamage(target) {
+    const d = resolveDamageCfg(this.rules.damage);
+    return d.base * multiplierForDisguise(target.disguise, this._combatCatalog(), d);
+  }
+
   // Fire the rifle. The client sends only its AIM direction (dx,dy,dz — the camera-forward
   // it also disguise-picks with). The HOST is the authority: it re-casts the shot in its
   // own physics world from the shooter's authoritative eye, decides what was hit, applies
@@ -387,8 +410,8 @@ export class Referee {
     if (!hunter || hunter.role !== ROLE.HUNTER || !hunter.alive) return;
     if (this.phase !== PHASE.HUNTING) return; // no shooting during HIDING (hunters frozen/blind)
     const now = Date.now();
-    const cd = this.rules.fireCooldownMs != null ? this.rules.fireCooldownMs : 250;
-    if (now - (hunter._lastShotAt || 0) < cd) return; // rate limit
+    const cd = this._fireCooldownMs();
+    if (now - (hunter._lastShotAt || 0) < cd) return; // rate limit (host-enforced cap)
     hunter._lastShotAt = now;
 
     // Aim direction: trust the client's camera-forward; fall back to yaw/pitch if absent.
@@ -443,8 +466,10 @@ export class Referee {
     if (info.kind === 'player') {
       const target = this.players.get(info.id);
       if (!target || !target.alive || target.id === hunter.id) return;
-      const mult = multiplierForDisguise(target.disguise, catalog, d); // prop-PLAYERS still scale by size
-      this._damagePlayer(hunter, target, d.base * mult, false);
+      // Derive the size multiplier FRESH from the target's CURRENT disguise (never cached) —
+      // _playerHitDamage re-runs the curve on target.disguise every hit, so a re-disguise
+      // (small -> large) takes effect immediately. See _playerHitDamage.
+      this._damagePlayer(hunter, target, this._playerHitDamage(target), false);
       return;
     }
     if (info.kind === 'prop') {

@@ -8,9 +8,9 @@
     "_yawComment": "yawOffsetDeg rotates the model about vertical so its FRONT faces the networked facing yaw. Set to 180 to fix the 'faces backwards' symptom VRmike saw in live 2-player testing (the soldier's native forward is +Z; the game's is -Z). HOT-TUNABLE: if a live browser shows it still off (running sideways etc.), nudge this — no rebuild.",
     "yawOffsetDeg": 180,
     "clipPrefix": "CharacterArmature|",
-    "_clipsComment": "REMOTE-RIFLE-ANIMATION FIX (2026-07-12, VRmike): a hunter always holds the rifle, so remote viewers must always see the RIFLE (gun-up) run/aim, never the arms-at-sides run. This asset's clip list (verified by tools/check-hunter-model.mjs parsing the GLB) has only TWO rifle-holding movement clips — 'Idle_Gun' (gun idle) and 'Run_Shoot' (gun-up run). The old directional clips 'Run_Back'/'Run_Left'/'Run_Right' are the pack's PLAIN arms-down runs (no rifle raised) — those were the 'default arms-at-side run' bug VRmike saw whenever a hunter strafed or backpedalled. There is NO gun-up strafe/backpedal clip in this GLB, so every movement direction now maps to the real gun-run 'Run_Shoot' (closest available rifle clip). Trade-off: legs use the forward run cycle while strafing, but the rifle stays UP in every direction — which is what the task prioritised. check-hunter-model.mjs asserts every clip here resolves in the GLB AND is a gun/aim clip. HOT-TUNABLE (no rebuild).",
+    "_clipsComment": "RIFLE POSE/ANIM POLISH (2026-07-12, VRmike): a hunter always holds the rifle, so remote viewers must always see the RIFLE (gun-up) run/aim, never the arms-at-sides run. ROOT CAUSE of 'rifle points at the ground': the wrist-bone orientation DIFFERS between clips — in the shoot/aim clips (Idle_Gun_Pointing / Gun_Shoot / Idle_Gun_Shoot / Run_Shoot) the rig poses the wrist so a rifle attached at weapon.rotationDeg=0 points nearly straight DOWN, and the old 'Idle_Gun' idle poses it a DIFFERENT way (barrel backward), so no single grip rotation fixed both. FIX (derived with matrix math from the actual rig pose — tools/_solve_rifle.mjs): (1) idle now uses 'Idle_Gun_Pointing', a real AIM-IDLE that holds the gun raised and pointing forward AND shares the shoot clips' wrist orientation, so the hunter keeps the gun up (never arms-at-side) when standing still; (2) all movement maps to 'Run_Shoot' (the gun-up run, same wrist family); (3) weapon.rotationDeg below is solved once so the muzzle points forward and the gun stays upright across EVERY shoot/aim clip. There is no gun-up strafe/backpedal clip in this GLB, so strafing uses the forward run cycle (legs) while the rifle stays UP + forward. check-hunter-model.mjs asserts every clip here resolves in the GLB AND is a gun/aim clip. HOT-TUNABLE (no rebuild) — confirm the pose live and nudge rotationDeg if the grip roll/facing looks off.",
     "clips": {
-      "idle": "Idle_Gun",
+      "idle": "Idle_Gun_Pointing",
       "forward": "Run_Shoot",
       "backward": "Run_Shoot",
       "left": "Run_Shoot",
@@ -25,13 +25,14 @@
       "crossfadeSeconds": 0.15
     },
     "weapon": {
-      "_comment": "Assault rifle parented to the right-wrist bone. worldLength is the rifle's longest-axis size in METRES: scene.js measures the GLB's native size and the wrist bone's world scale (which carries the armature's baked 100x and the rig's fit scale) and sizes the weapon to this length — so the rifle stays correct whatever the body sizing does (the old bare `scale` blew up/shrank when the rig scale changed). position (bone-local units), rotationDeg (bone-local degrees) and scale (a MULTIPLIER on worldLength) are HOT-TUNABLE grip nudges — adjust here (no rebuild) if the grip looks off in a live browser. attachBone is matched TOLERANTLY (GLTFLoader loads the GLB's 'Wrist.R' as 'WristR'); Wrist.R / Wrist.L both exist.",
+      "_comment": "Assault rifle parented to the right-wrist bone. worldLength is the rifle's longest-axis size in METRES: scene.js measures the GLB's native size and the wrist bone's world scale (which carries the armature's baked 100x and the rig's fit scale) and sizes the weapon to this length — so the rifle stays correct whatever the body sizing does (the old bare `scale` blew up/shrank when the rig scale changed). position (bone-local units), rotationDeg (bone-local degrees, Euler XYZ) and scale (a MULTIPLIER on worldLength) are HOT-TUNABLE grip nudges — adjust here (no rebuild) if the grip looks off in a live browser. attachBone is matched TOLERANTLY (GLTFLoader loads the GLB's 'Wrist.R' as 'WristR'); Wrist.R / Wrist.L both exist.",
+      "_rotationComment": "SOLVED, not eyeballed: the rifle GLB's barrel is its -X end (thin barrel = fewer verts; body/stock at +X). tools/_solve_rifle.mjs loads the real rig, poses it in the aim/shoot clips, reads the Wrist.R world orientation, and computes the bone-local rotation that maps the muzzle(-X) to the character's forward and the gun-up(+Y) to world-up. Verified across Idle_Gun_Pointing / Run_Shoot / Gun_Shoot / Idle_Gun_Shoot — barrel lands within ~1° of level-forward and the gun stays upright in ALL of them (headless render isn't possible in the build sandbox, so this is confirmed live post-deploy; if a live browser shows the gun rolled or the muzzle reversed, nudge z by ±180 / flip the sign here — no rebuild).",
       "model": "9a0e478c-de82-4773-9b70-a0219bb0057c.glb",
       "attachBone": "Wrist.R",
       "visibleByDefault": true,
       "worldLength": 0.8,
       "position": { "x": 0, "y": 0, "z": 0 },
-      "rotationDeg": { "x": 0, "y": 0, "z": 0 },
+      "rotationDeg": { "x": 178.8, "y": -10.1, "z": 87.6 },
       "scale": 1.0
     }
   }

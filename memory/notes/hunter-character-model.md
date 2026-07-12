@@ -6,6 +6,41 @@ hunter stays first-person and never renders their own body. Props are
 untouched (still render as their disguise). NOT playtested live (headless sandbox
 can't open a GLB or run animations — see "Verification" below).
 
+## 2026-07-12 RIFLE POSE/ANIM POLISH — rifle points at the ground + arm drops when idle (VRmike)
+
+Before (VRmike's live screenshots — the remote hunter holds the rifle pointing at the ground):
+
+<img src="assets/attached_0.png" width="360"> <img src="assets/attached_1.png" width="360">
+
+The prior fix (below) mapped movement to `Run_Shoot` and idle to `Idle_Gun`, but VRmike's live
+screenshots still showed the rifle POINTING AT THE GROUND while running and the arm DROPPING when
+idle. Root cause was NOT the clip selection — it's the **attachment orientation vs the rig pose**,
+and it differs per clip:
+
+- **Diagnosed with real matrix math (headless), not eyeballing.** `tools/_solve_rifle.mjs` loads
+  the SWAT rig (three + GLTFLoader), poses it in each gun clip, and reads the `Wrist.R` WORLD
+  quaternion. Findings: with `weapon.rotationDeg = 0`, the barrel points nearly straight **DOWN**
+  in the shoot/aim clips (`Idle_Gun_Pointing` / `Gun_Shoot` / `Idle_Gun_Shoot` / `Run_Shoot` all
+  share one wrist orientation), and points **BACKWARD** in the OLD `Idle_Gun`. So the running "gun
+  down" and the idle "arm drops/awkward" were the SAME attachment bug, and no single rotation could
+  fix both while idle used the odd-one-out `Idle_Gun`.
+- **Fix, two parts:**
+  1. **idle `Idle_Gun` → `Idle_Gun_Pointing`** — a real static AIM-IDLE that holds the rifle raised
+     and pointing forward AND shares the shoot clips' wrist orientation. Now idle + all movement
+     clips share one wrist frame, so ONE attachment rotation fixes every state. (This also directly
+     answers "keep the arm up when idle" — a genuine aim-idle clip exists in the asset.)
+  2. **`weapon.rotationDeg = {x:178.8, y:-10.1, z:87.6}`** — SOLVED so the muzzle (the rifle's
+     **-X** end; thin barrel = fewer verts, confirmed by `tools/_muzzle.mjs`) points along the
+     character's forward and gun-up points to world-up. Verified across Idle_Gun_Pointing /
+     Run_Shoot / Gun_Shoot / Idle_Gun_Shoot: barrel within ~1° of level-forward, gun upright, in
+     ALL of them. Hot-tunable (Euler XYZ, bone-local); nudge z by ±180 / flip a sign live if the
+     grip roll or muzzle facing reads off (the build sandbox can't render, so the exact roll is a
+     live-confirm item; the barrel DIRECTION is solved and correct).
+- **Guard unchanged + still valid:** `check-hunter-model.mjs` parses the GLB and asserts every
+  configured clip is a Gun/Shoot clip — `Idle_Gun_Pointing` carries "Gun", so a rifle hunter can
+  never drop to the arms-at-side idle. The derivation tools (`_solve_rifle.mjs`, `_muzzle.mjs`) are
+  authoring-only and never ship.
+
 ## 2026-07-12 fix — remote hunter shown arms-at-sides while holding the rifle (VRmike)
 
 Live 2-player: remote hunters ran with the **default arms-at-sides run** even though the rifle

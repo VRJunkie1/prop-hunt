@@ -8,6 +8,57 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HUNTER RIFLE POSE/ANIM POLISH + DAMAGE-MULT PROOF + DEBUG UPGRADES + RAPID-FIRE/MOUSE-LOCK/PAUSE MENU (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1 + phone). Rifle pose, hold-to-fire feel, mouse-lock/pause flow owe a live 2-player pass.
+
+Seven-part pass. Full detail: `notes/hunter-character-model.md` (rifle pose/anim), `notes/hunter-tools-combat.md`
+(damage proof + rapid fire), `notes/debug-menu.md` (collapsed + collider toggle), `notes/pause-menu.md` (new).
+
+1. **RIFLE POINTS DOWN — ROOT-CAUSED at the rig pose (not a number guess).** The wrist-bone
+   orientation DIFFERS per clip: in the shoot/aim clips (`Idle_Gun_Pointing`/`Gun_Shoot`/
+   `Idle_Gun_Shoot`/`Run_Shoot`) a rifle attached at rotation=0 points nearly straight DOWN, and
+   the old `Idle_Gun` idle pointed it BACKWARD — so no single grip rotation fixed both. Loaded the
+   real rig headlessly (three+GLTFLoader, `tools/_solve_rifle.mjs`), posed each clip, read the
+   Wrist.R world quaternion, and SOLVED the bone-local rotation that maps the muzzle (the rifle's
+   -X end — thin barrel, fewer verts, `tools/_muzzle.mjs`) to the character's forward and gun-up to
+   world-up. `weapon.rotationDeg = {178.8, -10.1, 87.6}` lands the barrel within ~1° of level-
+   forward, upright, across EVERY shoot/aim clip. Hot-tunable; confirmed live post-deploy.
+2. **IDLE keeps the gun up — use the real aim-idle.** idle clip `Idle_Gun` → **`Idle_Gun_Pointing`**
+   (a static aim-idle that holds the rifle raised + forward AND shares the shoot clips' wrist
+   orientation, so one rotation fixes idle + movement). Movement stays `Run_Shoot`. The code still
+   can NEVER select an arms-at-side idle while tool=rifle (every configured clip is a Gun/Shoot
+   clip; `check-hunter-model.mjs` asserts it by parsing the GLB).
+3. **DAMAGE MULTIPLIER — the referee was ALREADY correct; proven, not blindly re-patched.** A probe
+   + git history showed `_applyShotDamage` has ALWAYS derived the size multiplier FRESH from
+   `target.disguise` at damage time (no cache anywhere; the client also allows + sends a re-disguise).
+   Made the guarantee explicit via `referee._playerHitDamage(target)` and LOCKED it with
+   `check-combat.mjs` section E (disguise small → re-disguise large → assert per-hit damage now
+   matches the LARGE prop). If the bug still reproduces live, the deployed build predates this / the
+   root cause is elsewhere — flagged honestly (see summary).
+4. **DEBUG MENU: (a) live "Colliders" toggle** driving new `scene.setColliderView(on)` — build/
+   teardown ALL collider wireframes (props, players CAPSULES [new geometry], static fixtures, world
+   architecture) via the SAME `shared/bounds.js` source + wire builders the `?debug=1` overlay uses.
+   **(b) starts COLLAPSED** — only the `DEBUG ▸` button top-left; panel opens on click.
+5. **RAPID FIRE.** Rifle is HOLD-to-fire at `rules.fireRateRpm` (700, config-tunable, 600-800 band).
+   Host derives its authoritative rate cap from it (`referee._fireCooldownMs` = 60000/rpm − grace);
+   the client paces held-fire off the same number. Damage/bullet unchanged (5%). `input.primaryHeld`
+   tracks the held left-click / touch ACTION; `main.js` auto-repeats for a live hunter.
+6. **MOUSE LOCK + HOLD-LEFT-CLICK.** Pointer lock already captures on the in-game canvas click for
+   BOTH roles (unchanged). Left-click is now HELD to rapid-fire (props still single-tap disguise).
+7. **PAUSE MENU (overlay, does NOT pause the sim).** Escape releases pointer lock → opens a menu
+   with a live scoreboard (everyone + health), a Controls/help panel, Resume (re-locks), and Exit.
+   Touch: a ☰ button opens the same menu (no pointer lock there). While open the avatar holds still
+   (zeroed input) but the world keeps running on the host. `notes/pause-menu.md`.
+- **Guards:** `check-combat.mjs` +E (re-disguise multiplier) +F (fire-rate config/cap);
+  `check-debug-menu.mjs` +collapsed-default +collider-toggle +`setColliderView`/player-capsule;
+  `check-hunter-model.mjs` (idle clip is a gun clip) still GREEN; `check-blindfold.mjs` picks up the
+  new `scene.setColliderView` seam; `check-physics`/`check-hunter-model-size` still GREEN. Page boots
+  clean normal + ?debug=1 + phone (debug menu confirmed collapsed by screenshot).
+- **OWED — live 2-player pass:** remote hunter holds the rifle UP + pointing forward while running
+  AND standing idle (no barrel-down, no arms-at-side); hold-left-click rapid-fires at a realistic
+  rate; Escape opens the pause menu + releases the mouse, Resume re-locks; scoreboard shows everyone's
+  health; the debug "Colliders" toggle draws every collider incl. player capsules and tears down clean.
+  Nudge `weapon.rotationDeg` if the grip roll/facing reads off (hot-tunable, no rebuild).
+
 ## RESUME NOTE (2026-07-12, resume of the crashed rifle/tuning run): the crashed attempt had already COMMITTED its full work as `959fc2c` (the harness commits partial trees); the Exception struck AFTER the commit, during the final deploy/link-posting step — NOT mid-edit. Working tree verified CLEAN at HEAD (no partial/uncommitted leftovers to discard). Re-ran the whole guard suite on resume: `check-hunter-model`, `check-combat`, `check-debug-menu`, `check-blindfold`, `check-physics`, `check-hunter-model-size` all GREEN; page boots clean with zero console errors in normal + `?debug=1` + phone-portrait; debug menu confirmed visible by default (screenshot). No code changes were needed — the six-part pass below is complete and coherent. Still owes the live 2-player pass noted at the end of that section.
 
 ## Latest: REMOTE RIFLE ANIMATION FIX + INPUT/DAMAGE/HUD TUNING (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1); remote-animation look + HUD-in-match + live damage feel owe a 2-player pass.

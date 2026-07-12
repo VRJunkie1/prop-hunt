@@ -218,6 +218,16 @@ export class Scene3D {
       typeof location !== 'undefined' && typeof URLSearchParams !== 'undefined'
         ? new URLSearchParams(location.search).get('debug') === '1'
         : false;
+    // LIVE collider-view toggle (driven by the debug menu, js/debug.js). Seeded ON by
+    // ?debug=1 so the two links still differ, but now build/torn-down at runtime via
+    // setColliderView() instead of only once per map. Tracks its own added objects so a
+    // teardown is clean. Shows ALL colliders: world/fixtures (static group), each prop
+    // (parented to its container), and each player CAPSULE (new geometry, same size source).
+    this._colliderViewOn = this._colliderDebug;
+    this._colliderWires = []; // [{ obj, parent }] prop/world wires added live, for teardown
+    this._colliderStaticGroup = null; // the static-world wire group (ground/walls/fixtures)
+    this._lastMap = null; // remembered from buildWorld so the toggle can rebuild the overlay
+    this._lastCatalog = null;
     this.rules = null; // set by main.js (ensureScene) so the debug view can mirror thin-wall thickening
 
     // ---- debug menu seams (?debug=1, driven by js/debug.js) ------------------
@@ -263,6 +273,13 @@ export class Scene3D {
   // Rebuild the world for a new match.
   buildWorld(map, propInstances, catalog, characterModels = null) {
     this.catalog = catalog;
+    // Remember the world so the debug collider-view toggle can (re)build the overlay live.
+    this._lastMap = map;
+    this._lastCatalog = catalog;
+    // scene.clear() (below) drops any existing collider wires; forget the stale trackers so
+    // a rebuilt overlay doesn't try to remove objects that no longer exist.
+    this._colliderWires = [];
+    this._colliderStaticGroup = null;
     // Animated character-model registry (the SWAT hunter). Config doesn't change
     // between matches, so keep any already-set registry when a new build omits it.
     if (characterModels) this.characterModels = characterModels;
@@ -401,10 +418,6 @@ export class Scene3D {
       if (isStatic) built.mesh.visible = false; // aim proxy only — scenery draws the real mesh
       container.add(built.mesh);
       this.scene.add(container);
-      // ?debug=1: parent this prop's collider outline to its container so it tracks the
-      // body as it's shoved (the disguise-vs-prop tell is a collider thing — see it move).
-      // Skipped for static proxies — their collider is drawn by _buildStaticColliderDebug.
-      if (this._colliderDebug && !isStatic) this._addPropColliderWire(container, catalog[p.type]);
       if (!isStatic) this.colliders.push(built.mesh); // camera pulls in against props (static ones via scenery)
       this.propMeshes.set(p.id, {
         container,
@@ -421,11 +434,12 @@ export class Scene3D {
       if (!isStatic) this._queueModel(p, built.mesh, catalog, container, built.baseY * s, s); // swap in the real GLB if any
     }
 
-    // ?debug=1: draw the STATIC world colliders (ground slab, boundary walls, static
-    // fixtures) from the ONE shared source (shared/bounds.js) — identical geometry to what
-    // physics.js builds and tools/check-physics.mjs checks. Prop colliders were parented to
-    // their containers above so they track shoves.
-    if (this._colliderDebug) this._buildStaticColliderDebug(map, catalog);
+    // Collider view (?debug=1 by default, or toggled live from the debug menu): draw EVERY
+    // collider wireframe from the ONE shared source (shared/bounds.js) — identical geometry to
+    // what physics.js builds and tools/check-physics.mjs checks. Static world + each prop +
+    // each player capsule are (re)built here in one place so the live toggle and the load-time
+    // overlay share exactly the same code.
+    if (this._colliderViewOn) this._buildColliderView();
 
     // Kick off the real-mesh load for everything queued above. Fire-and-forget:
     // primitives are already on screen, so the map is playable instantly and each
@@ -565,9 +579,13 @@ export class Scene3D {
           // soldier; null for capsules/disguises. animVel is the derived movement.
           hunterCtl: mesh.userData.hunterCtl || null,
           animVel: null,
+          disguiseType: p.disguise || null, // for the debug player-capsule collider wire
+          colliderWire: null,
         };
         this.players.set(p.id, entry);
       }
+      // Debug collider view: attach a capsule wire to a new/rebuilt player entry.
+      if (this._colliderViewOn && !entry.colliderWire) this._addPlayerColliderWire(entry);
       // Derive velocity from this snapshot's displacement BEFORE overwriting target
       // (target still holds the previous snapshot's pose). Smoothed to damp net jitter.
       if (entry.hunterCtl) {
@@ -1329,15 +1347,19 @@ export class Scene3D {
   }
 
   // Parent a prop's collider outline (yellow) to its container, centred on the body
-  // centre (== container origin), so it moves/rotates with the shoved prop.
+  // centre (== container origin), so it moves/rotates with the shoved prop. Returns the
+  // wire so the live collider-view toggle can track + remove it.
   _addPropColliderWire(container, c) {
-    if (!c) return;
+    if (!c) return null;
     const he = halfExtentsFor(c);
-    container.add(this._wireBox(he.hx * 2, he.hy * 2, he.hz * 2, 0xffd23f));
+    const w = this._wireBox(he.hx * 2, he.hy * 2, he.hz * 2, 0xffd23f);
+    container.add(w);
+    return w;
   }
 
   // Draw the static world colliders (ground grey, boundary walls red, static fixtures
   // cyan) from shared/bounds.js — the SAME boxes physics.js builds and the guard checks.
+  // Stored on this._colliderStaticGroup so the live toggle can remove it cleanly.
   _buildStaticColliderDebug(map, catalog) {
     const group = new THREE.Group();
     const boxes = worldColliderBoxes(map, catalog, this.rules || {});
@@ -1349,6 +1371,70 @@ export class Scene3D {
       group.add(w);
     }
     this.scene.add(group); // dropped by the next buildWorld's scene.clear()
+    this._colliderStaticGroup = group;
+    return group;
+  }
+
+  // ---- LIVE collider view toggle (debug menu) -------------------------------
+  // Show/hide ALL collider wireframes at runtime (props, players, fixtures, architecture),
+  // reusing the same builders + shared collider-size source as the ?debug=1 overlay. Clean
+  // build/teardown so it can be flipped any number of times mid-match.
+  setColliderView(on) {
+    this._colliderViewOn = !!on;
+    this._clearColliderView(); // idempotent — drop any existing wires first
+    if (this._colliderViewOn) this._buildColliderView();
+  }
+
+  _buildColliderView() {
+    if (!this._lastMap) return; // no world yet — buildWorld will call us when one exists
+    // Static world (ground/walls) + static fixtures, from the shared source.
+    this._buildStaticColliderDebug(this._lastMap, this._lastCatalog);
+    // Every dynamic/disguise prop: collider parented to its container so it tracks shoves.
+    if (this.propMeshes) {
+      for (const rec of this.propMeshes.values()) {
+        if (rec.isStatic) continue; // static fixtures are covered by the static group above
+        const w = this._addPropColliderWire(rec.container, this._lastCatalog[rec.type]);
+        if (w) this._colliderWires.push({ obj: w, parent: rec.container });
+      }
+    }
+    // Every player CAPSULE (new geometry, sized from the same collider source physics uses).
+    for (const entry of this.players.values()) this._addPlayerColliderWire(entry);
+  }
+
+  _clearColliderView() {
+    if (this._colliderStaticGroup) { this.scene.remove(this._colliderStaticGroup); this._colliderStaticGroup = null; }
+    for (const { obj, parent } of this._colliderWires) { if (parent) parent.remove(obj); }
+    this._colliderWires = [];
+    for (const entry of this.players.values()) {
+      if (entry.colliderWire && entry.mesh) entry.mesh.remove(entry.colliderWire);
+      if (entry) entry.colliderWire = null;
+    }
+  }
+
+  // Player capsule collider wire (green), parented to the player mesh so it tracks them.
+  // Sized from the SAME collider source physics bakes: base capsule (rules.playerRadius/
+  // playerHalfHeight), grown to the disguise footprint girth (capped at
+  // disguiseColliderMaxRadius) exactly like PhysicsWorld._capsuleDimsFor. New geometry —
+  // player capsules weren't drawn by the old overlay.
+  _addPlayerColliderWire(entry) {
+    if (!entry || !entry.mesh || entry.colliderWire) return;
+    const rules = this.rules || {};
+    const baseR = rules.playerRadius != null ? rules.playerRadius : 0.4;
+    const halfCyl = rules.playerHalfHeight != null ? rules.playerHalfHeight : 0.5;
+    const centerY = baseR + halfCyl; // capsule centre above the foot
+    let r = baseR;
+    const type = entry.disguiseType;
+    if (type && this.catalog && this.catalog[type]) {
+      const he = halfExtentsFor(this.catalog[type]);
+      const cap = rules.disguiseColliderMaxRadius != null ? rules.disguiseColliderMaxRadius : 0.55;
+      r = Math.min(cap, Math.max(baseR, Math.min(he.hx, he.hz)));
+    }
+    const w = this._wireBox(r * 2, 2 * (baseR + halfCyl), r * 2, 0x7be38b);
+    // Re-centre on the capsule centre relative to the mesh origin (mesh origin sits baseY
+    // above the foot; the capsule centre is r+halfCyl above the foot).
+    w.position.y = centerY - (entry.mesh.userData.baseY || 0);
+    entry.mesh.add(w);
+    entry.colliderWire = w;
   }
 
   // ---- debug menu: free cam (?debug=1) --------------------------------------
