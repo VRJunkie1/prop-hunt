@@ -302,6 +302,12 @@ export class PhysicsWorld {
     // fix can't rubber-band. See notes/physics.md (RELAUNCH #2).
     this._staticHandles = new Set();
     const addStatic = (col) => { this._staticHandles.add(col.handle); return col; };
+    // HUNTER-TOOLS v1 — collider handle -> fixture TYPE, for the authoritative shot
+    // raycast (describeCollider). Only map.fixtures are recorded (ground slab + boundary
+    // walls stay untyped => classified as 'world'/architecture => a free miss when shot).
+    // A disguisable static fixture (counter/oven/pillar) hit by a bullet is a "could have
+    // been a player" object, so shooting it bounces damage onto the hunter (see referee).
+    this._staticFixtureTypeByHandle = new Map();
 
     // Ground: a thick fixed slab whose TOP face sits exactly at y=0. Extended well
     // DOWNWARD (3 m thick, top unchanged) so a fast/falling body can't punch through
@@ -351,7 +357,7 @@ export class PhysicsWorld {
           .setFriction(0.9)
           .setRestitution(rest);
         if (f.rot) fc.setRotation(yawQuat(f.rot));
-        addStatic(this.world.createCollider(fc));
+        this._staticFixtureTypeByHandle.set(addStatic(this.world.createCollider(fc)).handle, f.type);
         continue;
       }
       // ANTI-TUNNEL for thin wall PANELS (Bug 2, solidity pass #3). A wide, thin static
@@ -378,12 +384,12 @@ export class PhysicsWorld {
           .setTranslation(f.x, halfH + (f.y || 0), f.z)
           .setRestitution(rest);
         if (f.rot) wc.setRotation(yawQuat(f.rot));
-        addStatic(this.world.createCollider(wc));
+        this._staticFixtureTypeByHandle.set(addStatic(this.world.createCollider(wc)).handle, f.type);
         continue;
       }
       desc.setTranslation(f.x, halfH + (f.y || 0), f.z).setRestitution(rest);
       if (f.rot) desc.setRotation(yawQuat(f.rot));
-      addStatic(this.world.createCollider(desc));
+      this._staticFixtureTypeByHandle.set(addStatic(this.world.createCollider(desc)).handle, f.type);
     }
   }
 
@@ -395,6 +401,10 @@ export class PhysicsWorld {
     // ever pushes the capsule out of props, never off world geometry (which the
     // static-only snap failsafe owns). Built identically on host + guest predictors.
     this._propHandles = new Set();
+    // HUNTER-TOOLS v1 — collider handle -> prop id, for the authoritative shot raycast
+    // (describeCollider maps a hit collider back to the prop instance, whose type the
+    // referee reads). Covers dynamic bodies AND fixed/capped-static prop colliders.
+    this._propHandleToId = new Map();
     // id -> fixed prop collider, for a PREDICTION world only: syncPropTransforms
     // repositions these to the host's live transforms each snapshot so local collision
     // stops drifting from where the props actually are (pass #5, stale-ghost fix).
@@ -453,6 +463,7 @@ export class PhysicsWorld {
         const body = this.world.createRigidBody(bodyDesc);
         const col = this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
         this._propHandles.add(col.handle);
+        this._propHandleToId.set(col.handle, p.id);
         // Keep the spawn transform so the failsafe can respawn a prop that escapes the
         // world below the floor (fix #4). See respawnEscaped. minHalf = the smallest
         // half-extent = the lowest the body CENTRE can legitimately sit above the floor
@@ -476,6 +487,7 @@ export class PhysicsWorld {
         else if (p.rot) desc.setRotation(yawQuat(p.rot));
         const col = this.world.createCollider(desc);
         this._propHandles.add(col.handle);
+        this._propHandleToId.set(col.handle, p.id);
         this._fixedPropColliders.set(p.id, col);
       }
     }
@@ -701,6 +713,51 @@ export class PhysicsWorld {
     } catch {
       return false;
     }
+  }
+
+  // HUNTER-TOOLS v1 — authoritative shot ray. Cast from `origin` along unit `dir` (world
+  // space) up to `maxToi` metres, EXCLUDING the shooter's own capsule + body, and return
+  // the nearest hit as { point:{x,y,z}, toi, info } where info is describeCollider's
+  // classification. null on a clean miss (or if castRay is unavailable). Guarded — any
+  // Rapier API mismatch degrades to null (the referee then fires a no-damage tracer).
+  raycastShot(shooterId, origin, dir, maxToi) {
+    const R = this.R;
+    if (typeof this.world.castRay !== 'function' || !R.Ray) return null;
+    const shooter = this.players.get(shooterId);
+    try {
+      const ray = new R.Ray(origin, dir);
+      const hit = this.world.castRay(
+        ray, maxToi, true, undefined, undefined,
+        shooter ? shooter.collider : undefined,
+        shooter ? shooter.body : undefined
+      );
+      if (!hit) return null;
+      const toi = hit.timeOfImpact != null ? hit.timeOfImpact : hit.toi;
+      if (!(toi >= 0)) return null;
+      const point = { x: origin.x + dir.x * toi, y: origin.y + dir.y * toi, z: origin.z + dir.z * toi };
+      return { point, toi, info: this.describeCollider(hit.collider) };
+    } catch {
+      return null;
+    }
+  }
+
+  // Classify a hit collider for the shot resolver: a PLAYER capsule (kind:'player', id),
+  // a PROP instance (kind:'prop', id — dynamic or fixed), a static map FIXTURE (kind:
+  // 'fixture', type), or plain WORLD geometry (kind:'world' — ground slab / boundary
+  // walls, the free-miss architecture). Handle lookups are O(players)+O(1) map hits.
+  describeCollider(col) {
+    if (col == null) return { kind: 'world' };
+    // Tolerate either a Collider object (has .handle) or a raw handle number, across
+    // rapier-compat versions.
+    const h = typeof col === 'object' && col.handle != null ? col.handle : col;
+    for (const [id, p] of this.players) {
+      if (p.collider && p.collider.handle === h) return { kind: 'player', id };
+    }
+    if (this._propHandleToId && this._propHandleToId.has(h)) return { kind: 'prop', id: this._propHandleToId.get(h) };
+    if (this._staticFixtureTypeByHandle && this._staticFixtureTypeByHandle.has(h)) {
+      return { kind: 'fixture', type: this._staticFixtureTypeByHandle.get(h) };
+    }
+    return { kind: 'world' };
   }
 
   // ---- step ----------------------------------------------------------------

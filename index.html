@@ -77,6 +77,8 @@
           <span id="hudRole" class="pill">&mdash;</span>
           <span id="hudTimer" class="pill">0:00</span>
           <span id="hudProps" class="pill">Props: 0/0</span>
+          <!-- HUNTER-TOOLS v1: own health % (both roles start at 100). -->
+          <span id="hudHealth" class="pill health">&#10084; 100%</span>
         </div>
         <div id="banner" class="banner hidden"></div>
         <div id="feed" class="feed"></div>
@@ -92,6 +94,16 @@
         <div class="blindfold-title">BLINDFOLDED</div>
         <div class="blindfold-sub">Props are hiding&hellip;</div>
         <div id="blindfoldTimer" class="blindfold-timer">0</div>
+      </div>
+      <!-- HUNTER-TOOLS v1: always-on tool bar for hunters (rifle + prop finder). Shown
+           only to a live hunter (main.js updateToolView). Buttons are tappable on phones
+           and clickable on PC; number keys 1/2 also select. The current tool is highlighted.
+           Built for 4+ tools — main.js renders it from the HUNTER_TOOLS list. -->
+      <div id="toolbar" class="toolbar hidden" aria-hidden="true"></div>
+      <!-- HUNTER-TOOLS v1: spectator banner for a dead player (hunters do NOT respawn). -->
+      <div id="spectate" class="spectate hidden" aria-hidden="true">
+        <div class="spectate-title">YOU ARE DEAD</div>
+        <div class="spectate-sub">Spectating &mdash; look around while the round finishes.</div>
       </div>
     </div>
 

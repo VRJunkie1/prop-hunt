@@ -16,6 +16,7 @@
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
 import { loadRapier, PhysicsWorld, isStaticEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
+import { resolveDamageCfg, multiplierForDisguise } from './damage.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -95,6 +96,7 @@ export class Referee {
   addPlayer(player) {
     player.role = null;
     player.alive = true;
+    player.health = this._startHealth(); // HUNTER-TOOLS v1: 0..100 % health (HUD + damage)
     player.ready = false;
     player.disguise = null;
     player.pos = { x: 0, y: 0, z: 0 };
@@ -138,6 +140,7 @@ export class Referee {
     const map = this.maps[this.mapId];
     player.role = ROLE.HUNTER;
     player.alive = true;
+    player.health = this._startHealth();
     player.disguise = null;
     player.input = { mx: 0, mz: 0, jump: false };
     player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
@@ -208,8 +211,11 @@ export class Referee {
       case C2S.DISGUISE:
         this.applyDisguise(player, msg.propId);
         break;
-      case C2S.TAG:
-        this.applyTag(player);
+      // C2S.TAG (legacy instant-kill melee) is intentionally NOT handled: HUNTER-TOOLS v1
+      // replaces it with the rifle + health system, and honouring it would let a tag bypass
+      // health (an instant kill). Dropped so even a hand-crafted TAG message is a no-op.
+      case C2S.SHOOT:
+        this.applyShot(player, msg);
         break;
       case C2S.DEBUG:
         this.handleDebug(player, msg);
@@ -242,6 +248,7 @@ export class Referee {
     const r = role === ROLE.HUNTER ? ROLE.HUNTER : ROLE.PROP;
     player.role = r;
     player.alive = true;
+    player.health = this._startHealth();
     if (r === ROLE.HUNTER) {
       player.disguise = null;
       if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, null);
@@ -356,6 +363,129 @@ export class Referee {
       this.checkRoundOver();
     } else {
       send(hunter, { t: S2C.EVENT, kind: 'miss' });
+    }
+  }
+
+  // ---- HUNTER-TOOLS v1: assault rifle (host-authoritative) -----------------
+  // Starting health (0..100 %). Config-tunable; defaults to 100.
+  _startHealth() {
+    return this.rules && this.rules.startHealth != null ? this.rules.startHealth : 100;
+  }
+
+  // The merged shape catalog (props + fixtures) used for size-based damage lookups.
+  _combatCatalog() {
+    return { ...this.propCatalog, ...this.fixtureCatalog };
+  }
+
+  // Fire the rifle. The client sends only its AIM direction (dx,dy,dz — the camera-forward
+  // it also disguise-picks with). The HOST is the authority: it re-casts the shot in its
+  // own physics world from the shooter's authoritative eye, decides what was hit, applies
+  // damage, and broadcasts the muzzle-flash + tracer to EVERYONE (kind:'shot'). A hacked
+  // client can aim anywhere (legal — you can always aim), but it can never claim a hit the
+  // host's world doesn't produce. No physics world yet (2D fallback) => a no-damage tracer.
+  applyShot(hunter, msg) {
+    if (!hunter || hunter.role !== ROLE.HUNTER || !hunter.alive) return;
+    if (this.phase !== PHASE.HUNTING) return; // no shooting during HIDING (hunters frozen/blind)
+    const now = Date.now();
+    const cd = this.rules.fireCooldownMs != null ? this.rules.fireCooldownMs : 250;
+    if (now - (hunter._lastShotAt || 0) < cd) return; // rate limit
+    hunter._lastShotAt = now;
+
+    // Aim direction: trust the client's camera-forward; fall back to yaw/pitch if absent.
+    let dx = Number(msg && msg.dx), dy = Number(msg && msg.dy), dz = Number(msg && msg.dz);
+    let len = Math.hypot(dx, dy, dz);
+    if (!(len > 1e-6) || !Number.isFinite(len)) {
+      const cp = Math.cos(hunter.pitch || 0);
+      dx = -Math.sin(hunter.yaw) * cp;
+      dy = Math.sin(hunter.pitch || 0);
+      dz = -Math.cos(hunter.yaw) * cp;
+      len = 1;
+    }
+    dx /= len; dy /= len; dz /= len;
+
+    const EYE = 1.5; // eye height above the foot (first-person camera sits at ~1.6)
+    const eye = { x: hunter.pos.x, y: (hunter.pos.y || 0) + EYE, z: hunter.pos.z };
+    const range = this.rules.shootRange != null ? this.rules.shootRange : 120;
+
+    let impact = { x: eye.x + dx * range, y: eye.y + dy * range, z: eye.z + dz * range };
+    let info = null;
+    let hitSomething = false;
+    if (this.physics && this.physics.raycastShot) {
+      const r = this.physics.raycastShot(hunter.id, eye, { x: dx, y: dy, z: dz }, range);
+      if (r) { impact = r.point; info = r.info; hitSomething = true; }
+    }
+    // Damage decision (pure w.r.t. physics — the info descriptor is all it needs).
+    this._applyShotDamage(hunter, info);
+
+    // Muzzle a touch forward + down of the eye so the tracer reads as coming from the
+    // held rifle (approximate; the exact bone muzzle isn't networked in v1).
+    const muzzle = { x: eye.x + dx * 0.5, y: eye.y + dy * 0.5 - 0.15, z: eye.z + dz * 0.5 };
+    this.broadcast({
+      t: S2C.EVENT, kind: 'shot', by: hunter.id,
+      ox: round2(muzzle.x), oy: round2(muzzle.y), oz: round2(muzzle.z),
+      ix: round2(impact.x), iy: round2(impact.y), iz: round2(impact.z),
+      hit: hitSomething,
+    });
+  }
+
+  // Resolve a shot's DAMAGE from its classified hit descriptor (physics.describeCollider).
+  // Split from applyShot so the offline guard (tools/check-combat.mjs) can drive it with a
+  // synthetic descriptor and no Rapier. Rules:
+  //   - player hit           -> that player takes base * size-multiplier(their disguise).
+  //   - disguisable object    -> the object COULD have been a player, so the HUNTER takes
+  //     (prop or non-arch fixture)  the same size-scaled damage instead (friendly-decoy).
+  //   - architecture / world  -> free miss, no damage (walls/floor/ceiling/ground).
+  _applyShotDamage(hunter, info) {
+    if (!info) return;
+    const d = resolveDamageCfg(this.rules.damage);
+    const catalog = this._combatCatalog();
+    if (info.kind === 'player') {
+      const target = this.players.get(info.id);
+      if (!target || !target.alive || target.id === hunter.id) return;
+      const mult = multiplierForDisguise(target.disguise, catalog, d);
+      this._damagePlayer(hunter, target, d.base * mult, false);
+      return;
+    }
+    if (info.kind === 'prop') {
+      const prop = this.props.find((p) => p.id === info.id);
+      if (!prop) return;
+      const c = catalog[prop.type];
+      if (!c || isArchEntry(c) || prop.disguisable === false) return; // architecture-ish => miss
+      const mult = d.selfScalesWithSize ? multiplierForDisguise(prop.type, catalog, d) : 1;
+      this._damagePlayer(hunter, hunter, d.base * mult, true); // shot a decoy => hurt yourself
+      return;
+    }
+    if (info.kind === 'fixture') {
+      const c = catalog[info.type];
+      if (!c || isArchEntry(c)) return; // real wall/floor => free miss
+      const mult = d.selfScalesWithSize ? multiplierForDisguise(info.type, catalog, d) : 1;
+      this._damagePlayer(hunter, hunter, d.base * mult, true);
+      return;
+    }
+    // kind:'world' (ground slab / boundary walls) => architecture => nothing.
+  }
+
+  // Apply `dmg` to `victim`. Broadcasts a 'hurt' event (feedback; health also rides the
+  // snapshot), and on death flips alive=false, announces 'eliminated', and — for a PROP
+  // killed by a live hunter — REFILLS the hunter to full (the kill reward). Death can end
+  // the round (all props caught => hunters win; all hunters dead => props win).
+  _damagePlayer(attacker, victim, dmg, self) {
+    if (!victim || !victim.alive) return;
+    victim.health = Math.max(0, (victim.health != null ? victim.health : this._startHealth()) - dmg);
+    this.broadcast({
+      t: S2C.EVENT, kind: 'hurt', victim: victim.id, by: attacker.id,
+      self: !!self, dmg: round2(dmg), health: round2(victim.health),
+    });
+    if (victim.health <= 0) {
+      victim.alive = false;
+      const wasHunter = victim.role === ROLE.HUNTER;
+      this.broadcast({ t: S2C.EVENT, kind: 'eliminated', by: attacker.id, victim: victim.id, name: victim.name, hunter: wasHunter });
+      // KILL REFILL: a hunter that kills a PROP player refills to full health. (A hunter
+      // that self-destructs on a decoy, or friendly-fires another hunter, gets nothing.)
+      if (victim.role === ROLE.PROP && attacker.role === ROLE.HUNTER && attacker.alive) {
+        attacker.health = this._startHealth();
+      }
+      this.checkRoundOver();
     }
   }
 
@@ -478,6 +608,7 @@ export class Referee {
     ids.forEach((id, i) => {
       const player = this.players.get(id);
       player.alive = true;
+      player.health = this._startHealth();
       player.disguise = null;
       player.input = { mx: 0, mz: 0, jump: false };
       player.dispYaw = player.yaw;
@@ -549,10 +680,21 @@ export class Referee {
 
   checkRoundOver() {
     if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
-    const props = [...this.players.values()].filter((p) => p.role === ROLE.PROP);
+    const all = [...this.players.values()];
+    const props = all.filter((p) => p.role === ROLE.PROP);
     const aliveProps = props.filter((p) => p.alive);
     if (props.length > 0 && aliveProps.length === 0) {
-      this.endRound(ROLE.HUNTER);
+      this.endRound(ROLE.HUNTER); // every prop caught => hunters win
+      return;
+    }
+    // HUNTER-TOOLS v1 win condition: hunters do NOT respawn (see DECISIONS.md). If a round
+    // had hunters and they are ALL dead, the round ends — HUNTERS LOSE, PROPS WIN. (Hunters
+    // can only die during HUNTING, when they can shoot themselves on a decoy / be friendly-
+    // fired; a zero-hunter solo round never triggers this and just runs on the timer.)
+    const hunters = all.filter((p) => p.role === ROLE.HUNTER);
+    const aliveHunters = hunters.filter((p) => p.alive);
+    if (hunters.length > 0 && aliveHunters.length === 0) {
+      this.endRound(ROLE.PROP);
     }
   }
 
@@ -582,6 +724,7 @@ export class Referee {
     for (const p of this.players.values()) {
       p.role = null;
       p.alive = true;
+      p.health = this._startHealth();
       p.disguise = null;
       p.ready = false;
       p.input = { mx: 0, mz: 0, jump: false };
@@ -801,6 +944,8 @@ export class Referee {
       // Reconciliation ack: the last INPUT.seq the host consumed from this player.
       ack: p.lastInputSeq,
       alive: p.alive,
+      // HUNTER-TOOLS v1: 0..100 % health (HUD for self; visible to all — no secret).
+      health: round2(p.health != null ? p.health : this._startHealth()),
       // Roles are hidden: we expose that hunters are hunters (they are the
       // visible seekers) and props only via their chosen disguise. We never
       // leak which players are undisguised props.

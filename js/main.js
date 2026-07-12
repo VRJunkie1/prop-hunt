@@ -18,6 +18,17 @@ import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 import { loadRapier, PhysicsWorld } from '/shared/physics.js';
 
 const ui = new UI();
+
+// HUNTER-TOOLS v1 — the hunter tool bar. Built for 4+ tools; two ship now. `id` is the
+// internal tool key, `name` the label, `key` the on-screen/number-key hint. The rifle is
+// the default. Only the FIRE event is networked (host-authoritative); which tool a hunter
+// holds is NOT synced to other players in v1 (deliberate — the box is a no-op, so it'd be
+// netcode for no payoff; the held-tool silhouette can come with a later tool that needs it).
+const HUNTER_TOOLS = [
+  { id: 'rifle', name: 'Assault Rifle', key: '1' },
+  { id: 'finder', name: 'Prop Finder', key: '2' },
+];
+
 let session = null; // created in boot() once config is loaded
 let editor = null; // lazily created on the first Ctrl+E (see editor.js)
 // In-game debug menu (js/debug.js). Constructed ONLY under ?debug=1 — the SAME single
@@ -90,6 +101,11 @@ const state = {
   // each frame by the render loop and consumed by tryDisguise() on Action. See frame().
   aimPropId: null,
 
+  // HUNTER-TOOLS v1: the hunter's currently selected tool (see HUNTER_TOOLS). Local-only
+  // (not networked); the rifle fires, the prop finder is a no-op. Defaults to the rifle.
+  tool: 'rifle',
+  alive: true, // local player's authoritative alive flag (for the tool bar + spectator view)
+
   // Debug FREE CAM (js/debug.js, ?debug=1 only). While true the render camera is flown
   // locally by the debug module and the physics player is frozen (no prediction, zeroed
   // movement sent), so the body stays put. Always false in normal play.
@@ -99,9 +115,13 @@ const state = {
 // ---- action routing -------------------------------------------------------
 input.onAction = (name) => {
   if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
-  if (name === 'primary') name = state.role === ROLE.HUNTER ? 'tag' : 'disguise';
+  // HUNTER-TOOLS v1: a hunter's primary action fires the selected tool (rifle shoots; the
+  // prop finder does nothing); a prop's primary disguises. The old instant 'tag' melee is
+  // SUPERSEDED by the rifle + health system and fully unwired (client + referee) so it can't
+  // bypass health (an instant-kill path would defeat the whole damage model).
+  if (name === 'primary') name = state.role === ROLE.HUNTER ? 'fire' : 'disguise';
   if (name === 'disguise') tryDisguise();
-  if (name === 'tag') session.send({ t: C2S.TAG });
+  if (name === 'fire') tryFire();
 };
 
 // Overlay visibility follows the browser's real pointer-lock state (input.js
@@ -192,6 +212,37 @@ function tryDisguise() {
   else ui.feed('No prop targeted — aim at a prop and press Action.');
 }
 
+// HUNTER-TOOLS v1: fire the selected tool. Only the assault rifle does anything; the prop
+// finder is a deliberate no-op. We send just the camera-forward AIM direction (the SAME
+// screen-centre ray the disguise pick uses) — the HOST re-runs the shot against its
+// authoritative world, decides the hit + damage, and broadcasts the tracer to everyone.
+function tryFire() {
+  if (state.role !== ROLE.HUNTER || !state.movable) return;
+  if (state.tool !== 'rifle') return; // prop finder does nothing (yet)
+  const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
+  if (!dir) return;
+  session.send({ t: C2S.SHOOT, dx: dir.x, dy: dir.y, dz: dir.z });
+}
+
+// Select a hunter tool by id (from the tool bar or a number key). Hunters only; updates
+// the first-person viewmodel + tool-bar highlight. Purely local (not networked in v1).
+function selectTool(id) {
+  if (state.role !== ROLE.HUNTER) return;
+  if (!HUNTER_TOOLS.some((t) => t.id === id)) return;
+  state.tool = id;
+  applyToolView();
+}
+
+// Reflect the current role/tool/alive state into the first-person viewmodel + tool bar.
+// A LIVE hunter sees the tool bar (current tool highlighted) and holds the tool's
+// viewmodel (rifle or box); props / dead players see neither. Called on role, tool change,
+// each snapshot (alive can flip), and after buildWorld rebuilds the scene.
+function applyToolView() {
+  const liveHunter = state.role === ROLE.HUNTER && state.alive;
+  if (scene && scene.setViewModel) scene.setViewModel(liveHunter ? state.tool : null);
+  ui.setToolbar(liveHunter, state.tool);
+}
+
 // ---- network handling -----------------------------------------------------
 // Game messages (S2C) from the referee — same whether it's our own in-tab
 // referee (host) or the host's over the data channel (guest).
@@ -221,6 +272,11 @@ function handleGameMessage(msg) {
           ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
           input.lookFrozen = false;
           state.aimPropId = null;
+          // HUNTER-TOOLS v1: tidy the tool bar / spectator / tool state for the next round.
+          ui.setToolbar(false);
+          ui.setSpectator(false);
+          state.tool = 'rifle';
+          state.alive = true;
           resetDebugView(); // drop free cam / focus box between rounds
           resetReadyButton();
           destroyPredict();
@@ -261,6 +317,7 @@ function handleGameMessage(msg) {
       ensureScene().then((s) => {
         s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels);
         applyRoleView(); // HUNTER => first-person; PROP => third-person (role may already be known)
+        applyToolView(); // re-establish the hunter viewmodel/tool bar after the scene rebuild
       });
       // Stand up the local prediction world (real wall/prop collision for our own
       // movement). Fire-and-forget: until it resolves — or forever, if Rapier can't
@@ -286,9 +343,11 @@ function handleGameMessage(msg) {
 
     case S2C.ROLE:
       state.role = msg.role;
+      state.alive = true; // fresh role => alive; tool bar/viewmodel follow
       ui.setRole(msg.role);
       applyRoleView(); // hunters go first-person (no own body); props stay third-person
-      if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Wait, then find the props.', 3500);
+      applyToolView(); // show the hunter tool bar + held tool (or hide for a prop)
+      if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Pick a tool (1–2), then hunt with the rifle.', 3500);
       else ui.banner('You are a PROP. Look at an object and press E to disguise.', 3500);
       break;
 
@@ -343,6 +402,10 @@ function backToMenu(msg) {
   ui.setBlindfold(false); // clear any active blindfold overlay + release look
   input.lookFrozen = false;
   state.aimPropId = null;
+  ui.setToolbar(false); // HUNTER-TOOLS v1: hide the tool bar + spectator on the way out
+  ui.setSpectator(false);
+  state.tool = 'rifle';
+  state.alive = true;
   resetDebugView(); // drop free cam / focus box so they don't bleed into the next match
   ui.show('menu');
   if (msg) ui.menuError(msg);
@@ -401,6 +464,14 @@ function onSnapshot(msg) {
   }
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
+    // HUNTER-TOOLS v1: own health on the HUD; track alive to drive the tool bar/viewmodel
+    // and the dead-player spectator banner (hunters do NOT respawn).
+    ui.setHealth(me.health);
+    const wasAlive = state.alive;
+    state.alive = me.alive !== false;
+    if (state.alive !== wasAlive) applyToolView();
+    const activePhase = msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING;
+    ui.setSpectator(!state.alive && activePhase);
     state.serverSelf.x = me.x;
     state.serverSelf.y = me.y || 0;
     state.serverSelf.z = me.z;
@@ -468,9 +539,24 @@ function onEvent(msg) {
       if (msg.phase === PHASE.HIDING) ui.banner('HIDING PHASE — props, disguise now!', 2500);
       if (msg.phase === PHASE.HUNTING) ui.banner('HUNT! Hunters are loose.', 2500);
       break;
+    case 'shot':
+      // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
+      // (o*) to the confirmed impact point (i*). Guarded so a missing method can't throw.
+      if (scene && scene.spawnTracer) scene.spawnTracer(msg.ox, msg.oy, msg.oz, msg.ix, msg.iy, msg.iz);
+      break;
+    case 'hurt':
+      // Light feedback for the local player (health itself rides the snapshot HUD).
+      if (msg.victim === state.selfId) {
+        if (msg.self) ui.feed(`You shot a decoy! −${msg.dmg}% (aim for real props).`);
+        else ui.feed(`Hit! −${msg.dmg}%`);
+      }
+      break;
     case 'eliminated':
-      ui.feed(`${msg.name} was found!`);
-      if (msg.victim === state.selfId) ui.banner('You were caught!', 3000);
+      // hunter=true => a hunter died (no respawn); else a prop was found.
+      ui.feed(msg.hunter ? `${msg.name} (hunter) was taken down!` : `${msg.name} was found!`);
+      if (msg.victim === state.selfId) {
+        ui.banner(msg.hunter ? 'You died — spectating.' : 'You were caught!', 3000);
+      }
       break;
     case 'miss':
       ui.feed('Missed — nothing there.');
@@ -684,6 +770,8 @@ function frameBody(now) {
     // Advance remote-hunter animation mixers (needs real dt; interpolate uses a fixed
     // alpha). Drives the velocity-based idle/run state machine — see scene.updateAnimations.
     scene.updateAnimations(dt);
+    // HUNTER-TOOLS v1: fade + retire active tracers / muzzle flashes.
+    scene.updateEffects(dt);
     // Debug menu (?debug=1 only): updates its live displays and, when active, drives the
     // free cam + focus-box raycast. Runs BEFORE render so the camera/box reflect this frame.
     if (debugMenu) debugMenu.frame(dt);
@@ -897,6 +985,11 @@ function newSession() {
   }
   newSession();
   wireMenu();
+  // HUNTER-TOOLS v1: build the (initially hidden) hunter tool bar and wire selection from
+  // both the on-screen buttons and the number keys (1..2). Hidden until a hunter is live.
+  ui.buildToolbar(HUNTER_TOOLS);
+  ui.onSelectTool = selectTool;
+  input.onSelectTool = (i) => { const t = HUNTER_TOOLS[i]; if (t) selectTool(t.id); };
   updateEditorButton(); // show the dev editor button on the landing screen (desktop solo)
   startInputLoop();
   requestAnimationFrame(frame);

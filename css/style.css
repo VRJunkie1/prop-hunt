@@ -493,3 +493,73 @@ button.ghost:hover { background: #3d2a66; }
 }
 .dev-btn:hover { opacity: 1; background: #1a1030dd; }
 .dev-btn.hidden { display: none; }
+
+/* ---- HUNTER-TOOLS v1: health, tool bar, spectator ---- */
+/* Own health readout in the HUD. Turns amber then red as it drops (main.js sets the
+   class). Sits in the same .pill row as role/timer/props. */
+#hudHealth.health { color: #7be38b; }
+#hudHealth.health.warn { color: #ffcf5a; }
+#hudHealth.health.crit { color: #ff6b6b; }
+
+/* Always-on tool bar for hunters. Bottom-centre, above the safe-area inset; its buttons
+   opt back into pointer events (the HUD itself is pointer-events:none, but the toolbar is
+   a sibling of #hud). Current tool highlighted. Scales down on small screens. */
+.toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 40;
+  pointer-events: none; /* the row is a spacer; buttons re-enable below */
+}
+.toolbar.hidden { display: none; }
+.tool-btn {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid #ffffff33;
+  border-radius: 10px;
+  background: #000000aa;
+  color: #e9dcff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity 0.1s, background 0.1s, border-color 0.1s;
+}
+.tool-btn:hover { opacity: 0.92; }
+.tool-btn .tool-key {
+  font-size: 11px;
+  opacity: 0.7;
+  border: 1px solid #ffffff44;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.tool-btn.selected {
+  opacity: 1;
+  background: #6f4fd0cc;
+  border-color: #ffffffaa;
+  box-shadow: 0 0 10px #6f4fd077;
+}
+
+/* Dead-player spectator banner. Non-interactive; sits over the (still-rendering) world. */
+.spectate {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 11;
+  background: radial-gradient(circle at center, #00000000 40%, #00000066 100%);
+}
+.spectate.hidden { display: none; }
+.spectate-title { font-size: 34px; font-weight: 800; color: #ff6b6b; text-shadow: 0 0 8px #000; }
+.spectate-sub { font-size: 16px; color: #e9dcffcc; text-shadow: 0 0 6px #000; }

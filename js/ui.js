@@ -23,12 +23,18 @@ export class UI {
       hudRole: $('hudRole'),
       hudTimer: $('hudTimer'),
       hudProps: $('hudProps'),
+      hudHealth: $('hudHealth'),
+      toolbar: $('toolbar'),
+      spectate: $('spectate'),
       banner: $('banner'),
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
       blindfold: $('blindfold'),
       blindfoldTimer: $('blindfoldTimer'),
     };
+    // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
+    // main.js injects the real handler (selectTool). No game logic lives in the UI.
+    this.onSelectTool = () => {};
     // Diagnostic: peerId -> true(relayed)/false(direct). Painted in the lobby so
     // a playtest can see whether the free TURN relay is being leaned on. Purely
     // informational; the network layer fills it via setLink().
@@ -146,6 +152,59 @@ export class UI {
     const t = Math.max(0, Math.ceil(timeLeft));
     this.el.hudTimer.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
     this.el.hudProps.textContent = `Props: ${propsAlive}/${propsTotal}`;
+  }
+
+  // HUNTER-TOOLS v1: own health % on the HUD (main.js passes the local player's health from
+  // each snapshot). Green → amber → red as it drops. Both roles start at 100.
+  setHealth(pct) {
+    const el = this.el.hudHealth;
+    if (!el) return;
+    const v = Math.max(0, Math.round(pct == null ? 100 : pct));
+    el.textContent = `❤ ${v}%`;
+    el.classList.toggle('crit', v <= 25);
+    el.classList.toggle('warn', v > 25 && v <= 50);
+  }
+
+  // Build the hunter tool bar from a [{ id, name, key }] list (built for 4+ tools). Called
+  // once at boot; visibility + highlight are driven per-state by setToolbar().
+  buildToolbar(tools) {
+    const bar = this.el.toolbar;
+    if (!bar) return;
+    bar.innerHTML = '';
+    for (const t of tools || []) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tool-btn';
+      btn.dataset.toolId = t.id;
+      const key = document.createElement('span');
+      key.className = 'tool-key';
+      key.textContent = t.key;
+      const name = document.createElement('span');
+      name.textContent = t.name;
+      btn.append(key, name);
+      // pointerdown (not click) so a tap doesn't also punch through to the canvas / steal
+      // pointer lock focus; preventDefault keeps the touch from scrolling.
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.onSelectTool(t.id);
+      });
+      bar.appendChild(btn);
+    }
+  }
+
+  // Show/hide the tool bar and highlight the current tool. `show` = local player is a live
+  // hunter; `currentId` = the selected tool. Pure DOM — no game logic.
+  setToolbar(show, currentId) {
+    const bar = this.el.toolbar;
+    if (!bar) return;
+    bar.classList.toggle('hidden', !show);
+    for (const btn of bar.children) btn.classList.toggle('selected', btn.dataset.toolId === currentId);
+  }
+
+  // Show/hide the dead-player spectator banner (hunters do not respawn).
+  setSpectator(on) {
+    if (this.el.spectate) this.el.spectate.classList.toggle('hidden', !on);
   }
 
   banner(text, ms = 0) {

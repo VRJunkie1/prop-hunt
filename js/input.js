@@ -72,6 +72,7 @@ export class Input {
     this.onTouchPlay = () => {}; // () => void  fired when a touch player taps the overlay
     this.onToggleView = () => {}; // () => void  V key: third-person <-> first-person
     this.onToggleEdit = () => {}; // () => void  Ctrl/Cmd+E: toggle the level editor (desktop)
+    this.onSelectTool = () => {}; // (index:number)  number keys 1..9 select a hunter tool
 
     // Touch state.
     this.touch = isTouchDevice();
@@ -312,8 +313,9 @@ export class Input {
     }
     if (!this.locked) return;
     if (e.code === 'KeyE') this.onAction('disguise');
-    if (e.code === 'KeyF') this.onAction('tag');
     if (e.code === 'KeyV') this.onToggleView();
+    // HUNTER-TOOLS v1: number keys 1..9 select a hunter tool (main.js maps index → tool).
+    if (/^Digit[1-9]$/.test(e.code)) this.onSelectTool(parseInt(e.code.slice(5), 10) - 1);
   }
 
   onKeyUp(e) {

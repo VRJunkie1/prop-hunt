@@ -23,6 +23,8 @@ import { worldColliderBoxes } from '/shared/bounds.js';
 // inspect / focus box (debugPick) both fire through this point. Module-level so those
 // allocate nothing per frame.
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
+// +Y unit, reused to orient a tracer cylinder (default axis +Y) toward the shot vector.
+const UP_Y = new THREE.Vector3(0, 1, 0);
 
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
@@ -121,6 +123,14 @@ export class Scene3D {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
     this.camera.position.set(0, 1.6, 0);
+    // HUNTER-TOOLS v1. The camera is part of the scene graph so a first-person weapon
+    // VIEWMODEL parented to it (the local hunter's held rifle/box — how tool switching is
+    // visible to the shooter themselves) renders. Tracers + muzzle flashes are added
+    // directly to the scene. All re-established after buildWorld's scene.clear().
+    this.scene.add(this.camera);
+    this._viewModel = null; // local hunter's held-tool mesh (child of the camera), or null
+    this._viewModelTool = null; // tool id the current viewmodel represents (rifle/finder/null)
+    this._effects = []; // active shot effects: { tracer, flash, life, max }
 
     this.selfId = null;
     this.catalog = null;
@@ -264,6 +274,13 @@ export class Scene3D {
     this._modelSlots = [];
     // Clear previous scene contents.
     this.scene.clear();
+    // scene.clear() detaches the camera (and any stray tracers); re-parent the camera so
+    // its first-person viewmodel keeps rendering, and force a viewmodel rebuild against the
+    // fresh scene (main.js re-applies the tool via applyToolView after buildWorld).
+    this.scene.add(this.camera);
+    if (this._viewModel) { this.camera.remove(this._viewModel); this._viewModel = null; }
+    this._viewModelTool = null;
+    this._effects = [];
     this.players.clear();
     // scene.clear() also drops the self avatar; reset its trackers and the camera's
     // collision set / smoothed distance so a fresh match starts fully zoomed out.
@@ -1174,6 +1191,128 @@ export class Scene3D {
       const ctl = entry.hunterCtl;
       if (ctl && ctl.weaponRoot) ctl.weaponRoot.visible = this._weaponVisible;
     }
+  }
+
+  // ---- HUNTER-TOOLS v1: aim, first-person viewmodel, tracers -----------------
+
+  // The camera-forward aim direction through the fixed screen-centre reticle — the SAME
+  // ray aimedDisguiseTarget uses for the disguise pick. main.js sends this to the host on
+  // fire; the host re-casts the shot from its authoritative eye along this direction.
+  // Returns { x, y, z } (unit) or null before the camera exists.
+  aimDirection() {
+    if (!this.camera) return null;
+    this.camera.updateMatrixWorld();
+    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+    const d = this._raycaster.ray.direction;
+    if (!d) return null;
+    return { x: d.x, y: d.y, z: d.z };
+  }
+
+  // Show the local hunter's held tool as a first-person VIEWMODEL parented to the camera:
+  // 'rifle' (the assault rifle), 'finder' (a ~1 ft box — Prop Finder, does nothing), or
+  // null (props / dead / no tool → hide it). This is how tool switching is visible to the
+  // shooter themselves (a first-person hunter draws no full body). Cheap rebuild on change;
+  // no-op when unchanged. NOT networked in v1 (held-tool sync is deferred) — purely local.
+  setViewModel(toolId) {
+    const id = toolId || null;
+    if (this._viewModelTool === id) return;
+    this._viewModelTool = id;
+    if (this._viewModel) {
+      this.camera.remove(this._viewModel);
+      this._viewModel = null;
+    }
+    if (!id) return;
+    const g = this._buildViewModel(id);
+    if (g) { this.camera.add(g); this._viewModel = g; }
+  }
+
+  _buildViewModel(toolId) {
+    const g = new THREE.Group();
+    if (toolId === 'rifle') {
+      // Prefer the real rifle GLB (already loaded for the SWAT soldier); fall back to a
+      // primitive barrel so a first-person hunter always sees SOMETHING in hand.
+      const wcfg = this.characterModels && this.characterModels.hunter && this.characterModels.hunter.weapon;
+      const tmpl = wcfg && wcfg.model ? this._charCache.get('/assets/' + wcfg.model) : null;
+      if (tmpl && tmpl !== 'failed' && tmpl !== 'loading' && tmpl.scene) {
+        const m = tmpl.scene.clone(true);
+        const size = new THREE.Vector3();
+        new THREE.Box3().setFromObject(m).getSize(size);
+        const nativeLen = Math.max(size.x, size.y, size.z) || 1;
+        m.scale.setScalar(0.5 / nativeLen); // ~0.5 m held rifle
+        m.rotation.set(0, Math.PI / 2, 0); // roughly point the barrel forward (−Z)
+        m.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
+        g.add(m);
+      } else {
+        const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.5), new THREE.MeshLambertMaterial({ color: 0x24242c }));
+        barrel.position.set(0, 0, -0.25);
+        g.add(barrel);
+        g.userData.rifleFallback = true; // upgrade to the real GLB once it finishes loading
+      }
+    } else if (toolId === 'finder') {
+      // PROP FINDER: a ~1 ft (0.3 m) box in the hand. Does NOTHING — exists only to prove
+      // tool/weapon switching works end to end (the rifle hides, the box appears).
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshLambertMaterial({ color: 0x49b6ff }));
+      g.add(box);
+    } else {
+      return null;
+    }
+    g.position.set(0.32, -0.3, -0.7); // held down-and-right in front of the camera
+    g.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+    return g;
+  }
+
+  // Spawn a muzzle flash at (a*) and a tracer round from (a*) to the impact point (b*),
+  // visible to EVERYONE (driven by the host's 'shot' event). Short-lived; updateEffects
+  // fades + removes them. Reuses shared geometries so a burst of fire allocates little.
+  spawnTracer(ax, ay, az, bx, by, bz) {
+    if (!this.scene) return;
+    const a = new THREE.Vector3(ax, ay, az);
+    const b = new THREE.Vector3(bx, by, bz);
+    const diff = b.clone().sub(a);
+    const len = diff.length() || 0.01;
+    const geo = this._tracerGeo || (this._tracerGeo = new THREE.CylinderGeometry(0.02, 0.02, 1, 6));
+    const tracer = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xfff2a0, transparent: true, opacity: 0.9, depthWrite: false }));
+    tracer.position.copy(a).addScaledVector(diff, 0.5);
+    tracer.quaternion.setFromUnitVectors(UP_Y, diff.clone().normalize());
+    tracer.scale.set(1, len, 1);
+    this.scene.add(tracer);
+    const fgeo = this._flashGeo || (this._flashGeo = new THREE.SphereGeometry(0.14, 8, 6));
+    const flash = new THREE.Mesh(fgeo, new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 1, depthWrite: false }));
+    flash.position.set(ax, ay, az);
+    this.scene.add(flash);
+    this._effects.push({ tracer, flash, life: 0.12, max: 0.12 });
+  }
+
+  // Fade + retire active shot effects. Called each frame from main.js (like updateAnimations).
+  updateEffects(dt) {
+    // Upgrade a first-person rifle viewmodel from its primitive fallback to the real GLB
+    // once the (async) weapon model has finished loading. Cheap: one cache lookup/frame.
+    if (this._viewModel && this._viewModelTool === 'rifle' && this._viewModel.userData.rifleFallback) {
+      const wcfg = this.characterModels && this.characterModels.hunter && this.characterModels.hunter.weapon;
+      const tmpl = wcfg && wcfg.model ? this._charCache.get('/assets/' + wcfg.model) : null;
+      if (tmpl && tmpl !== 'failed' && tmpl !== 'loading' && tmpl.scene) {
+        this._viewModelTool = null; // force a rebuild against the now-loaded GLB
+        this.setViewModel('rifle');
+      }
+    }
+    if (!this._effects || !this._effects.length) return;
+    const keep = [];
+    for (const e of this._effects) {
+      e.life -= dt;
+      const k = e.life > 0 ? e.life / e.max : 0;
+      e.tracer.material.opacity = 0.9 * k;
+      e.flash.material.opacity = k;
+      e.flash.scale.setScalar(1 + (1 - k) * 1.8);
+      if (e.life > 0) {
+        keep.push(e);
+      } else {
+        this.scene.remove(e.tracer);
+        this.scene.remove(e.flash);
+        e.tracer.material.dispose();
+        e.flash.material.dispose();
+      }
+    }
+    this._effects = keep;
   }
 
   // ---- collider debug overlay (?debug=1) ------------------------------------

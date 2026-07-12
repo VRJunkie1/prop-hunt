@@ -8,6 +8,56 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HUNTER TOOLS v1 + HEALTH/DAMAGE + all-hunters-dead win (2026-07-12, VRmike). Crash-retry; started from a CLEAN tree at 8e28bc3 (the crashed run committed nothing). All headless checks GREEN; the tool bar / rifle visuals / actual raycast hits owe a live 2-player pass.
+
+Adds the hunter tool framework (built for 4+ tools; 2 ship), a host-authoritative assault
+rifle with tracers, a no-op prop finder, a health/damage system, and a new win condition.
+Full detail: `memory/notes/hunter-tools-combat.md` + `DECISIONS.md` #1.
+
+- **Tool framework (client-only, NOT networked in v1).** `HUNTER_TOOLS` in `js/main.js`;
+  always-on `#toolbar` for a live hunter (tap on phone, click or number keys 1/2 on PC,
+  current highlighted). A first-person weapon **VIEWMODEL** (`scene.setViewModel`) makes
+  switching visible to the shooter (first-person hunters draw no body): rifle GLB (primitive
+  barrel fallback, upgrades on load) vs a ~0.3 m box for the finder. The camera is added to
+  the scene graph so its child viewmodel renders. Only the FIRE event is broadcast — which
+  tool a hunter holds is deliberately not synced (finder is a no-op → netcode for no payoff).
+- **Assault rifle (host-authoritative).** `C2S.SHOOT {dx,dy,dz}` = the camera-forward from
+  `scene.aimDirection()` — the SAME screen-centre ray as the disguise pick (reused).
+  `referee.applyShot` re-casts from the shooter's authoritative eye in its own Rapier world
+  (`physics.raycastShot`→`castRay`, own capsule excluded); `physics.describeCollider` maps the
+  hit collider to player / prop / static-fixture-by-type / world via handle maps built at
+  construction. Broadcasts `EVENT kind:'shot'` → `scene.spawnTracer` (muzzle flash + tracer
+  rifle-tip→impact) for EVERYONE, faded by `scene.updateEffects`. No physics → no-damage tracer.
+- **Prop finder.** Tool 2: hides the rifle viewmodel, shows a ~1 ft box, does nothing —
+  proves tool/weapon switching end to end (later: directional taunt audio).
+- **Health/damage (all host-side).** Start 100 % (`rules.startHealth`), on the HUD
+  (`#hudHealth`) + every snapshot player entry. `shared/damage.js` (PURE, shared by referee +
+  guard) lerps a SIZE multiplier from `rules.damage` anchors over `entrySize` = the SAME
+  footprint physics bakes colliders from (`halfExtentsFor`, auto-upgrades to measured bounds):
+  base 10; burger (0.72 m) ×5 → ~2 hits; table (2.25 m) ×0.34 → ~30 hits (≈3× the default
+  player's 10); undisguised → ×1. Rules: player hit → base×disguise-size; a disguisable decoy
+  (prop or non-arch fixture) → the HUNTER takes it instead; architecture/world → free miss;
+  a prop KILL refills the hunter to full.
+- **Death + new win condition (DECISIONS.md #1).** Hunters do NOT respawn; a dead player
+  spectates (`#spectate`, first-person look-around). `checkRoundOver` now also ends the round
+  PROPS-WIN when a round's hunters are ALL dead (alongside all-props-caught → hunters win and
+  timer-expiry → props win).
+- **Verification.** NEW `tools/check-combat.mjs` (build-gating) drives the real referee
+  paths: size→mult lerp, player-damage scaling, kill-refill, wrong-prop self-damage vs
+  architecture free-miss, and BOTH win conditions. `check-blindfold.mjs` covers the new
+  `scene.*` methods; `check-physics.mjs` still green (handle maps are additive); page boots
+  with zero console errors. **All GREEN.**
+- **Files:** `shared/config/rules.json` (+startHealth/shootRange/fireCooldownMs/damage),
+  `shared/damage.js` (new), `shared/protocol.js` (+C2S.SHOOT, health/event docs),
+  `shared/physics.js` (raycastShot/describeCollider + handle maps), `shared/referee.js`
+  (health + shot + damage + win), `js/scene.js`, `js/main.js`, `js/ui.js`, `js/input.js`,
+  `index.html`, `css/style.css`, `DECISIONS.md` (new), `tools/check-combat.mjs` (new),
+  `memory/notes/hunter-tools-combat.md` (new), architecture.
+- **OWED — live 2-player pass:** tool bar select (PC+phone) + highlight; viewmodel switch;
+  muzzle flash + tracer seen by BOTH; size-scaled prop damage; decoy self-damage; wall
+  free-miss; kill-refill; hunter death → spectator; last hunter down → PROPS WIN. Tune
+  `rules.damage` + muzzle offset if off (hot-tunable).
+
 ## Latest: HUNTER MODEL SIZING FIX (bone-derived, verified) + DISGUISE-ANYTHING (2026-07-11, VRmike, on `main`). The third try at the hunter model — this one has a build-gating check that asserts the OUTPUT, not just that the code exists. Headless checks GREEN; the render/facing + a pillar disguise still owe a live 2-player pass.
 
 - **PART A — hunter model TINY/ORBITING, root-caused + fixed for real.** The GLB stores its

@@ -21,7 +21,14 @@ export const C2S = {
   //   rotUnlock: right-click held — a disguised prop may rotate on yaw (never tips);
   //              otherwise a disguise keeps its locked orientation while moving.
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
-  TAG: 'tag', // {}                            -> hunter attempts a tag
+  TAG: 'tag', // {}                            -> hunter attempts a tag (legacy melee; the rifle replaces it)
+  // HUNTER-TOOLS v1 — fire the assault rifle. { dx, dy, dz } = the shooter's camera-forward
+  // aim direction (the SAME screen-centre ray the disguise pick uses). The host is the
+  // authority: it re-runs the shot against its own physics world from the shooter's
+  // authoritative eye, decides what was hit, applies damage, and broadcasts the tracer
+  // (S2C.EVENT kind:'shot'). Trusting only the AIM direction (not any claimed hit) is not a
+  // cheat vector — a player can always aim where they like; the host validates the WORLD.
+  SHOOT: 'shoot', // { dx, dy, dz }
   // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
   // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
   // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
@@ -46,10 +53,15 @@ export const S2C = {
   //   but never wearable. Presence of `qx` marks the live-transform form.
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state. players:[{id,name,x,y,z,yaw,alive,
-  //   hunter,disguise,ack}] + awake dynamic-prop transforms props:[{id,x,y,z,qx,qy,qz,qw}]
-  //   (sleeping props omitted — they haven't moved). `ack` = last INPUT.seq the host
-  //   consumed from that player, for client reconciliation.
+  //   hunter,disguise,health,ack}] + awake dynamic-prop transforms props:[{id,x,y,z,qx,qy,qz,qw}]
+  //   (sleeping props omitted — they haven't moved). `health` = 0..100 % (HUNTER-TOOLS v1);
+  //   `ack` = last INPUT.seq the host consumed from that player, for client reconciliation.
   EVENT: 'event', // { kind, ... }               -> discrete game events
+  //   kind:'shot'       { by, ox,oy,oz, ix,iy,iz, hit } -> draw muzzle flash + tracer from
+  //                     the rifle muzzle (o*) to the host-confirmed impact point (i*).
+  //   kind:'hurt'       { victim, by, self, dmg, health } -> a player took damage.
+  //   kind:'eliminated' { by, victim, name, hunter } -> a player died (hunter=true if a hunter).
+  //   kind:'roundOver'  { winner } -> ROLE.HUNTER or ROLE.PROP (props win if all hunters die).
   ERROR: 'error', // { msg }
 };
 

@@ -201,8 +201,38 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   widened to scan debug.js's `scene.*()` calls too (the "missing scene method blanks the
   render loop" guard now covers this module). Detail: `memory/notes/debug-menu.md`.
 
+## Hunter tools + health/damage (HUNTER-TOOLS v1, 2026-07-12)
+
+Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
+
+- **Tool framework is CLIENT-ONLY and NOT networked** (`js/main.js` `HUNTER_TOOLS`,
+  `state.tool`). An always-on `#toolbar` for a live hunter (tap / click / number keys 1–2,
+  current highlighted). Tool switching is made visible to the first-person shooter by a
+  weapon **viewmodel** parented to the camera (`scene.setViewModel`: rifle GLB or a ~0.3 m
+  box). Only the FIRE event crosses the wire; which tool a hunter holds is deliberately not
+  synced in v1.
+- **The rifle is host-authoritative** (same client-suggests/host-validates model as
+  disguising). Client sends only its aim DIRECTION (`C2S.SHOOT`, from `scene.aimDirection()`
+  = the SAME screen-centre ray as the disguise pick). `referee.applyShot` re-casts from the
+  shooter's authoritative eye in the host's Rapier world (`physics.raycastShot` → `castRay`,
+  own capsule excluded) and `physics.describeCollider` classifies the hit
+  (player / prop / static-fixture-by-type / world) via handle→entity maps built at world
+  construction. Everyone sees the tracer via `EVENT kind:'shot'` → `scene.spawnTracer`.
+- **Health/damage lives entirely on the host** (`shared/referee.js`), sized from the SAME
+  footprint physics uses. `shared/damage.js` (PURE) is the one size→multiplier source
+  (`entrySize` via `physics.halfExtentsFor`, lerped over `rules.damage` anchors), imported by
+  both the referee and `tools/check-combat.mjs`. Player hit → base×disguise-size; a
+  disguisable decoy → the hunter takes it instead; architecture/world → free miss; a prop
+  kill refills the hunter. Health rides every snapshot player entry (HUD only, no secret).
+- **Hunters do NOT respawn** (DECISIONS.md #1): a dead player spectates; `checkRoundOver`
+  ends the round PROPS-WIN when a round's hunters are all dead.
+
 ## Shared (`shared/`)
 
+- `damage.js` — **HUNTER-TOOLS v1 damage math (PURE).** Imports only `physics.halfExtentsFor`
+  (no Rapier/DOM) so the host referee and the offline guard run identical numbers. Lerps a
+  size multiplier between `rules.damage` anchors over each disguise's collider footprint —
+  ONE size source, auto-upgrades to measured `asset-dims` bounds when populated.
 - `protocol.js` — **one protocol** now: `C2S`/`S2C`/`PHASE`/`ROLE` (client ↔
   referee). Dependency-free ESM. (The old `SIG` matchmaker-signaling protocol was
   deleted with the matchmaker; PeerJS's own connect/disconnect events replace it.)
