@@ -8,6 +8,8 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## RESUME NOTE (2026-07-12, resume of the crashed rifle/tuning run): the crashed attempt had already COMMITTED its full work as `959fc2c` (the harness commits partial trees); the Exception struck AFTER the commit, during the final deploy/link-posting step — NOT mid-edit. Working tree verified CLEAN at HEAD (no partial/uncommitted leftovers to discard). Re-ran the whole guard suite on resume: `check-hunter-model`, `check-combat`, `check-debug-menu`, `check-blindfold`, `check-physics`, `check-hunter-model-size` all GREEN; page boots clean with zero console errors in normal + `?debug=1` + phone-portrait; debug menu confirmed visible by default (screenshot). No code changes were needed — the six-part pass below is complete and coherent. Still owes the live 2-player pass noted at the end of that section.
+
 ## Latest: REMOTE RIFLE ANIMATION FIX + INPUT/DAMAGE/HUD TUNING (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1); remote-animation look + HUD-in-match + live damage feel owe a 2-player pass.
 
 Six-part tuning pass on the HUNTER-TOOLS build. Full detail: `notes/hunter-character-model.md`
