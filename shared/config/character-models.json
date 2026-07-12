@@ -24,10 +24,11 @@
       "crossfadeSeconds": 0.15
     },
     "weapon": {
-      "_comment": "Assault rifle parented to the right-wrist bone. position (bone-local units), rotationDeg (bone-local degrees) and scale are HOT-TUNABLE grip nudges — Quaternius gun + Quaternius character align close out of the box, so these default to a light nudge; adjust here (no rebuild) if the grip looks off in a live browser. attachBone must match a bone name in the GLB (Wrist.R / Wrist.L exist).",
+      "_comment": "Assault rifle parented to the right-wrist bone. worldLength is the rifle's longest-axis size in METRES: scene.js measures the GLB's native size and the wrist bone's world scale (which carries the armature's baked 100x and the rig's fit scale) and sizes the weapon to this length — so the rifle stays correct whatever the body sizing does (the old bare `scale` blew up/shrank when the rig scale changed). position (bone-local units), rotationDeg (bone-local degrees) and scale (a MULTIPLIER on worldLength) are HOT-TUNABLE grip nudges — adjust here (no rebuild) if the grip looks off in a live browser. attachBone is matched TOLERANTLY (GLTFLoader loads the GLB's 'Wrist.R' as 'WristR'); Wrist.R / Wrist.L both exist.",
       "model": "9a0e478c-de82-4773-9b70-a0219bb0057c.glb",
       "attachBone": "Wrist.R",
       "visibleByDefault": true,
+      "worldLength": 0.8,
       "position": { "x": 0, "y": 0, "z": 0 },
       "rotationDeg": { "x": 0, "y": 0, "z": 0 },
       "scale": 1.0

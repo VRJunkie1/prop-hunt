@@ -220,10 +220,15 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   `toy_workshop`, `restaurant`), `props.json` (the **disguise catalog** — movable
   items only: box/cylinder/cone/sphere + color, plus an optional `model` GLB path
   for the restaurant), and `fixtures.json` (the **static building-piece catalog**:
-  same shape format + `model`/`modelSize`). props and fixtures are DELIBERATELY
-  separate files so a fixture can never enter the disguise pool — the referee builds
-  the pool from `map.props` only; `scene.js` merges the two catalogs purely for
-  rendering. Adding maps/props needs no engine change; the lobby map picker renders
+  same shape format + `model`/`modelSize`). **DISGUISE-ANYTHING (2026-07-11):** a player
+  can disguise as ANY object EXCEPT world ARCHITECTURE. `physics.isArchEntry` /
+  `isDisguisableEntry` ("renderable mesh AND not architecture") is the one rule; the 4
+  architecture fixtures (floor + walls) carry `"arch": true`. `referee.startMatch` promotes
+  every non-arch fixture (tables, food, counters, oven, fridge, cabinets, sinks, shelves,
+  vent, doors, **pillars**) into the disguise pool; only architecture stays out. props.json
+  vs fixtures.json is still a useful split (movable vs built-in, and character models stay
+  fully separate — see below), but a fixture is no longer barred from the pool. Detail:
+  `notes/disguise-anything.md`. Adding maps/props needs no engine change; the lobby map picker renders
   any new map automatically. **`physics-feel.json`** (2026-07-11) holds the physics
   FEEL tunables (restitution / solver iterations / prop damping / anti-bob) — a
   physics-owned file, NOT `rules.json` (which is the referee's game rules);
@@ -242,11 +247,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
 - **Static vs dynamic in a map** (added with the `restaurant` map): a map may
   carry an optional **`fixtures[]`** array (immovable building pieces — walls,
   counters, appliances, sinks, large tables) *alongside* **`props[]`** (the movable
-  disguise pool). Fixtures render + go into `scene.colliders` (camera raycast) but
-  the referee never treats them as disguisable; props stay the disguise pool.
-  **As of the 2026-07 physics pass this split also drives the Rapier world:**
-  fixtures + walls + ground become STATIC colliders; props become DYNAMIC rigid
-  bodies. See the Physics + netcode section below. Detail: `notes/restaurant-map.md`.
+  disguise pool). **As of disguise-anything (2026-07-11)** every NON-architecture fixture
+  is also promoted into the disguise pool (referee), and static built-ins ride the prop
+  stream as INVISIBLE aim proxies in `scene.js` (visible mesh still from the scenery loop);
+  only architecture (`isArchEntry`) is never disguisable. **The 2026-07 physics pass split
+  still drives the Rapier world unchanged:** fixtures + walls + ground become STATIC
+  colliders (`_buildStatic`; `_buildProps` skips `isStaticEntry` props so nothing is built
+  twice), props become DYNAMIC rigid bodies. See the Physics + netcode section below. Detail:
+  `notes/restaurant-map.md`, `notes/disguise-anything.md`.
 - **Per-object placement fields.** Each fixture/prop entry carries `type`, `x`, `z`
   and optional `y` (surface offset), `rot` (yaw radians), and — added with the level
   editor (2026-07-10) — `scale` (uniform, default 1). `scale` is applied **VISUAL-ONLY**

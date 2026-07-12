@@ -47,6 +47,27 @@ export function isStaticEntry(c) {
   return !!(c && (c.static || c.decor));
 }
 
+// ARCHITECTURE (disguise-anything, Part B). A catalog entry is world ARCHITECTURE —
+// floors, boundary/room walls, wall panels/dividers, ceilings, the ground — iff it
+// carries an `arch`/`floor`/`wall`/`ceiling` flag. Architecture is the ONE thing a
+// player may NOT disguise as: it stays pure scenery + world collision and never enters
+// the prop/disguise stream. Everything else (all props + every non-architecture fixture:
+// tables, chairs, food, the vent/extractor hood, counters, cabinets, oven, fridge,
+// sinks, shelves, doors, AND pillars) is disguisable. Referee, scene and the headless
+// eligibility check all read THIS one classifier so they can never drift.
+export function isArchEntry(c) {
+  return !!(c && (c.arch || c.floor || c.wall || c.ceiling));
+}
+
+// DISGUISE ELIGIBILITY (Part B). "Has a renderable mesh AND is not architecture." Every
+// catalog entry carries a primitive `shape` (its fallback + GLB size target), so a real
+// mesh is always drawable; the only exclusion is architecture. Pure + dependency-free so
+// the referee (building the disguise pool) and tools/check-disguise-eligibility.mjs run
+// the exact same rule.
+export function isDisguisableEntry(c) {
+  return !!(c && c.shape && !isArchEntry(c));
+}
+
 // FEEL TUNING (2026-07). The single derivation point for the physics-feel knobs,
 // used by BOTH the host's authoritative world and every client's prediction world.
 // Both sims call this with the SAME `feel` object (config.js loads one
@@ -394,6 +415,14 @@ export class PhysicsWorld {
     for (const p of propInstances || []) {
       const c = catalog[p.type];
       if (!c) continue;
+      // Disguise-anything (Part B): a non-architecture STATIC fixture (counter, oven,
+      // fridge, pillar, door, vent…) is promoted into the prop stream by the referee ONLY
+      // so a player can aim at + disguise as it. Its immovable collider is already built by
+      // _buildStatic from map.fixtures, so skip it here — a second body would double the
+      // collider (and on the host a DYNAMIC body wedged inside a static clone would explode).
+      // Architecture never reaches propInstances. The disguised player's OWN capsule still
+      // grows to this footprint via setPlayerCollider, exactly as for a knockable prop.
+      if (isStaticEntry(c)) continue;
       const { desc, halfH } = shapeFor(R, c);
       // A prop instance carries EITHER spawn semantics (x/z = floor position, y =
       // rest offset above the surface, rot = yaw) OR — for a mid-round joiner's

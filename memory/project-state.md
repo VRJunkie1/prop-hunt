@@ -8,7 +8,45 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
-## Latest: HUNTER MODEL FIX + FIRST-PERSON HUNTERS + CENTERED RETICLE/AIM (2026-07-11, VRmike, on `main`). Bundle of 3 fixes from live 2-player testing. Headless checks GREEN; render/camera/aim can't be seen headless → owed a live 2-player pass.
+## Latest: HUNTER MODEL SIZING FIX (bone-derived, verified) + DISGUISE-ANYTHING (2026-07-11, VRmike, on `main`). The third try at the hunter model — this one has a build-gating check that asserts the OUTPUT, not just that the code exists. Headless checks GREEN; the render/facing + a pillar disguise still owe a live 2-player pass.
+
+- **PART A — hunter model TINY/ORBITING, root-caused + fixed for real.** The GLB stores its
+  skinned mesh ~3.6 mm tall and inflates it via a baked **[100,100,100] BONE scale**;
+  `Box3.setFromObject` reads that 4 mm phantom (ignores the skeleton), so the old
+  `targetH/size.y` + bbox-centring derived a ~450× scale and an off-origin pivot → ~100×-too-
+  small model on a lever arm that orbited as the player yawed. **Fix:** measure the SKELETON.
+  New pure `shared/hunter-sizing.js` (`sizeHunterRig`/`measureRigBones`/`findBone`, `THREE`
+  injected) traverses the bones for true height/feet/centre, scales the WRAPPER GROUP, rests
+  feet at y=0, x/z centroid on-axis, keeps `yawOffsetDeg 180`. `js/scene.js _buildHunterModel`
+  now delegates to it. Degenerate rig → armature-scale fallback, never the geometry bbox.
+  - **2nd bug caught:** GLTFLoader sanitizes `Wrist.R` → `WristR`, so the rifle never attached
+    (masked by the sizing bug). `findBone` matches tolerantly. Weapon now sized by
+    `weapon.worldLength` (0.8 m) normalised against the wrist bone's world scale — robust to
+    the rig-scale change. All hot-tunable.
+  - **VERIFICATION THAT BITES:** `tools/check-hunter-model-size.mjs` loads the REAL GLB with
+    three+GLTFLoader (dev-only `three@0.161.0`, `npm install`; game still CDN) and asserts the
+    OUTPUT of the shipped `sizeHunterRig` — height ±10% of 1.8 m, feet ≤0.1 m off y=0, x/z
+    centroid ≤0.1 m off origin. Runtime `?debug=1` tripwire warns if a hunter's live bone
+    height is outside 1.2–2.5 m. `check-blindfold.mjs` (a) updated: it used to assert the OLD
+    broken bbox path (the check that let this ship twice) — now asserts the bone path. See
+    `memory/notes/hunter-model.md`. (Diagnostic screenshot: `assets/attached_0.jpg`.)
+- **PART B — DISGUISE-ANYTHING (everything except architecture).** New shared classifiers
+  `physics.isArchEntry` / `isDisguisableEntry` ("renderable mesh AND not architecture").
+  `fixtures.json` flags the 4 arch entries `"arch": true` (floor_kitchen, kitchen_wall,
+  wall_post, wall_header). `referee.startMatch` promotes EVERY non-arch fixture into the prop
+  stream `disguisable:true` (dynFixtures flip false→true; static built-ins — counters, oven,
+  fridge, cabinets, sinks, shelves, vent, doors, **pillars** — appended). `physics._buildProps`
+  skips `isStaticEntry` props (their collider stays in `_buildStatic`, so physics/bounds/
+  check-physics are UNCHANGED); `scene.buildWorld` renders static props as **invisible aim
+  proxies** (visible mesh from the scenery loop). Capsule cap (0.55 → 1.1 m dia) keeps giant
+  disguises door-passable. `tools/check-disguise-eligibility.mjs` asserts vent/counter/oven/
+  pillar IN, floor/wall/ceiling OUT + passability. See `memory/notes/disguise-anything.md`.
+- **OWED — live 2-player pass:** (1) remote hunter is right-sized, grounded, facing forward,
+  and does NOT orbit when the hunter turns; rifle sits in-hand at a sane size; (2) a **pillar
+  disguise** actually works (aim, disguise, wear it, fit through a doorway) — and a couple of
+  other new targets (counter/fridge/vent) disguise cleanly.
+
+## Prior: HUNTER MODEL FIX + FIRST-PERSON HUNTERS + CENTERED RETICLE/AIM (2026-07-11, VRmike, on `main`). Bundle of 3 fixes from live 2-player testing. Headless checks GREEN; render/camera/aim can't be seen headless → owed a live 2-player pass.
 
 Resumed from an interrupted attempt-2 tree that had already re-anchored the hunter
 model to the player body + measured its scale/foot-offset (Part A was in place). This

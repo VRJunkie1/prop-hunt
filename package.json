@@ -3,5 +3,9 @@
   "version": "0.2.0",
   "description": "Skeleton multiplayer prop hunt — static site (Cloudflare Pages), P2P WebRTC between browsers via PeerJS's free public broker. No server, no build step.",
   "type": "module",
-  "private": true
+  "private": true,
+  "_devDependencies_note": "three is ONLY for the offline authoring checks under tools/ (e.g. check-hunter-model-size.mjs loads the real GLB with GLTFLoader and runs the SAME sizing code the game ships). The GAME never uses node_modules — it imports three from the CDN importmap in index.html. Pinned to the app's version (0.161.0) so the check matches what ships.",
+  "devDependencies": {
+    "three": "0.161.0"
+  }
 }

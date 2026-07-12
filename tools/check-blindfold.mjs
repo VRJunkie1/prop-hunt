@@ -143,16 +143,18 @@ ok(/\.hidden\s*\{\s*display:\s*none\s*!important/.test(css), 'css .hidden uses !
 //    pass): the model is MEASURED not magic-numbered, hunters are first-person, the
 //    reticle is dead-centre, and the disguise ray fires from the camera centre.
 // ---------------------------------------------------------------------------
-// (a) The hunter model's scale + foot-offset come from a MEASURED bounding box of the
-//     loaded GLB, not a hardcoded fallback. Assert the measurement path is present:
-//     a Box3.setFromObject, a scale derived from the measured height (targetH / size.y),
-//     and a foot offset from the measured min-y (-box2.min.y). If someone replaced these
-//     with a constant scale / y-offset, these regexes go dark.
+// (a) The hunter model is sized + centred from its SKELETON, NOT from Box3.setFromObject
+//     on the raw geometry. This GLB stores its skinned mesh ~4 mm tall and inflates it via
+//     a baked [100,100,100] BONE scale, so measuring the geometry (the approach that shipped
+//     tiny/orbiting TWICE) reads a phantom. _buildHunterModel must delegate to the shared,
+//     Node-tested sizeHunterRig (bone-derived) and must NOT reintroduce a setFromObject of
+//     the model. The OUTPUT (correct height/feet/centre on the real GLB) is asserted by the
+//     build-gating tools/check-hunter-model-size.mjs — this just guards the code path.
 const buildHunter = (sceneSrc.match(/_buildHunterModel\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
-ok(/setFromObject\(inner\)/.test(buildHunter), 'scene _buildHunterModel measures the loaded GLB (Box3.setFromObject)');
-ok(/targetH\s*\/\s*size\.y/.test(buildHunter), 'scene hunter SCALE derives from measured bbox height (targetH / size.y), not a magic number');
-ok(/-box2\.min\.y/.test(buildHunter), 'scene hunter FOOT offset derives from the measured bbox min-y (-box2.min.y), not a hardcoded lift');
-ok(/heightMeters/.test(read('shared', 'config', 'character-models.json')), 'character-models.json supplies the target heightMeters the measured scale matches');
+ok(/sizeHunterRig\s*\(/.test(buildHunter), 'scene _buildHunterModel sizes via the shared bone-derived sizeHunterRig (not the old geometry bbox)');
+ok(!/setFromObject\(\s*inner\s*\)/.test(buildHunter), 'scene _buildHunterModel does NOT Box3.setFromObject the rig geometry (the 4 mm phantom that caused the tiny/orbiting bug)');
+ok(/hunter-sizing\.js/.test(sceneSrc), 'js/scene.js imports shared/hunter-sizing.js (same sizing code the size check runs)');
+ok(/heightMeters/.test(read('shared', 'config', 'character-models.json')), 'character-models.json supplies the target heightMeters the bone scale matches');
 
 // (b) FIRST-PERSON HUNTERS. main.js drives the view off role (HUNTER => first-person,
 //     i.e. setThirdPerson(false)); scene only draws the self body when third-person OR

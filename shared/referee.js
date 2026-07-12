@@ -14,7 +14,7 @@
 // the only thing that moved. Authority now lives on the host, not a server; see
 // memory/architecture.md for why that trade was made.
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
-import { loadRapier, PhysicsWorld, isStaticEntry } from './physics.js';
+import { loadRapier, PhysicsWorld, isStaticEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
 
 const DEG2RAD = Math.PI / 180;
@@ -40,10 +40,11 @@ export class Referee {
     // prediction world derive identical feel (see js/main.js buildPredict). null-safe:
     // physics.js applies defaults if absent.
     this.feel = config.feel;
-    // Shape catalogs (props = disguise pool, fixtures = static scenery). The referee
-    // never uses these to build the disguise pool (that's map.props only) — it needs
-    // them purely to hand the physics world collider dimensions for each type. Kept
-    // as separate merged lookups so a fixture still can't leak into the disguise pool.
+    // Shape catalogs (props = movable items, fixtures = built-ins + scenery). Disguise
+    // eligibility is now "renderable mesh AND not architecture" (Part B), so the disguise
+    // pool = map.props + every NON-architecture map.fixture (startMatch promotes them with
+    // isDisguisableEntry). Only ARCHITECTURE (floors/walls, isArchEntry) stays out. Kept as
+    // separate merged lookups; the physics world also reads them for collider dimensions.
     this.propCatalog = config.props || {};
     this.fixtureCatalog = config.fixtures || {};
     // DEFAULT_MAP_ID: the first map in maps.json until the host picks another via
@@ -304,7 +305,7 @@ export class Referee {
     if (player.role !== ROLE.PROP || !player.alive) return;
     if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
     const prop = this.props.find((p) => p.id === propId);
-    if (!prop || prop.disguisable === false) return; // knockable fixtures aren't disguisable
+    if (!prop || prop.disguisable === false) return; // architecture (floors/walls) isn't disguisable
     // Read the prop's LIVE position (it may have been shoved across the room) so
     // disguising as a kicked chair still works. Sleeping/never-moved props fall back
     // to their spawn x/z. (fix #2: disguise/tag track live prop positions.)
@@ -424,17 +425,39 @@ export class Referee {
       .map((p, i) => ({ p, i }))
       .filter(({ i }) => !skip.has(i))
       .map(({ p, i }) => ({
-        id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0, disguisable: true,
+        id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0,
+        disguisable: isDisguisableEntry(catalog[p.type]),
       }));
-    // Bigger pieces first: the dynamic-body cap (rules.maxDynamicProps) spends its
-    // budget on furniture/large cookware; anything past the cap degrades to a solid
-    // STATIC collider (still collidable, just not shovable — phone safety).
-    const dynFixtures = (map.fixtures || [])
-      .filter((f) => { const c = catalog[f.type]; return c && !isStaticEntry(c); })
+    // DISGUISE-ANYTHING (Part B). Every NON-ARCHITECTURE fixture is promoted into the prop
+    // stream and flagged disguisable, so a player can aim at + become it. Two kinds:
+    //   - dynFixtures: knockable fixtures (tables, cookware, dishes, food) — real dynamic
+    //     bodies AND disguise targets now. Bigger pieces first so the dynamic-body cap
+    //     (rules.maxDynamicProps) spends its budget on furniture/large cookware; overflow
+    //     degrades to a solid STATIC collider (unchanged — only `disguisable` flips true).
+    //   - staticFixtures: bolted-in built-ins (counters, oven, fridge, cabinets, sinks,
+    //     shelves, the vent/extractor hood, doors, PILLARS). These stay IMMOVABLE — physics
+    //     builds their collider in _buildStatic and _buildProps skips them — but they ride
+    //     the prop stream so scene.js can raycast + highlight them and applyDisguise accepts
+    //     them (as an invisible aim proxy; the visible mesh is the local scenery).
+    // ARCHITECTURE (floors/walls, isArchEntry) is the ONE thing excluded from both lists —
+    // it never becomes a disguise target. Appending statics last keeps them out of the
+    // dynamic-cap accounting (they never simulate).
+    const nonArchFixtures = (map.fixtures || []).filter((f) => {
+      const c = catalog[f.type];
+      return c && !isArchEntry(c);
+    });
+    const dynFixtures = nonArchFixtures
+      .filter((f) => !isStaticEntry(catalog[f.type]))
       .map((f) => ({ type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 }))
       .sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]))
-      .map((f) => ({ id: nextPropId++, ...f, disguisable: false }));
-    this.props = [...disguiseProps, ...dynFixtures];
+      .map((f) => ({ id: nextPropId++, ...f, disguisable: isDisguisableEntry(catalog[f.type]) }));
+    const staticFixtures = nonArchFixtures
+      .filter((f) => isStaticEntry(catalog[f.type]))
+      .map((f) => ({
+        id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
+        disguisable: isDisguisableEntry(catalog[f.type]),
+      }));
+    this.props = [...disguiseProps, ...dynFixtures, ...staticFixtures];
     // Live x/z per prop id, seeded at spawn and updated from awake transforms each
     // tick (see integrate). Read by applyDisguise for range against the real position.
     this.propLive = new Map(this.props.map((p) => [p.id, { x: p.x, z: p.z }]));

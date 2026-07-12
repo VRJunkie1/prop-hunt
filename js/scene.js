@@ -7,6 +7,11 @@ import * as THREE from 'three';
 // double-render and leave a ghost collider). Importing the constant does not load
 // Rapier — physics.js only fetches the WASM inside loadRapier().
 import { isStaticEntry, halfExtentsFor } from '/shared/physics.js';
+// Bone-derived hunter sizing — the SAME code the build's headless size check runs
+// (shared/hunter-sizing.js), so what ships is exactly what's verified. See the module
+// header + memory/notes/hunter-model.md for why measuring the skeleton (not the raw
+// 4 mm geometry) is the fix for the tiny/orbiting SWAT model.
+import { sizeHunterRig, measureRigBones, findBone } from '/shared/hunter-sizing.js';
 // Collider bounds, the ONE shared source (see shared/bounds.js). Used ONLY by the ?debug=1
 // wireframe overlay below — the same function the headless misalignment guard reads, so
 // what you SEE in debug is exactly what the guard checks and the engine builds.
@@ -347,6 +352,15 @@ export class Scene3D {
     for (const p of propInstances) {
       const built = makePropMesh(p.type, catalog);
       if (!built) continue;
+      // DISGUISE-ANYTHING (Part B): non-architecture STATIC fixtures (counters, oven,
+      // fridge, pillar, door, the vent/extractor…) are now disguisable too — the referee
+      // includes them in propInstances so a player can aim at and become them. But their
+      // VISIBLE mesh + world collider are already built by the static scenery loop (above)
+      // and physics._buildStatic, so here they are added ONLY as an INVISIBLE aim PROXY:
+      // the disguise raycast still hits it (Raycaster ignores visibility), and highlightProp
+      // fits its footprint — without a second visible mesh or GLB load. Knockable/disguise
+      // props (the default) render their primitive normally and swap in a GLB.
+      const isStatic = isStaticEntry(catalog[p.type]);
       // Optional per-object uniform scale (default 1) — authored by the level editor.
       // The container origin stays the body CENTRE (== physics translation, what the
       // awake snapshot moves); at rest it sits at baseY*s so the scaled primitive's
@@ -356,6 +370,7 @@ export class Scene3D {
       // A mid-round joiner's props carry a live transform (centre + quaternion) so a
       // shoved chair arrives where it actually rests; a fresh match's props carry
       // spawn semantics (floor x/z, surface y-offset, yaw). `moved` picks between them.
+      // (Static fixtures are never awake, so they always take the spawn-semantics path.)
       if (Number.isFinite(p.qx)) {
         container.position.set(p.x, p.y, p.z);
         container.quaternion.set(p.qx, p.qy, p.qz, p.qw);
@@ -366,24 +381,27 @@ export class Scene3D {
       built.mesh.scale.setScalar(s);
       built.mesh.position.set(0, 0, 0); // centred on the container origin
       built.mesh.userData.propId = p.id; // so a disguise-aim raycast maps a hit back to its prop
+      if (isStatic) built.mesh.visible = false; // aim proxy only — scenery draws the real mesh
       container.add(built.mesh);
       this.scene.add(container);
       // ?debug=1: parent this prop's collider outline to its container so it tracks the
       // body as it's shoved (the disguise-vs-prop tell is a collider thing — see it move).
-      if (this._colliderDebug) this._addPropColliderWire(container, catalog[p.type]);
-      this.colliders.push(built.mesh); // camera pulls in against props too
+      // Skipped for static proxies — their collider is drawn by _buildStaticColliderDebug.
+      if (this._colliderDebug && !isStatic) this._addPropColliderWire(container, catalog[p.type]);
+      if (!isStatic) this.colliders.push(built.mesh); // camera pulls in against props (static ones via scenery)
       this.propMeshes.set(p.id, {
         container,
         primitive: built.mesh,
         type: p.type, // click-to-inspect / focus-box entity identity
         baseY: built.baseY * s,
-        // Only disguise-pool props are aimable targets; knockable fixtures
-        // (disguisable:false) render here too but must never be a disguise choice.
+        // Disguise eligibility now widens to "renderable mesh AND not architecture"
+        // (referee sets disguisable). Architecture (floors/walls) is never in this list.
         disguisable: p.disguisable !== false,
+        isStatic, // static fixtures never go awake / never get a moving GLB here
         target: null, // set once the prop first appears AWAKE in a snapshot
         awake: false,
       });
-      this._queueModel(p, built.mesh, catalog, container, built.baseY * s, s); // swap in the real GLB if any
+      if (!isStatic) this._queueModel(p, built.mesh, catalog, container, built.baseY * s, s); // swap in the real GLB if any
     }
 
     // ?debug=1: draw the STATIC world colliders (ground slab, boundary walls, static
@@ -985,34 +1003,23 @@ export class Scene3D {
     // (a plain THREE.Object3D.clone() shares/breaks the rig, freezing the animation).
     const inner = this._skeletonUtils.clone(body.scene);
 
-    // Scale so the model's HEIGHT matches the hunter capsule (CapsuleGeometry(0.4,1.0)
-    // => ~1.8 tall), then rest the feet on the group origin and centre x/z — so the
-    // caller (baseY 0) plants the soldier where the networked capsule actually is.
-    const box = new THREE.Box3().setFromObject(inner);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const targetH = cm.heightMeters > 0 ? cm.heightMeters : 1.8;
-    const s = size.y > 1e-4 ? targetH / size.y : 1;
-    inner.scale.setScalar(s);
-    const box2 = new THREE.Box3().setFromObject(inner);
-    const c = new THREE.Vector3();
-    box2.getCenter(c);
-    inner.position.set(-c.x, -box2.min.y, -c.z);
-    // Hot-tunable facing correction: the model's native forward may not equal the
-    // game's forward (-Z). Rotating about the vertical axis through the centred model
-    // keeps it centred (its x/z centroid sits on that axis). So the group faces the
-    // networked yaw and this offset aligns the soldier's front with travel.
-    if (cm.yawOffsetDeg) inner.rotation.y = (cm.yawOffsetDeg * Math.PI) / 180;
+    // Size + centre from the SKELETON, not the raw geometry. This GLB stores its skinned
+    // mesh ~4 mm tall and inflates it to human size via a baked [100,100,100] scale on the
+    // BONES, so Box3.setFromObject (the old approach, shipped broken twice) measured a
+    // phantom and derived a garbage scale + off-origin pivot — the tiny/orbiting model.
+    // sizeHunterRig traverses the bones for the true height/feet/centre, scales the WRAPPER
+    // GROUP (so the bones and their skinned mesh actually scale), and rests the feet on the
+    // group origin so the caller (baseY 0) plants the soldier where the networked capsule
+    // is. Facing yaw (cm.yawOffsetDeg) is applied inside. Same code path as the size check.
+    const { group } = sizeHunterRig(THREE, inner, cm);
     inner.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
         o.frustumCulled = false; // skinned bounds can under-report; don't cull mid-anim
       }
     });
-
-    const group = new THREE.Group();
-    group.add(inner);
     group.userData.baseY = 0; // feet on the ground; the caller adds jump-y
+    group.userData.sizeChecked = false; // ?debug=1 tripwire fires once after the first frame
 
     // Rifle: parent to the named wrist bone with the config grip nudge (hot-tunable).
     let weaponRoot = null;
@@ -1020,8 +1027,9 @@ export class Scene3D {
     if (wcfg && wcfg.model) {
       const wc = this._charCache.get('/assets/' + wcfg.model);
       if (wc && wc !== 'failed' && wc !== 'loading') {
-        let bone = null;
-        inner.traverse((o) => { if (!bone && o.name === wcfg.attachBone) bone = o; });
+        // Tolerant bone lookup — GLTFLoader sanitizes "Wrist.R" to "WristR", so a strict
+        // name match would silently drop the rifle (see findBone). Shared with the check.
+        const bone = findBone(inner, wcfg.attachBone);
         if (bone) {
           weaponRoot = wc.scene.clone(true); // static mesh: plain clone is fine (no skin)
           const pos = wcfg.position || {};
@@ -1029,7 +1037,23 @@ export class Scene3D {
           const D = Math.PI / 180;
           weaponRoot.position.set(pos.x || 0, pos.y || 0, pos.z || 0);
           weaponRoot.rotation.set((rot.x || 0) * D, (rot.y || 0) * D, (rot.z || 0) * D);
-          weaponRoot.scale.setScalar(wcfg.scale > 0 ? wcfg.scale : 1);
+          // WEAPON SIZING — normalise to a WORLD length, independent of the rig scale.
+          // The wrist bone's world scale changed with the sizing fix (the group scale is
+          // now bone-derived, not the old ~450× geometry factor) and it also carries the
+          // armature's baked [100,100,100], so a bare config `scale` would blow the rifle
+          // up or shrink it away. Measure the weapon's native size, read the bone's world
+          // scale (group scale × armature × parent bones), and scale so the rifle's longest
+          // axis lands at wcfg.worldLength metres (× the hot-tunable `scale` nudge). This is
+          // correct-by-construction whatever the rig scale becomes.
+          group.updateMatrixWorld(true); // resolve bone world scale under the sized group
+          const boneScaleV = new THREE.Vector3();
+          bone.getWorldScale(boneScaleV);
+          const boneScale = (Math.abs(boneScaleV.x) + Math.abs(boneScaleV.y) + Math.abs(boneScaleV.z)) / 3 || 1;
+          const wsize = new THREE.Vector3();
+          new THREE.Box3().setFromObject(weaponRoot).getSize(wsize); // native (scale still 1)
+          const nativeLen = Math.max(wsize.x, wsize.y, wsize.z) || 1;
+          const worldLen = (wcfg.worldLength > 0 ? wcfg.worldLength : 0.7) * (wcfg.scale > 0 ? wcfg.scale : 1);
+          weaponRoot.scale.setScalar(worldLen / (boneScale * nativeLen));
           weaponRoot.traverse((o) => { if (o.isMesh) o.castShadow = true; });
           weaponRoot.visible = this._weaponVisible;
           bone.add(weaponRoot);
@@ -1122,6 +1146,23 @@ export class Scene3D {
         this._playHunterState(ctl, stateName, ts);
       }
       ctl.mixer.update(dt);
+
+      // RUNTIME TRIPWIRE (?debug=1). After the first animated frame, measure the hunter's
+      // REAL on-screen height from its bones (the same measurement the size check asserts)
+      // and warn loudly if it's outside human range — so a sizing regression is caught in a
+      // live browser instead of shipping silently a third time. Fires once per model.
+      if (this._colliderDebug && entry.mesh && entry.mesh.userData && entry.mesh.userData.sizeChecked === false) {
+        entry.mesh.userData.sizeChecked = true;
+        const b = measureRigBones(THREE, entry.mesh);
+        const h = b ? b.height : 0;
+        if (!b || h < 1.2 || h > 2.5) {
+          console.warn(
+            `[scene] HUNTER MODEL SIZE TRIPWIRE: rendered bone height ${h.toFixed(3)} m is outside the human range 1.2–2.5 m` +
+              (b ? ` (feet y=${b.footY.toFixed(2)})` : ' (no bones found)') +
+              ' — the SWAT model is mis-sized. See shared/hunter-sizing.js + tools/check-hunter-model-size.mjs.'
+          );
+        }
+      }
     }
   }
 
