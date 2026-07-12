@@ -3,6 +3,23 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-11 CHECK-REPAIR — check-physics.mjs walkable-floor false positive (spawn-blocked-by-floor_kitchen)
+`node tools/check-physics.mjs` exited 1 with 2 violations: restaurant spawns `(-15,-2)` and
+`(15,-2)` "blocked by floor_kitchen". These are the SAME 2 pre-existing failures pass #5 flagged
+below (lines noting "spawn-blocked-by-floor_kitchen ... map data, untouched by this pass").
+ROOT CAUSE (a CHECK bug, not a map/engine bug — confirmed via `git_log`: check-physics.mjs is a
+single new commit `bf18073`, while the kitchen floor tiles + spawns predate it by many commits and
+the map has shipped fine): the OPEN-MIDDLE stand-clearance test filtered out only `kind==='ground'`
+from the collider set. A `floor_kitchen` fixture is a WALKABLE floor — bounds.js "fix #5" holds its
+visible top flush at the surface (mesh h=0.06 → collider top ~0.06 m) and extends the collider
+DOWNWARD, exactly like the ground slab. A player STANDS ON it. The two z=-2 spawns sit at the front
+edge of the kitchen floor tiles (tiles at z=-6 span z∈[-10,-2], x∈[-16,16]); the capsule-radius
+padding (0.4) applied vertically made the sample at y=0.1 read as "inside" the flush floor top =
+false "trapped". FIX (minimal, 1 line + comment in `tools/check-physics.mjs`): exclude walkable
+floors from the stand set too — `worldBoxes.filter(b => b.kind!=='ground' && !b.floor)` (floor boxes
+carry `floor:true` from bounds.js). Now green (exit 0) on all 3 maps; browser_check clean. No game
+code touched — authoring-only tool.
+
 ## 2026-07-11 PHYSICS PASS #5 (branch `physics-pass-5-player-collision`) — Jie: bob + phase-into-props + hide-inside + perimeter "glitched mode". FIRST PASS VERIFIED BY HEADLESS LIVE-SIM, NOT INSPECTION.
 What ended the guess cycle: `PhysicsWorld` takes RAPIER as a constructor arg, so the REAL
 engine was run headless in Node against a local `@dimforge/rapier3d-compat@0.14.0` (same

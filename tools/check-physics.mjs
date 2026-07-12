@@ -168,7 +168,12 @@ for (const [mapId, map] of Object.entries(maps)) {
   // open centre) without their capsule footprint being inside any WORLD collider (walls +
   // static fixtures; the ground slab is below the floor by design, so it's excluded). This
   // is the direct guard against "trapped in a strip / can't reach the middle".
-  const worldSolids = worldBoxes.filter((b) => b.kind !== 'ground');
+  // WALKABLE FLOORS are excluded too: a floor fixture (kind 'fixture', floor:true) holds
+  // its visible top flush at the surface and extends its collider DOWNWARD (bounds.js "fix
+  // #5"), so a player STANDS ON it — like the ground slab — rather than being blocked by
+  // it. Without this, the capsule-radius vertical padding makes a spawn standing on a floor
+  // read as "trapped" (the kitchen floor tiles under the z=-2 restaurant spawns).
+  const worldSolids = worldBoxes.filter((b) => b.kind !== 'ground' && !b.floor);
   const standPoints = [...(map.spawns || [])];
   if (map.hunterSpawn) standPoints.push({ ...map.hunterSpawn, _hunter: true });
   for (const s of standPoints) {
