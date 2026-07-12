@@ -13,7 +13,6 @@ Finished items move to the bottom, struck through.
 
 ## Prop mechanics
 - **Prop finder?** — open question (mechanic not settled).
-- **Crosshair-based disguise:** selecting a prop to disguise as uses the crosshair (what you're aiming at), not whichever prop is nearest.
 - **Locked orientation:** while moving as a prop, orientation stays fixed — **unless right-click is held**, which unlocks vertical-axis (yaw) rotation. _(In progress — continuous collision-checked rotation being built.)_
 - **Size vs damage:** players disguised as *small* props take damage much more easily than *big* props (offsets big props being far easier to shoot).
 
@@ -45,6 +44,7 @@ Finished items move to the bottom, struck through.
 
 ---
 ## ✅ Finished
+- ~~**Crosshair-based disguise**~~ (2026-07-11) — disguise selection raycasts from the CAMERA CENTRE through the fixed centre reticle (`scene.aimedDisguiseTarget` / `setFromCamera(SCREEN_CENTER)`), picking the prop you're AIMING at, not the nearest. Host stays authoritative. **Deferred half:** hunters were meant to reuse "something similar" for gun-aiming — NOT built, because a gun needs a different target set (players/hittables) than disguisable props; give it its own pass when gun-play is requested.
 - ~~**Jump**~~ (2026-07-11)
 - ~~**Time limits**~~ — round countdown timer in the HUD (2026-07-11)
 

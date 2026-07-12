@@ -133,13 +133,19 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
     iOS happens in the first tap handler here (glue layer, not `ui.js`). Full
     detail: `memory/notes/touch-controls.md`.
 - `js/scene.js` — all Three.js. Builds world from config, reconciles player meshes
-  to snapshots, interpolates others. The local player now uses a **third-person
-  follow camera** (default) that orbits behind/above them off the same yaw/pitch;
+  to snapshots, interpolates others. The local player uses a **third-person
+  follow camera** that orbits behind/above them off the same yaw/pitch;
   it renders the player's OWN model (via the shared disguise/role path) and is
   collision-aware (a raycast against walls+props pulls it in, snap-in/ease-out
-  smoothing). `setThirdPerson(false)` restores the classic first-person eye view
-  (toggle: V on desktop). `aimScreenPoint()` projects the referee's yaw-forward aim
-  so the reticle marks where the tag cone lands, not screen center. Detail:
+  smoothing). `setThirdPerson(false)` is the classic first-person eye view. **View is
+  role-driven (2026-07-11):** `main.js applyRoleView()` puts HUNTERS in first-person
+  (no own body drawn; remote players still see their animated soldier) and PROPS in
+  third-person; desktop V still toggles manually. The self body draws when
+  `_wantSelfMesh()` = `thirdPerson || _freeCam` (so a first-person hunter's body
+  reappears under the debug free cam). The aim **reticle is a fixed centre crosshair**
+  (CSS only — the old floating `aimScreenPoint` is gone); disguise targeting raycasts
+  from the CAMERA CENTRE through it (`aimedDisguiseTarget` → `setFromCamera(SCREEN_CENTER)`,
+  the same 0,0-NDC point `debugPick` uses — ONE crosshair/raycast system). Detail:
   `memory/notes/third-person-camera.md`. Pixel ratio is capped at 2 (phones);
   re-measures on `orientationchange`; `preventDefault`s `webglcontextlost` so a
   mobile GPU hiccup can restore instead of white-screening. **Real GLB meshes:** a

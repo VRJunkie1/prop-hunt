@@ -8,6 +8,48 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HUNTER MODEL FIX + FIRST-PERSON HUNTERS + CENTERED RETICLE/AIM (2026-07-11, VRmike, on `main`). Bundle of 3 fixes from live 2-player testing. Headless checks GREEN; render/camera/aim can't be seen headless → owed a live 2-player pass.
+
+Resumed from an interrupted attempt-2 tree that had already re-anchored the hunter
+model to the player body + measured its scale/foot-offset (Part A was in place). This
+session finished Part A's facing, then did Parts B + C. Full detail:
+`memory/notes/hunter-character-model.md`, `notes/third-person-camera.md`.
+
+- **PART A — hunter model (mostly already in tree; verified + facing fixed).** The remote
+  SWAT soldier is anchored to the PLAYER BODY position in `syncPlayers` (mesh at `p.x/p.y/p.z`,
+  yaw from the snapshot) — NOT the orbiting third-person camera (the diagnosed root cause of
+  the "orbits when the hunter turns, floats a few metres off" symptom was that camera
+  attachment; the tree already had the body-anchored path). Scale + foot-offset are MEASURED
+  from the loaded GLB bbox in `_buildHunterModel` (`s = targetH / size.y`, feet at `-box2.min.y`)
+  — not magic numbers. **FIXED this session:** `character-models.json` `yawOffsetDeg` 0 → **180**
+  (soldier faced backwards; native forward +Z vs game −Z). Hot-tunable if live shows it off.
+- **PART B — FIRST-PERSON HUNTERS.** `main.js applyRoleView()` sets `scene.setThirdPerson(role !==
+  HUNTER)` on the ROLE message and after `buildWorld`: HUNTERS are first-person (camera at the
+  eye, `setCamera` first-person branch: y=1.6, YXZ yaw/pitch) and draw NO own body to themselves;
+  PROPS stay third-person (see their disguise). Remote players still see the hunter's full animated
+  soldier (Part A). Free-cam debug still shows the local body: `scene._wantSelfMesh()` = `thirdPerson
+  || _freeCam`, and the free-cam branch of `setCamera` parks the self body at the predicted pose so
+  it's visible from the fly-cam.
+- **PART C — ONE CENTERED RETICLE + CAMERA-CENTER AIM.** Removed the floating reticle
+  (`scene.aimScreenPoint` + `ui.setCrosshair` deleted): `#crosshair` is now fixed dead-centre by
+  CSS only. `scene.aimedDisguiseTarget` raycasts from the CAMERA CENTRE through that reticle
+  (`setFromCamera(SCREEN_CENTER)`) instead of a player-origin look-ray — the SAME `SCREEN_CENTER`
+  (0,0 NDC) `debugPick` uses, so one crosshair/raycast system. Client still only PROPOSES the prop
+  id; the host's `applyDisguise` stays authoritative (a courtesy player-range gate keeps the
+  highlight honest). The generic "gun-aiming reuses this" half is DEFERRED (a gun would need a
+  different target set than disguisable props) — noted in the roadmap, not built.
+- **Guards:** extended `tools/check-blindfold.mjs` (same file, per plan) — measured scale/foot-offset
+  path present (not hardcoded), hunters first-person, `#crosshair` centered, disguise ray from
+  `SCREEN_CENTER`, aimScreenPoint gone. `node tools/check-blindfold.mjs` + `check-hunter-model.mjs`
+  + `check-debug-menu.mjs` all GREEN; headless browser boot = zero console errors.
+- **Files:** `js/scene.js`, `js/main.js`, `js/ui.js`, `shared/config/character-models.json`,
+  `tools/check-blindfold.mjs`, `memory/notes/{hunter-character-model,third-person-camera,roadmap}.md`,
+  architecture.
+- **OWED — live 2-player pass:** (1) remote hunter is right-sized, grounded, facing forward, and does
+  NOT orbit when the hunter turns; (2) local hunter is first-person with no self-body (free-cam still
+  reveals the body); (3) reticle is a fixed centre crosshair; (4) aiming at a prop disguises as THAT
+  prop. Tune `yawOffsetDeg`/grip if facing still off.
+
 ## Latest: IN-GAME DEBUG MENU behind `?debug=1` (2026-07-11, Jie, on `main`). Code + guards done; NOT live-tested (headless can't open a browser).
 
 An in-game developer/debug panel, gated on the SAME `?debug=1` switch as the collider

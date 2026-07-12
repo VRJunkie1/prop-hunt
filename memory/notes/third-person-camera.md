@@ -6,21 +6,29 @@ behind and slightly above the player, so they see their own model/prop and can
 peek around cover. **Camera/view change only** — movement, roles, collision,
 networking, and the referee are all untouched.
 
-## The one real gotcha — where "aim" lives (settled up front)
+## Where "aim" lives — UPDATED 2026-07-11 (centered reticle + camera-center ray)
 
 The referee's tag cone (`applyTag`) and disguise both compute from the player's
 **yaw-forward vector** `(-sin yaw, -cos yaw)` — a 2D cone in x/z. That did NOT
-change. In first-person the screen-center crosshair happened to coincide with
-that vector; in third-person the eye sits off the player, so screen-center no
-longer equals the aim line.
+change and the referee stays authoritative.
 
-Fix: the reticle is driven off yaw-forward, not screen center.
-`scene.aimScreenPoint(pos, yaw)` projects a world point a few metres ahead of the
-player (`_camHeadY - 0.4` height) through the camera and returns pixel coords;
-`main.js` passes them to `ui.setCrosshair(pt)` each frame. Returns `null` in
-first-person → reticle recenters (the `#crosshair` CSS keeps `translate(-50%,-50%)`,
-so left/top land it on the point). The referee was never touched, so tag/disguise
-land exactly where the reticle points regardless of where the camera sits.
+**Superseded:** an earlier pass FLOATED the reticle to a projected aim point
+(`scene.aimScreenPoint` → `ui.setCrosshair(pt)`) so it marked the yaw-forward line
+in third-person. That created two competing crosshair systems (the floating reticle
+vs. `debugPick`, which always raycast from screen-centre). Both `aimScreenPoint` and
+`ui.setCrosshair` are now **removed**.
+
+**Now:** the reticle is a FIXED crosshair at the EXACT screen centre, positioned by
+CSS only (`#crosshair`: top/left 50% + `translate(-50%,-50%)`). Client-side prop
+targeting raycasts from the CAMERA CENTRE through that reticle —
+`scene.aimedDisguiseTarget` uses `this._raycaster.setFromCamera(SCREEN_CENTER, camera)`
+(the shared `SCREEN_CENTER` = 0,0 NDC, the SAME point `debugPick` uses), picks the
+first disguisable prop primitive hit, and gates it by a courtesy player-range check.
+For a first-person hunter that's the eye ray; for a third-person prop it's the orbit
+camera ray — whatever the centre crosshair overlaps is what gets picked. The `far` is
+extended by ~the camera distance so a third-person prop within reach is still reached.
+The client only PROPOSES the prop id; the host's `applyDisguise` re-checks
+role/phase/range authoritatively.
 
 ## Camera placement (`scene.setCamera`)
 
@@ -33,8 +41,11 @@ Third-person branch (when `this.thirdPerson`):
 - `camera.lookAt(target)` frames the player. Because aim is projected separately,
   the height bias / off-axis framing don't affect where the reticle lands.
 
-First-person branch is the original code verbatim (eye at y=1.6, YXZ euler from
-yaw/pitch), reached only when toggled off.
+First-person branch (eye at y=1.6, YXZ euler from yaw/pitch) is now the DEFAULT for
+HUNTERS — `main.js applyRoleView()` calls `scene.setThirdPerson(role !== HUNTER)` on
+the ROLE message and after `buildWorld`, so hunters see first-person (no own body) and
+props stay third-person (they see their disguise). Remote players still see a hunter's
+full animated soldier (that's `meshForPlayer`, unaffected by the local view).
 
 ## Collision pull-in (step 5 of the plan — the only real engineering)
 
@@ -62,16 +73,23 @@ every other peer is drawn with (snapshot carries `hunter`+`disguise` for self to
 so the host sees exactly what the referee/other clients believe this player is.
 The mesh is positioned each frame from the **predicted** local position/yaw in
 `setCamera` (not the lagging 20 Hz snapshot), so it tracks the camera cleanly.
-Rebuilt on appearance change (disguise/role) via the `kind` signature; removed in
-first-person.
+Rebuilt on appearance change (disguise/role) via the `kind` signature.
+
+Whether the self body is drawn at all is `_wantSelfMesh()` = `thirdPerson ||
+_freeCam`: third-person (props) draws it; a first-person hunter does NOT (they'd see
+their own capsule floating), EXCEPT while the ?debug=1 free cam is flying — then the
+body reappears so you can see yourself from the fly-cam. The free-cam branch of
+`setCamera` parks that body at the predicted pose (it's the only place a first-person
+hunter's temporarily-shown body gets positioned, since the normal follow-cam path is
+skipped while free cam owns the camera).
 
 ## First-person toggle (kept — it was clean)
 
-Desktop **V** key → `input.onToggleView` → `scene.setThirdPerson(!thirdPerson)`.
-One flag flips all three together: camera (orbit ↔ eyes), own-model visibility
-(`_removeSelfMesh` on the way to first-person; rebuilt on next snapshot returning),
-and reticle (`aimScreenPoint` returns null → centered). No touch button for it —
-third-person is the default and a phone toggle wasn't worth the seam.
+Desktop **V** key → `input.onToggleView` → `scene.setThirdPerson(!thirdPerson)`. A
+manual override on top of the role default (`applyRoleView`): flips the camera (orbit
+↔ eyes) and own-model visibility (`_removeSelfMesh` via `_wantSelfMesh`) together. The
+reticle no longer changes with it — it is ALWAYS the centred crosshair now. No touch
+button for it — a phone toggle wasn't worth the seam.
 
 ## Tunables (all in `Scene3D` constructor)
 
@@ -80,10 +98,13 @@ ease-out 0.12, collision skin 0.3, aim-point lead distance 3.0.
 
 ## Files touched
 
-`js/scene.js` (camera + colliders + self avatar + aim projection),
-`js/main.js` (reticle each frame + toggle wiring), `js/input.js`
-(`onToggleView` + V key), `js/ui.js` (`setCrosshair`). No CSS/HTML/referee/
-protocol/net changes. No new deps.
+Original pass: `js/scene.js` (camera + colliders + self avatar),
+`js/main.js`, `js/input.js` (`onToggleView` + V key), `js/ui.js`.
+2026-07-11 update (first-person hunters + centered reticle/aim): `js/scene.js`
+(`_wantSelfMesh`, camera-center `aimedDisguiseTarget`, removed `aimScreenPoint`,
+free-cam self body), `js/main.js` (`applyRoleView`, dropped the per-frame reticle
+float), `js/ui.js` (removed `setCrosshair`). No referee/protocol/net changes. No
+new deps.
 
 ## Playtest owed
 

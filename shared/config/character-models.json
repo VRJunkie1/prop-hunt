@@ -5,8 +5,8 @@
     "_comment": "SWAT soldier shown to OTHER players for a REMOTE hunter (the local hunter stays first-person and never renders this). Clips are 'CharacterArmature|<name>' in the GLB — matched by SUFFIX in scene.js, so the prefix here is advisory only.",
     "model": "713f6535-f4f3-4367-a4c6-ced126ae0936.glb",
     "heightMeters": 1.8,
-    "_yawComment": "yawOffsetDeg rotates the model about vertical so its FRONT faces the networked facing yaw. HOT-TUNABLE: if the soldier runs backwards / sideways relative to travel in a live browser, adjust this (e.g. 180) — no rebuild. Defaults to 0 (Quaternius characters usually face the game's forward).",
-    "yawOffsetDeg": 0,
+    "_yawComment": "yawOffsetDeg rotates the model about vertical so its FRONT faces the networked facing yaw. Set to 180 to fix the 'faces backwards' symptom VRmike saw in live 2-player testing (the soldier's native forward is +Z; the game's is -Z). HOT-TUNABLE: if a live browser shows it still off (running sideways etc.), nudge this — no rebuild.",
+    "yawOffsetDeg": 180,
     "clipPrefix": "CharacterArmature|",
     "clips": {
       "idle": "Idle_Gun",

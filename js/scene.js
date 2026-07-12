@@ -12,9 +12,12 @@ import { isStaticEntry, halfExtentsFor } from '/shared/physics.js';
 // what you SEE in debug is exactly what the guard checks and the engine builds.
 import { worldColliderBoxes } from '/shared/bounds.js';
 
-// Screen-centre (NDC) for the debug crosshair raycast (focus box / click-to-inspect).
-// Module-level so debugPick() allocates nothing per frame.
-const DEBUG_CENTER = new THREE.Vector2(0, 0);
+// Screen-centre in NDC (0,0) = the fixed reticle at the EXACT middle of the screen.
+// ONE shared center for every center-screen raycast so there's a single crosshair
+// system: the disguise-target pick (aimedDisguiseTarget) AND the ?debug=1 click-to-
+// inspect / focus box (debugPick) both fire through this point. Module-level so those
+// allocate nothing per frame.
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
 
 // Build a mesh for a prop type from the catalog. Returns { mesh, baseY } where
 // baseY rests the shape on the ground (y=0). Reused for static props and for
@@ -606,7 +609,8 @@ export class Scene3D {
   // frame from the PREDICTED local position in setCamera (not the lagging snapshot).
   _syncSelf(p) {
     this.selfAlive = p.alive;
-    if (!this.thirdPerson) {
+    if (!this._wantSelfMesh()) {
+      // First-person (e.g. a HUNTER): the camera is the eyes; draw no own body.
       this._removeSelfMesh();
       return;
     }
@@ -627,12 +631,23 @@ export class Scene3D {
     this.selfKind = null;
   }
 
-  // Flip between third-person (default) and first-person. Removing the self avatar
-  // immediately keeps first-person from briefly showing the player's own model; it
-  // is rebuilt on the next snapshot when switching back.
+  // Draw the local player's OWN avatar when in third-person (props: you see your
+  // disguise/capsule), OR while the debug free cam is flying — so a first-person
+  // HUNTER can still see their own body from the detached fly-cam. In first-person
+  // normal play this is false, so a hunter never renders their own body to themselves
+  // (remote players still see the full animated soldier via meshForPlayer).
+  _wantSelfMesh() {
+    return this.thirdPerson || this._freeCam;
+  }
+
+  // Flip between third-person and first-person. main.js drives this off role
+  // (HUNTER => first-person, PROP => third-person) and the desktop V toggle. Removing
+  // the self avatar immediately keeps first-person from briefly showing the player's
+  // own model; it is rebuilt on the next snapshot when switching back (or while the
+  // free cam is on, so the body stays visible from the fly-cam).
   setThirdPerson(on) {
     this.thirdPerson = !!on;
-    if (!this.thirdPerson) this._removeSelfMesh();
+    if (!this._wantSelfMesh()) this._removeSelfMesh();
   }
 
   // Place the camera. Third-person = orbit behind/above the player (collision-aware,
@@ -643,9 +658,17 @@ export class Scene3D {
   // engaged — then the prop stays fixed even as the camera orbits. Defaults to yaw.
   setCamera(pos, yaw, pitch, selfYaw = yaw) {
     // Free cam owns the camera while it's on (js/debug.js drives it via updateFreeCam);
-    // the normal follow-cam must not fight it. The self avatar simply stays where the last
-    // snapshot/prediction put it (the physics player isn't moving).
-    if (this._freeCam) return;
+    // the normal follow-cam must not fight it. Park the self body at the player's
+    // predicted pose so it stays VISIBLE from the detached fly-cam (this is the only
+    // place a first-person hunter's temporarily-shown body gets positioned).
+    if (this._freeCam) {
+      if (this.selfMesh) {
+        this.selfMesh.position.set(pos.x, this.selfMesh.userData.baseY + (pos.y || 0), pos.z);
+        this.selfMesh.rotation.y = selfYaw;
+        this.selfMesh.visible = this.selfAlive;
+      }
+      return;
+    }
     const py = pos.y || 0; // jump height
     if (!this.thirdPerson) {
       this.camera.position.set(pos.x, 1.6 + py, pos.z);
@@ -707,51 +730,49 @@ export class Scene3D {
     this.camera.lookAt(target);
   }
 
-  // Screen-space point (pixels) where the aim indicator should sit, so the reticle
-  // marks where the referee's tag cone actually points (its yaw-forward vector) —
-  // NOT screen center, since the third-person eye is off the player. Returns null
-  // in first-person (reticle stays centered) or when the point is behind the camera.
-  aimScreenPoint(pos, yaw) {
-    if (!this.thirdPerson) return null;
-    const fx = -Math.sin(yaw);
-    const fz = -Math.cos(yaw);
-    const D = 3.0; // a few metres ahead of the player, at ~chest height
-    const p = this._vAim.set(pos.x + fx * D, this._camHeadY - 0.4, pos.z + fz * D);
-    p.project(this.camera);
-    if (p.z > 1) return null; // behind the camera
-    const w = this.renderer.domElement.clientWidth;
-    const h = this.renderer.domElement.clientHeight;
-    return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
-  }
-
   // ---- crosshair disguise targeting -----------------------------------------
-  // Return the id of the disguisable prop the local player is AIMING at — the first
-  // prop primitive hit by a ray from the player along the look direction, within
-  // `range` — or null. This is a client-side SELECTION + highlight aid only: the
-  // host's applyDisguise re-checks role/phase/range/disguisable from the player's
+  // Return the id of the disguisable prop the local player is AIMING AT — the first
+  // disguisable prop primitive hit by a ray fired from the CAMERA CENTER through the
+  // reticle (the fixed screen-centre crosshair), or null. This is the SAME center-
+  // screen ray the ?debug=1 inspector uses (debugPick / SCREEN_CENTER), so what the
+  // crosshair overlaps is what gets picked — for a first-person hunter that's the eye
+  // ray, for a third-person prop the orbit-camera ray — NOT a player-origin cast and
+  // NOT "nearest prop". Client-side SELECTION + highlight aid ONLY: the host's
+  // applyDisguise re-checks role/phase/range/disguisable from the player's
   // authoritative position, so this can never grant a disguise the referee refuses.
   // Rays test the prop PRIMITIVES, which stay in the scene as (possibly invisible)
   // collision proxies even after a real GLB swaps in — the raycaster still hits them.
+  // `yaw`/`pitch` are unused now (the camera, positioned earlier this frame by
+  // setCamera, already encodes them); kept in the signature so callers are unchanged.
   aimedDisguiseTarget(pos, yaw, pitch, range) {
-    if (!this.propMeshes || !this.propMeshes.size) return null;
+    if (!this.propMeshes || !this.propMeshes.size || !this.camera) return null;
     const targets = this._disguiseTargets;
     targets.length = 0;
     for (const rec of this.propMeshes.values()) {
       if (rec.disguisable && rec.primitive) targets.push(rec.primitive);
     }
     if (!targets.length) return null;
-    // Look-forward vector — SAME convention as setCamera and the referee's aim.
-    const cp = Math.cos(pitch);
-    const dir = this._vDisgDir.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp);
-    if (dir.lengthSq() < 1e-9) return null;
-    dir.normalize();
-    const origin = this._vDisgOrigin.set(pos.x, this._camHeadY + (pos.y || 0), pos.z);
-    this._raycaster.set(origin, dir);
-    this._raycaster.far = range > 0 ? range : 4.5;
+    // Fire from the camera through screen-centre. setCamera ran earlier this frame;
+    // refresh the world matrix so the ray matches exactly what's rendered.
+    this.camera.updateMatrixWorld();
+    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+    const reach = range > 0 ? range : 4.5;
+    // The third-person camera sits BEHIND the player, so a prop within `reach` of the
+    // player can be up to ~camera-distance farther from the camera itself; extend far
+    // enough to reach it, then gate by the player's true reach below. (The host re-
+    // checks range authoritatively; this gate only keeps the highlight honest.)
+    this._raycaster.far = reach + this._camDesiredDist + 2;
     const hits = this._raycaster.intersectObjects(targets, false);
     if (!hits.length) return null;
-    const id = hits[0].object.userData.propId;
-    return id == null ? null : id;
+    const hit = hits[0];
+    const id = hit.object.userData.propId;
+    if (id == null) return null;
+    // Courtesy range gate from the PLAYER position (matches the host's applyDisguise
+    // range check) so you can't highlight a prop you're too far away to become.
+    const dx = hit.point.x - pos.x;
+    const dz = hit.point.z - pos.z;
+    if (Math.hypot(dx, dz) > reach) return null;
+    return id;
   }
 
   // Outline the prop the player would disguise as (id from aimedDisguiseTarget), or
@@ -1157,6 +1178,10 @@ export class Scene3D {
   setFreeCam(on) {
     this._freeCam = !!on;
     if (this._freeCam) this._fcPos.copy(this.camera.position);
+    // Turning the fly-cam OFF in first-person drops the body it was temporarily
+    // showing (a first-person hunter goes back to no self body). Turning it ON in
+    // first-person lets the next _syncSelf build the body for the fly-cam to see.
+    else if (!this._wantSelfMesh()) this._removeSelfMesh();
   }
 
   // Advance the fly-cam one frame from debug input. `inp`: { yaw, pitch, mx, mz, up, dt,
@@ -1193,7 +1218,7 @@ export class Scene3D {
   debugPick() {
     if (!this.camera) return null;
     this.camera.updateMatrixWorld(); // the fly-cam moved this frame; keep the ray current
-    this._raycaster.setFromCamera(DEBUG_CENTER, this.camera);
+    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
     this._raycaster.far = 60;
     const roots = this._debugTargets();
     if (!roots.length) { this._setFocusTarget(null); return null; }

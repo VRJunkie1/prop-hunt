@@ -2,9 +2,24 @@
 
 Built 2026-07-11 (VRmike task "HUNTER CHARACTER MODEL v1"). Gives remote **hunters**
 an animated third-person soldier body — what OTHER players (props) see. The LOCAL
-hunter stays first-person and never renders their own body this pass. Props are
+hunter stays first-person and never renders their own body. Props are
 untouched (still render as their disguise). NOT playtested live (headless sandbox
 can't open a GLB or run animations — see "Verification" below).
+
+## 2026-07-11 fix pass (live 2-player testing, VRmike)
+
+Live test found the remote soldier mis-sized/mis-placed/back-facing and the local
+hunter still third-person. Diagnosed root cause: the model had been mentally attached
+to the orbiting third-person camera. The tree already anchored it to the PLAYER BODY
+(`syncPlayers` positions the mesh at the snapshot `p.x/p.y/p.z`, feet at `-box2.min.y`,
+scale `targetH / size.y` from the measured bbox — all correct), so the position/scale
+fixes were already present. Two changes landed this pass:
+- **Facing:** `yawOffsetDeg` **0 → 180** (the soldier faced backwards; native forward
+  is +Z, game forward is −Z). Hot-tunable — nudge if a live browser still shows it off.
+- **Local hunter is now genuinely first-person** (was still third-person, showing the
+  red capsule to yourself): `js/main.js applyRoleView()` sets `scene.setThirdPerson(role
+  !== HUNTER)`. See `memory/notes/third-person-camera.md` for the camera/self-body detail
+  and the free-cam-still-shows-your-body handling.
 
 ## What & where
 
@@ -72,8 +87,8 @@ referee, props/disguises, the local player's view. `shared/` untouched.
 
 1. **Rifle grip alignment** — `weapon.position`/`rotationDeg`/`scale`. Quaternius gun +
    Quaternius character should align close out of the box; nudge if the grip looks off.
-2. **Facing** — if the soldier runs backwards/sideways relative to travel, set
-   `yawOffsetDeg` (likely 180).
+2. **Facing** — `yawOffsetDeg` is now **180** (fixes the faces-backwards symptom). If a
+   live browser shows it running sideways/still-backwards, nudge from there.
 3. `Run_Shoot` for `forward` — swap to plain `Run` if the shoot pose looks wrong.
 4. `moveThreshold` / `refSpeed` if idle↔run flickers or run speed looks off.
 

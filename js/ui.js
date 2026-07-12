@@ -131,19 +131,11 @@ export class UI {
     el.className = 'link ' + (relayed ? 'relayed' : 'direct');
   }
 
-  // Position the aim reticle. `pt` is {x,y} in pixels (third-person: where the tag
-  // cone points on screen) or null to recenter (first-person). The CSS keeps a
-  // translate(-50%,-50%), so left/top land the reticle centered on the point.
-  setCrosshair(pt) {
-    const c = this.el.crosshair;
-    if (!pt) {
-      c.style.left = '50%';
-      c.style.top = '50%';
-      return;
-    }
-    c.style.left = `${pt.x}px`;
-    c.style.top = `${pt.y}px`;
-  }
+  // NOTE: the aim reticle is a FIXED crosshair at the exact screen centre, positioned
+  // entirely by CSS (#crosshair: top/left 50% + translate(-50%,-50%)). Nothing floats
+  // it any more — center-screen raycasts (scene.aimedDisguiseTarget / debugPick) fire
+  // through that same point, so there is ONE crosshair system. See setAimHint() for the
+  // only per-frame reticle state (a dim "no target" tint for props).
 
   setRole(role) {
     this.el.hudRole.textContent = role === 'hunter' ? 'HUNTER' : 'PROP';

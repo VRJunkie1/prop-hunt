@@ -138,6 +138,44 @@ const css = read('css', 'style.css');
 ok(/\.hidden\s*\{\s*display:\s*none\s*!important/.test(css), 'css .hidden uses !important (beats .blindfold display so a prop is truly hidden)');
 
 // ---------------------------------------------------------------------------
+// 5) HUNTER MODEL + FIRST-PERSON + CENTERED RETICLE/RAYCAST (this build). Static
+//    guards for the three fixes that can't be seen headless (owed a live 2-player
+//    pass): the model is MEASURED not magic-numbered, hunters are first-person, the
+//    reticle is dead-centre, and the disguise ray fires from the camera centre.
+// ---------------------------------------------------------------------------
+// (a) The hunter model's scale + foot-offset come from a MEASURED bounding box of the
+//     loaded GLB, not a hardcoded fallback. Assert the measurement path is present:
+//     a Box3.setFromObject, a scale derived from the measured height (targetH / size.y),
+//     and a foot offset from the measured min-y (-box2.min.y). If someone replaced these
+//     with a constant scale / y-offset, these regexes go dark.
+const buildHunter = (sceneSrc.match(/_buildHunterModel\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
+ok(/setFromObject\(inner\)/.test(buildHunter), 'scene _buildHunterModel measures the loaded GLB (Box3.setFromObject)');
+ok(/targetH\s*\/\s*size\.y/.test(buildHunter), 'scene hunter SCALE derives from measured bbox height (targetH / size.y), not a magic number');
+ok(/-box2\.min\.y/.test(buildHunter), 'scene hunter FOOT offset derives from the measured bbox min-y (-box2.min.y), not a hardcoded lift');
+ok(/heightMeters/.test(read('shared', 'config', 'character-models.json')), 'character-models.json supplies the target heightMeters the measured scale matches');
+
+// (b) FIRST-PERSON HUNTERS. main.js drives the view off role (HUNTER => first-person,
+//     i.e. setThirdPerson(false)); scene only draws the self body when third-person OR
+//     the free cam is flying (so a first-person hunter shows no own body, but the debug
+//     fly-cam still reveals it).
+ok(/setThirdPerson\(state\.role !== ROLE\.HUNTER\)/.test(mainSrc), 'main.js makes HUNTERS first-person (setThirdPerson false for the hunter role)');
+ok(/_wantSelfMesh\s*\(\)\s*\{[\s\S]*?thirdPerson\s*\|\|\s*this\._freeCam/.test(sceneSrc), 'scene draws the own body only in third-person OR free cam (first-person hunter = no self body; fly-cam still shows it)');
+
+// (c) ONE CENTERED RETICLE. The #crosshair is fixed dead-centre by CSS, and nothing
+//     floats it any more (the old aimScreenPoint pathway is gone from both files).
+const crossRule = (css.match(/#crosshair\s*\{[\s\S]*?\}/) || [''])[0];
+ok(/top:\s*50%/.test(crossRule) && /left:\s*50%/.test(crossRule) && /translate\(-50%,\s*-50%\)/.test(crossRule),
+  'css #crosshair is pinned to the exact screen centre (top/left 50% + translate(-50%,-50%))');
+ok(!/aimScreenPoint/.test(mainSrc) && !/aimScreenPoint/.test(sceneSrc), 'the floating-reticle path (aimScreenPoint) is fully removed — one crosshair system');
+
+// (d) DISGUISE RAY FROM CAMERA CENTRE. aimedDisguiseTarget raycasts through SCREEN_CENTER
+//     (the shared screen-centre NDC, same as debugPick), not a player-origin cast.
+const aimTgt = (sceneSrc.match(/aimedDisguiseTarget\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
+ok(/setFromCamera\(SCREEN_CENTER/.test(aimTgt), 'scene aimedDisguiseTarget fires from the CAMERA CENTRE (setFromCamera(SCREEN_CENTER)) — through the reticle');
+ok(/const SCREEN_CENTER = new THREE\.Vector2\(0, 0\)/.test(sceneSrc), 'scene defines the shared SCREEN_CENTER (0,0 NDC) used by both the disguise pick and debugPick');
+ok(/setFromCamera\(SCREEN_CENTER/.test((sceneSrc.match(/debugPick\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0]), 'debugPick uses the SAME SCREEN_CENTER ray (unified crosshair/raycast)');
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\nblindfold check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

@@ -126,12 +126,21 @@ input.onTouchPlay = () => {
   input.enterGame();
 };
 
-// Optional view toggle (desktop V): flip third-person <-> first-person. Third-person
-// is the default; this flips the camera, the own-model visibility, and the reticle
-// behaviour together behind the scene's one flag.
+// Optional view toggle (desktop V): flip third-person <-> first-person. Flips the
+// camera and the own-model visibility behind the scene's one flag. A debug/preference
+// override on top of the role default below (a hunter can peek at their own soldier).
 input.onToggleView = () => {
   if (scene) scene.setThirdPerson(!scene.thirdPerson);
 };
+
+// Role-driven view. HUNTERS are FIRST-PERSON: camera at their eye looking along
+// yaw/pitch, and their own body is NOT drawn to themselves (remote players still see
+// the full animated third-person soldier — see scene.meshForPlayer). PROPS stay
+// THIRD-PERSON so they can see the disguise they're wearing. Called on the ROLE
+// message and again after buildWorld (role can arrive before the scene exists).
+function applyRoleView() {
+  if (scene) scene.setThirdPerson(state.role !== ROLE.HUNTER);
+}
 
 // Ctrl+E: toggle the in-game level editor (desktop debug tool). Available only in
 // solo/local play — never mid-multiplayer (see canEnterEditor). Entering steps the
@@ -249,7 +258,10 @@ function handleGameMessage(msg) {
       // one type→shape/model lookup for scene.js. Fixture types are only ever
       // referenced by map.fixtures, so this merge never widens the disguise pool.
       const catalog = { ...state.cfg.props, ...state.cfg.fixtures };
-      ensureScene().then((s) => s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels));
+      ensureScene().then((s) => {
+        s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels);
+        applyRoleView(); // HUNTER => first-person; PROP => third-person (role may already be known)
+      });
       // Stand up the local prediction world (real wall/prop collision for our own
       // movement). Fire-and-forget: until it resolves — or forever, if Rapier can't
       // load — the frame loop uses the flat 2D prediction. See buildPredict().
@@ -275,6 +287,7 @@ function handleGameMessage(msg) {
     case S2C.ROLE:
       state.role = msg.role;
       ui.setRole(msg.role);
+      applyRoleView(); // hunters go first-person (no own body); props stay third-person
       if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Wait, then find the props.', 3500);
       else ui.banner('You are a PROP. Look at an object and press E to disguise.', 3500);
       break;
@@ -675,10 +688,9 @@ function frameBody(now) {
     // free cam + focus-box raycast. Runs BEFORE render so the camera/box reflect this frame.
     if (debugMenu) debugMenu.frame(dt);
     scene.render();
-    // Drive the aim reticle off the referee's yaw-forward vector (where the tag
-    // cone actually swings), not screen center — the third-person eye sits off the
-    // player. Null => first-person, reticle stays centered.
-    ui.setCrosshair(scene.aimScreenPoint(disp, input.yaw));
+    // The reticle is a fixed crosshair at the EXACT screen centre (CSS #crosshair) —
+    // nothing floats it. Disguise targeting raycasts through that same centre (see
+    // scene.aimedDisguiseTarget), so what the crosshair overlaps is what you pick.
   }
 }
 
