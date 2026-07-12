@@ -6,6 +6,7 @@ Finished items move to the bottom, struck through.
 
 ## Lobby / teams
 - **Team selection** on the lobby screen (Hunters vs Props), **replacing the redundant ready button**. Player names fall under their team's header. _(Partial: HUNTER/PROP roles exist, but the ready button is still in the code — not yet replaced by a team-select screen.)_
+- **Editable names in the lobby** (VRmike 2026-07-11): players who arrive via a join link never get a chance to set their name. Let anyone edit their name at ANY time before the match launches — i.e. while still in the lobby — not just at first entry. Name changes propagate to the host/roster.
 
 ## Player movement
 - **Sprint / crouch.** _(jump is done — see Finished)_
