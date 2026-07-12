@@ -8,6 +8,8 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## RESUME NOTE (2026-07-12, resume of the crashed pose/anim/damage/debug/fire/pause run): the crashed attempt had already COMMITTED its full work as `9cb60ad` (the harness commits partial trees); the HTTPException struck AFTER the commit, during the final deploy/link-posting step — NOT mid-edit. Working tree verified CLEAN at HEAD (`git diff HEAD` empty — no partial/uncommitted leftovers). Re-ran the WHOLE guard suite on resume, ALL GREEN: `check-combat` (incl. §E re-disguise small→large multiplier + §F fire-rate 700 rpm/66 ms), `check-debug-menu` (collapsed default + collider toggle), `check-hunter-model` (idle = `Idle_Gun_Pointing` gun-up clip), `check-blindfold` (scene-API guard), `check-physics`, `check-hunter-model-size`. Page boots with ZERO console errors in normal + `?debug=1` + phone-portrait; DEBUG menu confirmed COLLAPSED-by-default by screenshot (only the `DEBUG ▸` button top-left). No code changes needed — the seven-part pass below is complete and coherent. Still owes the live 2-player pass noted at the end of that section.
+
 ## Latest: HUNTER RIFLE POSE/ANIM POLISH + DAMAGE-MULT PROOF + DEBUG UPGRADES + RAPID-FIRE/MOUSE-LOCK/PAUSE MENU (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1 + phone). Rifle pose, hold-to-fire feel, mouse-lock/pause flow owe a live 2-player pass.
 
 Seven-part pass. Full detail: `notes/hunter-character-model.md` (rifle pose/anim), `notes/hunter-tools-combat.md`
