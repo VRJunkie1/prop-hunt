@@ -25,6 +25,7 @@ import { Referee } from '../shared/referee.js';
 import { isArchEntry } from '../shared/physics.js';
 import {
   resolveDamageCfg, entrySize, sizeMultiplier, multiplierForDisguise, damageForPlayerHit,
+  wrongGuessPenalty,
 } from '../shared/damage.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -136,33 +137,48 @@ console.log('\nB) player damage + kill-refill');
 }
 
 // ---------------------------------------------------------------------------
-// C) WRONG-PROP SELF-DAMAGE vs free-miss ARCHITECTURE.
+// C) WRONG-GUESS PENALTY — FLAT base, SIZE-INDEPENDENT — vs free-miss ARCHITECTURE.
+//    (2026-07-12 tuning: a hunter shooting a disguisable decoy loses a flat `base`, never a
+//    size-scaled amount — a burger decoy and a table decoy cost exactly the same.)
 // ---------------------------------------------------------------------------
-console.log('\nC) wrong-prop self-damage / architecture free miss');
+console.log('\nC) wrong-guess penalty (flat base, size-independent) / architecture free miss');
 {
   const ref = makeRef();
   ref.phase = PHASE.HUNTING;
   const hunter = addPlayer(ref, 'H', ROLE.HUNTER);
-  // Prop instances the raycast could report (disguisable decoy + a non-disguisable one).
+  const flat = wrongGuessPenalty(dcfg);
+  ok(near(flat, dcfg.base), `wrong-guess penalty is the FLAT base (${flat}), no size multiplier`);
+
+  // Prop instances the raycast could report (a tiny disguisable decoy + a non-disguisable one).
   ref.props = [
     { id: 1, type: 'burger', disguisable: true },
     { id: 2, type: 'crate', disguisable: false },
   ];
 
-  // Shoot a disguisable decoy PROP → hunter takes size-scaled damage.
+  // Shoot a TINY disguisable decoy PROP → hunter loses exactly the flat base.
   hunter.health = startHealth;
   ref._applyShotDamage(hunter, { kind: 'prop', id: 1 });
-  ok(hunter.health < startHealth, `shooting a could-be-a-player prop bounces damage onto the HUNTER (${startHealth} → ${hunter.health.toFixed(1)})`);
-  const afterDecoy = hunter.health;
+  ok(near(hunter.health, startHealth - flat), `shooting a tiny (burger) decoy costs the flat base (${startHealth} → ${hunter.health.toFixed(1)})`);
 
   // A prop flagged non-disguisable → no self-damage (treated like scenery).
+  const afterDecoy = hunter.health;
   ref._applyShotDamage(hunter, { kind: 'prop', id: 2 });
   ok(near(hunter.health, afterDecoy), 'a non-disguisable prop instance does NOT self-damage');
 
-  // A disguisable STATIC fixture (counter) → self-damage.
+  // A BIG disguisable decoy (table fixture) → the SAME flat base, despite a wildly different
+  // size. This is the tuning rule: the penalty NEVER scales with what was shot.
+  const bigDecoy = 'kitchen_table';
   hunter.health = startHealth;
-  ref._applyShotDamage(hunter, { kind: 'fixture', type: 'counter' });
-  ok(hunter.health < startHealth, `shooting a disguisable static fixture (counter) self-damages (${startHealth} → ${hunter.health.toFixed(1)})`);
+  ref._applyShotDamage(hunter, { kind: 'fixture', type: bigDecoy });
+  ok(near(hunter.health, startHealth - flat), `shooting a BIG (${bigDecoy}) decoy costs the SAME flat base (${startHealth} → ${hunter.health.toFixed(1)}) — size never scales the penalty`);
+  // Sanity: the two decoys really DO have different size multipliers, so an equal, flat
+  // penalty is a meaningful assertion (not a coincidence of equal sizes).
+  ok(
+    !near(multiplierForDisguise('burger', catalog, dcfg), multiplierForDisguise(bigDecoy, catalog, dcfg)),
+    `the two decoys have DIFFERENT size multipliers (burger ${multiplierForDisguise('burger', catalog, dcfg).toFixed(2)} vs ${bigDecoy} ${multiplierForDisguise(bigDecoy, catalog, dcfg).toFixed(2)}) — yet the penalty above was identical`
+  );
+  // 20 wrong guesses = dead at the new flat base.
+  ok(hitsToKill(flat, startHealth) === Math.ceil(startHealth / dcfg.base), `${hitsToKill(flat, startHealth)} wrong guesses = dead (flat ${flat}/guess)`);
 
   // Real ARCHITECTURE fixture → free miss (no damage).
   hunter.health = startHealth;

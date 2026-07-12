@@ -152,15 +152,17 @@ button.ghost:hover { background: #3d2a66; }
 #hud { position: absolute; inset: 0; pointer-events: none; }
 .hud-top {
   position: absolute;
-  top: 14px; left: 50%;
-  transform: translateX(-50%);
+  top: 14px; left: 12px; right: 12px;
   display: flex; gap: 10px;
+  align-items: center;
+  flex-wrap: wrap; /* narrow / portrait: the health bar drops to its own full-width row */
 }
 .pill {
   background: #00000088;
   padding: 6px 14px;
   border-radius: 20px;
   font-size: 15px;
+  flex: 0 0 auto; /* role / timer / props keep their natural size */
 }
 #hudRole.hunter { color: #ff6b6b; }
 #hudRole.prop { color: #7be38b; }
@@ -495,11 +497,40 @@ button.ghost:hover { background: #3d2a66; }
 .dev-btn.hidden { display: none; }
 
 /* ---- HUNTER-TOOLS v1: health, tool bar, spectator ---- */
-/* Own health readout in the HUD. Turns amber then red as it drops (main.js sets the
-   class). Sits in the same .pill row as role/timer/props. */
-#hudHealth.health { color: #7be38b; }
-#hudHealth.health.warn { color: #ffcf5a; }
-#hudHealth.health.crit { color: #ff6b6b; }
+/* Own health as a filled BAR in the HUD (replaces the old numeric readout). It GROWS to fill
+   the spare width of the top row (flex:1) and is at least ~220px wide (well over 2× the old
+   numeric readout); on a narrow/portrait screen the .hud-top wraps and the bar takes its own
+   full-width row. The number is centred inside; the fill goes green → amber → red as it drops
+   (main.js/ui.setHealth sets width + warn/crit class). */
+#hudHealth.health {
+  flex: 1 1 240px;      /* fill remaining row width */
+  min-width: 220px;     /* >2× the old ~70px numeric pill; forces a wrap when it won't fit */
+  position: relative;
+  height: 30px;
+  padding: 0;           /* the fill + centred label own the interior */
+  overflow: hidden;     /* clip the fill to the pill's rounded corners */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #ffffff22;
+}
+#hudHealth .health-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 100%;
+  background: #2f9d4a;  /* green (healthy) */
+  transition: width 0.2s ease, background 0.2s ease;
+  z-index: 0;
+}
+#hudHealth.health.warn .health-fill { background: #c79a2e; } /* amber */
+#hudHealth.health.crit .health-fill { background: #c0392b; } /* red */
+#hudHealth .health-label {
+  position: relative;
+  z-index: 1;           /* sit above the fill */
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px #000, 0 0 2px #000;
+}
 
 /* Always-on tool bar for hunters. Bottom-centre, above the safe-area inset; its buttons
    opt back into pointer events (the HUD itself is pointer-events:none, but the toolbar is

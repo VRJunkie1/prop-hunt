@@ -54,17 +54,47 @@ const fixtures = readJSON('shared', 'config', 'fixtures.json');
 ok(!props.hunter && !fixtures.hunter, 'hunter is NOT in props.json / fixtures.json (never disguisable / collider-baked)');
 
 // ---------------------------------------------------------------------------
-// 2) CONFIGURED CLIP SUFFIXES must be real clips from the pack (guards a typo the
-//    suffix-matcher would silently miss). This is the VERIFIED clip list from the
-//    asset (names sans the 'CharacterArmature|' prefix).
+// 2) REMOTE RIFLE ANIMATIONS (2026-07-12 fix). Parse the ACTUAL clip list out of the hunter
+//    GLB (a .glb is a 12-byte header + chunks; chunk 0 is a plain-text JSON block whose
+//    `animations[].name` are the clip names — no 3D math needed) and assert:
+//      (a) every configured clip suffix resolves to a real clip in THIS GLB (the same
+//          suffix rule scene._resolveClip uses — guards a typo the matcher silently eats);
+//      (b) every configured idle/movement clip is a RIFLE/AIM clip (name carries Gun or
+//          Shoot), so a remote hunter is NEVER shown the arms-at-sides plain run. This is
+//          the static half of the bug fix — the runtime half (mixer plays it) needs a live
+//          browser, but a regression that points a movement state back at 'Run'/'Run_Back'
+//          (arms-down) now fails the build here.
 // ---------------------------------------------------------------------------
-const PACK_CLIPS = new Set([
-  'Idle', 'Idle_Gun', 'Idle_Gun_Pointing', 'Idle_Gun_Shoot', 'Gun_Shoot',
-  'Run', 'Run_Back', 'Run_Left', 'Run_Right', 'Run_Shoot', 'Walk', 'Death', 'HitRecieve',
-]);
-for (const s of ['idle', 'forward', 'backward', 'left', 'right']) {
-  const name = clips[s];
-  ok(!name || PACK_CLIPS.has(name), `clip suffix "${name}" for ${s} is a real pack clip`);
+// Pull the animation clip names straight out of a .glb's JSON chunk.
+function glbClipNames(file) {
+  const buf = readFileSync(join(root, 'assets', file));
+  if (buf.toString('ascii', 0, 4) !== 'glTF') return null; // not a GLB
+  const chunkLen = buf.readUInt32LE(12);
+  const chunkType = buf.toString('ascii', 16, 20);
+  if (chunkType !== 'JSON') return null;
+  let json;
+  try { json = JSON.parse(buf.toString('utf8', 20, 20 + chunkLen)); } catch { return null; }
+  return (json.animations || []).map((a) => a.name || '');
+}
+// Match a configured suffix against the GLB's clip names exactly the way scene._resolveClip
+// does (exact, then endsWith '|'+suffix, then endsWith suffix).
+const resolvesTo = (names, suffix) =>
+  names.find((n) => n === suffix) ||
+  names.find((n) => n.endsWith('|' + suffix)) ||
+  names.find((n) => n.endsWith(suffix)) ||
+  null;
+// A rifle/aim clip keeps the gun raised — its name carries "Gun" or "Shoot" in this pack.
+const isRifleClip = (name) => /gun|shoot/i.test(name || '');
+
+const clipNames = hunter && hunter.model ? glbClipNames(hunter.model) : null;
+ok(Array.isArray(clipNames) && clipNames.length > 0, `hunter GLB parses and lists its animation clips (${clipNames ? clipNames.length : 0} found)`);
+if (clipNames) {
+  for (const s of ['idle', 'forward', 'backward', 'left', 'right']) {
+    const name = clips[s];
+    const resolved = resolvesTo(clipNames, name);
+    ok(!!resolved, `clip "${name}" for ${s} exists in the hunter GLB (resolves to "${resolved || 'NONE'}")`);
+    ok(!!resolved && isRifleClip(resolved), `clip for ${s} is a RIFLE/AIM clip (gun stays up), not the arms-at-sides run — "${resolved || name}"`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,22 @@ so this started from the last-good commit (8e28bc3) with a clean tree.
 - Death: `_damagePlayer` flips `alive=false` at 0 HP and announces `EVENT kind:'eliminated'
   {hunter}`. Dead players don't respawn (the physics failsafe already skips `!alive`).
 
+## 2026-07-12 damage tuning (VRmike) — flat wrong-guess penalty + rescaled base
+- **base 10 → 5** (`rules.damage.base`): 5%/hit; an undisguised player = 20 hits.
+- **WRONG-GUESS penalty is now FLAT `base`, size multiplier NEVER applied.** New pure
+  `damage.wrongGuessPenalty(cfg)` = `base`. The referee's two decoy branches (`kind:'prop'` +
+  `kind:'fixture'`) in `_applyShotDamage` call it instead of `selfScalesWithSize ? multiplier : 1`
+  — so a burger decoy and a table decoy both cost the hunter exactly 5% (20 wrong guesses = dead).
+  `rules.damage.selfScalesWithSize` is retired to `false` and NO LONGER read (the flat rule is
+  unconditional). Real architecture/world is still a free miss.
+- **Prop-PLAYERS keep the size curve, rescaled for the new base.** `smallMult 5 → 10` so a small
+  disguise still ≈ 2 hits at base 5 (burger: 5×10 = 50 → 2 hits — same per-hit as the old 10×5).
+  `largeMult 0.34` kept: table ≈ 5×0.34 = 1.7/hit → ~59 hits ≈ ~3× the 20-hit default. Smooth
+  lerp between `smallSize`/`largeSize` intact — the multiplier math is untouched; only the base
+  and small anchor moved. `damage.js` stays the ONE size source (referee + `check-combat.mjs`).
+- `tools/check-combat.mjs` extended: asserts the flat penalty is size-INDEPENDENT (burger-decoy ==
+  table-decoy == base, despite very different size multipliers), burger ≈ 2 hits, table ≈ 3× default.
+
 ## Death, spectator, win condition (DECISIONS.md #1)
 - **Hunters do NOT respawn.** A dead local player gets a spectator banner (`#spectate`) and
   keeps first-person look-around from their death spot (movement stays frozen). This

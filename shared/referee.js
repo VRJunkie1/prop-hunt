@@ -16,7 +16,7 @@
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
 import { loadRapier, PhysicsWorld, isStaticEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
-import { resolveDamageCfg, multiplierForDisguise } from './damage.js';
+import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty } from './damage.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -432,8 +432,9 @@ export class Referee {
   // Split from applyShot so the offline guard (tools/check-combat.mjs) can drive it with a
   // synthetic descriptor and no Rapier. Rules:
   //   - player hit           -> that player takes base * size-multiplier(their disguise).
-  //   - disguisable object    -> the object COULD have been a player, so the HUNTER takes
-  //     (prop or non-arch fixture)  the same size-scaled damage instead (friendly-decoy).
+  //   - disguisable object    -> the object COULD have been a player, so the HUNTER takes a
+  //     (prop or non-arch fixture)  FLAT wrong-guess penalty (base, NO size multiplier — a
+  //                                 burger decoy and a table decoy cost the same; 20 = dead).
   //   - architecture / world  -> free miss, no damage (walls/floor/ceiling/ground).
   _applyShotDamage(hunter, info) {
     if (!info) return;
@@ -442,7 +443,7 @@ export class Referee {
     if (info.kind === 'player') {
       const target = this.players.get(info.id);
       if (!target || !target.alive || target.id === hunter.id) return;
-      const mult = multiplierForDisguise(target.disguise, catalog, d);
+      const mult = multiplierForDisguise(target.disguise, catalog, d); // prop-PLAYERS still scale by size
       this._damagePlayer(hunter, target, d.base * mult, false);
       return;
     }
@@ -451,15 +452,13 @@ export class Referee {
       if (!prop) return;
       const c = catalog[prop.type];
       if (!c || isArchEntry(c) || prop.disguisable === false) return; // architecture-ish => miss
-      const mult = d.selfScalesWithSize ? multiplierForDisguise(prop.type, catalog, d) : 1;
-      this._damagePlayer(hunter, hunter, d.base * mult, true); // shot a decoy => hurt yourself
+      this._damagePlayer(hunter, hunter, wrongGuessPenalty(d), true); // FLAT wrong-guess penalty (never size-scaled)
       return;
     }
     if (info.kind === 'fixture') {
       const c = catalog[info.type];
       if (!c || isArchEntry(c)) return; // real wall/floor => free miss
-      const mult = d.selfScalesWithSize ? multiplierForDisguise(info.type, catalog, d) : 1;
-      this._damagePlayer(hunter, hunter, d.base * mult, true);
+      this._damagePlayer(hunter, hunter, wrongGuessPenalty(d), true); // FLAT wrong-guess penalty (never size-scaled)
       return;
     }
     // kind:'world' (ground slab / boundary walls) => architecture => nothing.

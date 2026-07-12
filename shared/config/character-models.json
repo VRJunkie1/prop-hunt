@@ -8,12 +8,13 @@
     "_yawComment": "yawOffsetDeg rotates the model about vertical so its FRONT faces the networked facing yaw. Set to 180 to fix the 'faces backwards' symptom VRmike saw in live 2-player testing (the soldier's native forward is +Z; the game's is -Z). HOT-TUNABLE: if a live browser shows it still off (running sideways etc.), nudge this — no rebuild.",
     "yawOffsetDeg": 180,
     "clipPrefix": "CharacterArmature|",
+    "_clipsComment": "REMOTE-RIFLE-ANIMATION FIX (2026-07-12, VRmike): a hunter always holds the rifle, so remote viewers must always see the RIFLE (gun-up) run/aim, never the arms-at-sides run. This asset's clip list (verified by tools/check-hunter-model.mjs parsing the GLB) has only TWO rifle-holding movement clips — 'Idle_Gun' (gun idle) and 'Run_Shoot' (gun-up run). The old directional clips 'Run_Back'/'Run_Left'/'Run_Right' are the pack's PLAIN arms-down runs (no rifle raised) — those were the 'default arms-at-side run' bug VRmike saw whenever a hunter strafed or backpedalled. There is NO gun-up strafe/backpedal clip in this GLB, so every movement direction now maps to the real gun-run 'Run_Shoot' (closest available rifle clip). Trade-off: legs use the forward run cycle while strafing, but the rifle stays UP in every direction — which is what the task prioritised. check-hunter-model.mjs asserts every clip here resolves in the GLB AND is a gun/aim clip. HOT-TUNABLE (no rebuild).",
     "clips": {
       "idle": "Idle_Gun",
       "forward": "Run_Shoot",
-      "backward": "Run_Back",
-      "left": "Run_Left",
-      "right": "Run_Right"
+      "backward": "Run_Shoot",
+      "left": "Run_Shoot",
+      "right": "Run_Shoot"
     },
     "anim": {
       "_comment": "moveThreshold (u/s): below this the hunter plays idle. refSpeed (u/s): the speed at which run clips play at timeScale 1 — matches rules.moveSpeed (6). timeScale is clamped to [minTimeScale,maxTimeScale]. crossfadeSeconds: blend time between clips (no popping).",

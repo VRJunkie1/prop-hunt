@@ -63,3 +63,14 @@ export function damageForPlayerHit(disguiseType, catalog, cfg) {
   const c = resolveDamageCfg(cfg);
   return c.base * multiplierForDisguise(disguiseType, catalog, c);
 }
+
+// WRONG-GUESS PENALTY (2026-07-12) — the self-inflicted damage a hunter takes for shooting
+// a disguisable DECOY (a prop or non-arch fixture that could have been a player). This is a
+// FLAT `base` hit with NO size multiplier, EVER — a small burger decoy and a big table decoy
+// cost the hunter exactly the same (20 wrong guesses at base 5 = dead). This is the ONE place
+// the wrong-guess cost is defined; the referee calls it instead of the size curve. Deliberately
+// does NOT touch multiplierForDisguise — prop-PLAYERS still scale by size; only the decoy
+// self-penalty is flat. (Real architecture is a free miss and never reaches here.)
+export function wrongGuessPenalty(cfg) {
+  return resolveDamageCfg(cfg).base;
+}

@@ -77,8 +77,14 @@
           <span id="hudRole" class="pill">&mdash;</span>
           <span id="hudTimer" class="pill">0:00</span>
           <span id="hudProps" class="pill">Props: 0/0</span>
-          <!-- HUNTER-TOOLS v1: own health % (both roles start at 100). -->
-          <span id="hudHealth" class="pill health">&#10084; 100%</span>
+          <!-- HUNTER-TOOLS v1: own health as a filled BAR that grows to fill the spare width
+               of the top row (numbers centred inside). On narrow/portrait screens the row
+               wraps and the bar takes its own full-width line (see css .hud-top / #hudHealth).
+               ui.setHealth() sets the fill width + label + warn/crit colour. -->
+          <div id="hudHealth" class="pill health">
+            <div class="health-fill"></div>
+            <span class="health-label">&#10084; 100%</span>
+          </div>
         </div>
         <div id="banner" class="banner hidden"></div>
         <div id="feed" class="feed"></div>

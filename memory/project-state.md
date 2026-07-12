@@ -8,6 +8,50 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: REMOTE RIFLE ANIMATION FIX + INPUT/DAMAGE/HUD TUNING (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1); remote-animation look + HUD-in-match + live damage feel owe a 2-player pass.
+
+Six-part tuning pass on the HUNTER-TOOLS build. Full detail: `notes/hunter-character-model.md`
+(clip change), `notes/hunter-tools-combat.md` (damage), `notes/debug-menu.md` (default-on).
+
+1. **Remote rifle animations — ROOT-CAUSED at the asset.** Parsed the SWAT GLB (its clip names
+   live as plain text in the glTF JSON chunk — no 3D math): 24 clips, and only **two** hold the
+   rifle up — `Idle_Gun` and `Run_Shoot` (a real rifle-run). The old config pointed
+   backward/left/right at `Run_Back`/`Run_Left`/`Run_Right`, which are the pack's PLAIN
+   arms-down directional runs — THAT was the "arms-at-sides while holding the rifle" VRmike saw
+   whenever a hunter strafed/backpedalled (the mixer/velocity/wiring were all fine). There is no
+   gun-up strafe/backpedal clip in the asset, so **all movement now maps to `Run_Shoot`** and
+   idle stays `Idle_Gun` — the rifle stays raised in every direction (`character-models.json`,
+   hot-tunable). Trade-off: legs use the forward-run cycle while strafing (documented). Tool
+   state is NOT networked (finder is a no-op; the rifle is always shown to remotes), so
+   "animation follows the rifle" = a remote hunter always animates gun-up — which is now true.
+2. **PC left-click fire — already correct, verified.** `input.js` already fires on `mousedown`
+   button 0 gated on pointer lock (→ `onAction('primary')` → `tryFire`), so a locked in-game
+   left-click shoots and menu/UI clicks never do. No change (avoided a regression).
+3. **Debug MENU on by default.** `main.js` now constructs `DebugMenu` unconditionally (lazy
+   import). `?debug=1` is UNCHANGED and still governs the separable heavy features: the collider
+   wireframe overlay (read directly in `scene.js`), per-peer ping, and the referee's
+   host-authoritative debug-command gate. So the two links differ: normal = menu; `?debug=1` =
+   menu + wireframes + host debug commands.
+4. **Damage tuning (config + one referee line).** base **10 → 5** (5%/hit; undisguised = 20
+   hits). **Wrong-guess penalty is now a FLAT `base` (5%), NEVER size-scaled** — new
+   `damage.wrongGuessPenalty()`; referee's two decoy branches call it instead of the size curve;
+   `selfScalesWithSize` retired to false + unread (20 wrong guesses = dead). Prop-PLAYERS keep
+   the size curve, rescaled `smallMult` **5 → 10** so a burger still dies in ~2 hits at base 5;
+   `largeMult` 0.34 kept → a table soaks ~59 hits ≈ ~3× the 20-hit default. Smooth lerp intact.
+5. **HUD health BAR.** The numeric `#hudHealth` pill became a filled BAR (green→amber→red) that
+   grows to fill the top row's spare width (≥220px, >2× the old readout) with the number centred
+   inside; `.hud-top` spans the width and `flex-wrap`s so mobile portrait drops the bar to its
+   own full-width second row — two fixed layouts, no runtime measurement.
+6. **Guards extended.** `check-hunter-model.mjs` now PARSES the GLB (glbClipNames) and asserts
+   every configured clip resolves in the asset AND is a rifle/aim clip (gun stays up).
+   `check-combat.mjs` asserts the flat, size-independent wrong-guess penalty (burger decoy ==
+   table decoy == base) + burger ~2 hits + table ~3×. `check-debug-menu.mjs` updated for
+   default-on. All green; `check-blindfold.mjs` + `check-physics.mjs` still green.
+- **OWED — live 2-player pass:** remote hunter holds the rifle UP running in every direction (no
+  arms-at-sides); left-click fires on PC; debug menu visible without ?debug=1 (and wireframes
+  with it); burger dies in ~2 hits / table tanky / 20 wrong guesses kill a hunter flat; health
+  BAR fills the HUD row on PC and wraps to its own row on mobile portrait, number centred.
+
 ## Latest: HUNTER TOOLS v1 + HEALTH/DAMAGE + all-hunters-dead win (2026-07-12, VRmike). Crash-retry; started from a CLEAN tree at 8e28bc3 (the crashed run committed nothing). All headless checks GREEN; the tool bar / rifle visuals / actual raycast hits owe a live 2-player pass.
 
 Adds the hunter tool framework (built for 4+ tools; 2 ship), a host-authoritative assault

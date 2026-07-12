@@ -162,7 +162,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   rifle parented to the `Wrist.R` bone. The LOCAL hunter never renders it (stays
   first-person). Registry: `cfg.characterModels`. Detail:
   `memory/notes/hunter-character-model.md`.
-- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The
+- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The HUD **health
+  readout is a filled BAR** (2026-07-12, `#hudHealth` = `.health-fill` + centred `.health-label`;
+  green→amber→red): `.hud-top` spans the row and `flex-wrap`s so the bar fills the spare width on
+  PC and drops to its own full-width row on mobile portrait — two fixed CSS layouts, no runtime
+  measurement. `setHealth(pct)` sets the fill width + label + warn/crit class. The
   "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
   msg?)`, called from `main.js` in response to `input.js` pointer-lock events
   (overlay up while uncaptured, down once the browser confirms lock, back on
@@ -186,9 +190,13 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   lock)** so it never contends with input.js's lock path. Select/move/rotate/scale/
   spawn/delete(+undelete); exports the edited layout as a drop-in `maps.json`.
   Detail: `memory/notes/level-editor.md`.
-- `js/debug.js` — **in-game debug menu (`?debug=1` only)**. Constructed by `main.js`
-  ONLY under the flag (lazy `import()`), so a normal page has zero debug DOM/listeners/
-  styles. A plain, phone-usable DOM overlay (thumb toggle + collapsible panel, styles
+- `js/debug.js` — **in-game debug menu (ON BY DEFAULT as of 2026-07-12)**. Constructed by
+  `main.js` UNCONDITIONALLY (still a lazy `import()`); it self-injects its overlay so
+  `index.html`/`style.css` ship zero debug DOM/CSS. `?debug=1` is UNCHANGED and still gates the
+  separable heavy features — the collider wireframe overlay (read directly in `scene.js`),
+  per-peer ping, and the referee's host-authoritative debug-command gate — so the visible-by-
+  default panel still can't tamper with a normal match (team/reset/morph dropped unless the HOST
+  loaded `?debug=1`). A plain, phone-usable DOM overlay (thumb toggle + collapsible panel, styles
   self-injected). Read-only displays (FPS, coords, local-player states, roster, per-peer
   ping) read live client state. Host-authoritative actions (change team, reset, force-
   morph) go through the referee's gated **`C2S.DEBUG`** family (see below). Local
@@ -221,9 +229,12 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
 - **Health/damage lives entirely on the host** (`shared/referee.js`), sized from the SAME
   footprint physics uses. `shared/damage.js` (PURE) is the one size→multiplier source
   (`entrySize` via `physics.halfExtentsFor`, lerped over `rules.damage` anchors), imported by
-  both the referee and `tools/check-combat.mjs`. Player hit → base×disguise-size; a
-  disguisable decoy → the hunter takes it instead; architecture/world → free miss; a prop
-  kill refills the hunter. Health rides every snapshot player entry (HUD only, no secret).
+  both the referee and `tools/check-combat.mjs`. Player hit → base×disguise-size (prop-PLAYERS
+  scale by size); a disguisable **decoy** → the hunter takes a **FLAT wrong-guess penalty**
+  (`damage.wrongGuessPenalty` = `base`, NEVER size-scaled — a small and a big decoy cost the
+  same; 2026-07-12); architecture/world → free miss; a prop kill refills the hunter. Base is
+  **5** (5%/hit; undisguised = 20 hits) and `smallMult` is 10 (a small disguise still ≈ 2 hits at
+  base 5). Health rides every snapshot player entry (HUD only, no secret).
 - **Hunters do NOT respawn** (DECISIONS.md #1): a dead player spectates; `checkRoundOver`
   ends the round PROPS-WIN when a round's hunters are all dead.
 

@@ -6,6 +6,27 @@ hunter stays first-person and never renders their own body. Props are
 untouched (still render as their disguise). NOT playtested live (headless sandbox
 can't open a GLB or run animations — see "Verification" below).
 
+## 2026-07-12 fix — remote hunter shown arms-at-sides while holding the rifle (VRmike)
+
+Live 2-player: remote hunters ran with the **default arms-at-sides run** even though the rifle
+was attached — the gun-up animations weren't showing. Root-caused at the ASSET, not the code:
+parsed the SWAT GLB (clip names are plain text in the glTF JSON chunk — `tools/_probe_glb_clips.mjs`
+one-off, now folded into `check-hunter-model.mjs::glbClipNames`). The 24 clips include only **two**
+that keep the rifle raised: `Idle_Gun` (gun idle) and `Run_Shoot` (a real gun-up run). The old
+config mapped backward/left/right to `Run_Back`/`Run_Left`/`Run_Right`, which are the pack's PLAIN
+arms-down directional runs — so any strafe/backpedal dropped the gun (the mixer, snapshot-derived
+velocity, and wiring were all fine; it was purely the clip choice). **There is no gun-up
+strafe/backpedal clip in this asset**, so `character-models.json` now maps ALL movement states to
+`Run_Shoot` (idle stays `Idle_Gun`) — rifle stays UP in every direction. Trade-off: legs use the
+forward-run cycle while strafing. Hot-tunable. `check-hunter-model.mjs` now parses the GLB and
+asserts every configured clip resolves in the asset AND is a rifle/aim clip (name carries Gun/Shoot),
+so a regression that points a movement state back at a plain run fails the build.
+
+Honest note on the task's premise: it assumed tool state was replicated and the animation should
+"follow the rifle tool." Tool state is NOT networked (the finder is a deliberate no-op; the rifle
+is always shown on remotes via `weapon.visibleByDefault`). So "animation follows the rifle" reduces
+to "a remote hunter always animates gun-up" — which forcing the gun clips achieves. No netcode added.
+
 ## 2026-07-11 fix pass (live 2-player testing, VRmike)
 
 Live test found the remote soldier mis-sized/mis-placed/back-facing and the local

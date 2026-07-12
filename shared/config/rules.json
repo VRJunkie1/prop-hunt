@@ -29,14 +29,14 @@
   "startHealth": 100,
   "shootRange": 120,
   "fireCooldownMs": 250,
-  "_damageComment": "HUNTER-TOOLS v1 damage tuning (all hot-tunable, no rebuild). base = damage a hunter's rifle does to an undisguised player (10 => 10 hits to kill at defaultMult). A disguised prop-player scales that by a SIZE multiplier lerped between smallSize/largeSize (metres, = 2*max half-extent of the disguise's footprint — the SAME size source physics bakes colliders from, so it auto-upgrades to measured bounds). smallMult (tiny, e.g. burger ~0.72 m => dies in ~2 hits at 50 dmg) lerps down to largeMult (big, e.g. table ~2.25 m => ~3x the default player's bullets at ~3.4 dmg). Sizes at/below smallSize clamp to smallMult; at/above largeSize clamp to largeMult. defaultMult applies to an UNDISGUISED player (no size). selfScalesWithSize: shooting a decoy object that COULD have been a player bounces the SAME size-scaled damage back onto the hunter (real architecture is a free miss).",
+  "_damageComment": "HUNTER-TOOLS v1 damage tuning (all hot-tunable, no rebuild). base = damage a hunter's rifle does to an undisguised player (5 => 20 hits to kill at defaultMult; DAMAGE-TUNING 2026-07-12 lowered this 10->5). A disguised prop-PLAYER scales base by a SIZE multiplier lerped between smallSize/largeSize (metres, = 2*max half-extent of the disguise's footprint — the SAME size source physics bakes colliders from, so it auto-upgrades to measured bounds). smallMult (tiny, e.g. burger ~0.72 m => still dies in ~2 hits at 50 dmg — rescaled 5->10 to hold ~2 hits at the new 5 base) lerps down to largeMult (big, e.g. table ~2.25 m => ~3x the default player's bullets at ~1.7 dmg => ~59 hits vs 20). Sizes at/below smallSize clamp to smallMult; at/above largeSize clamp to largeMult. defaultMult applies to an UNDISGUISED player (no size). WRONG-GUESS PENALTY (a hunter shooting a disguisable decoy — a prop or non-arch fixture that COULD have been a player) is now a FLAT `base` hit with NO size multiplier EVER (20 wrong guesses = dead); real architecture is still a free miss. selfScalesWithSize is retained as false and is NO LONGER read by the referee (the penalty is unconditionally flat).",
   "damage": {
-    "base": 10,
+    "base": 5,
     "smallSize": 0.72,
     "largeSize": 2.2,
-    "smallMult": 5.0,
+    "smallMult": 10.0,
     "largeMult": 0.34,
     "defaultMult": 1.0,
-    "selfScalesWithSize": true
+    "selfScalesWithSize": false
   }
 }

@@ -4,16 +4,20 @@
 //
 //     node tools/check-debug-menu.mjs
 //
-// The core promise is: the debug menu is INERT without ?debug=1. A headless check can't
-// "boot" a browser, so it asserts the contract that guarantees a clean normal boot:
+// As of 2026-07-12 the debug MENU is ON BY DEFAULT (no ?debug=1 needed); ?debug=1 still
+// governs the heavier, separable features (collider wireframe overlay, per-peer ping, and the
+// referee's host-authoritative debug-command gate). A headless check can't "boot" a browser,
+// so it asserts the contract:
 //   1) js/debug.js PARSES and exports DebugMenu (imported here — it has no browser-only
 //      top-level code, so it's safe to import in node; DOM access is all inside methods);
 //   2) it is self-contained: no import statements, no debug DOM in index.html, no debug
-//      CSS in css/style.css (styles are injected by the module only when it runs);
-//   3) js/main.js constructs it ONLY under the ?debug=1 flag, defaults debugMenu to null,
-//      null-guards every hook, and only enables ping under the flag → zero debug traffic /
-//      DOM / listeners in normal play;
-//   4) the referee DROPS the debug: message family unless the HOST loaded with ?debug=1;
+//      CSS in css/style.css (styles are injected by the module only when it runs) — so the
+//      default-on menu adds nothing to the shipped HTML/CSS, only its own injected overlay;
+//   3) js/main.js constructs the menu UNCONDITIONALLY (default-on), defaults debugMenu to
+//      null, null-guards every hook, and still enables ping ONLY under ?debug=1 (so a normal
+//      match carries no ping traffic even with the panel visible);
+//   4) the referee DROPS the debug: message family unless the HOST loaded with ?debug=1
+//      (unchanged — the visible-by-default panel can't tamper with a normal match);
 //   5) the protocol + netcode plumbing (C2S.DEBUG, ping/pong intercept) are wired.
 
 import { readFileSync } from 'node:fs';
@@ -53,8 +57,9 @@ ok(!/^\s*import\s/m.test(debugSrc), 'js/debug.js has no import statements (pure 
 ok(/#dbgToggle/.test(debugSrc) && /id = 'dbgPanel'/.test(debugSrc), 'debug DOM ids are dbg-prefixed');
 
 // ---------------------------------------------------------------------------
-// 3) NORMAL BOOT IS CLEAN. No debug DOM ships in index.html; no debug CSS in style.css;
-//    main.js gates everything behind the flag.
+// 3) SHIPPED HTML/CSS STAY CLEAN, MENU IS DEFAULT-ON. No debug DOM ships in index.html; no
+//    debug CSS in style.css (the menu injects its own overlay when it runs); main.js builds
+//    the menu unconditionally but keeps ping behind ?debug=1.
 // ---------------------------------------------------------------------------
 const html = read('index.html');
 ok(!/dbg[A-Z]/.test(html) && !/debug\.js/.test(html), 'index.html ships ZERO debug DOM / no debug.js tag');
@@ -64,12 +69,17 @@ ok(!/#dbg/.test(css), 'css/style.css has no debug rules (styles injected by debu
 const mainSrc = read('js', 'main.js');
 ok(
   /const DEBUG = [^\n]*URLSearchParams[^\n]*['"]debug['"][^\n]*=== '1'/.test(mainSrc),
-  "main.js derives DEBUG from ?debug=1 (same switch as collider view)"
+  "main.js still derives DEBUG from ?debug=1 (governs collider view / ping / referee gate)"
 );
 ok(/let debugMenu = null/.test(mainSrc), 'main.js defaults debugMenu to null');
+// Default-on: the DebugMenu is imported+constructed UNCONDITIONALLY (not inside an if (DEBUG)).
 ok(
-  /if \(DEBUG\)\s*\{[\s\S]*?await import\('\.\/debug\.js'\)/.test(mainSrc),
-  'main.js imports ./debug.js ONLY inside an `if (DEBUG)` block (no fetch/parse without the flag)'
+  /await import\('\.\/debug\.js'\)[\s\S]*?new DebugMenu\(/.test(mainSrc),
+  'main.js lazy-imports ./debug.js and constructs DebugMenu'
+);
+ok(
+  !/if \(DEBUG\)\s*\{[\s\S]*?await import\('\.\/debug\.js'\)/.test(mainSrc),
+  'DebugMenu construction is NOT gated behind ?debug=1 (menu is ON BY DEFAULT)'
 );
 ok(/if \(debugMenu\) debugMenu\.onSnapshot\(/.test(mainSrc), 'main.js null-guards the onSnapshot hook');
 ok(/if \(debugMenu\) debugMenu\.frame\(/.test(mainSrc), 'main.js null-guards the per-frame hook');

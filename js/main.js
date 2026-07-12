@@ -31,9 +31,13 @@ const HUNTER_TOOLS = [
 
 let session = null; // created in boot() once config is loaded
 let editor = null; // lazily created on the first Ctrl+E (see editor.js)
-// In-game debug menu (js/debug.js). Constructed ONLY under ?debug=1 — the SAME single
-// switch as the collider wireframe view. Without the flag it stays null and every hook
-// below is a null-guarded no-op, so a normal page has zero debug DOM/listeners/styles.
+// In-game debug MENU (js/debug.js) is now ON BY DEFAULT (2026-07-12, VRmike) — no ?debug=1
+// needed. DEBUG below still reads ?debug=1 and controls the SEPARATE heavier features that
+// flag has always driven: the collider wireframe overlay (read directly in scene.js), the
+// per-peer ping traffic, and the referee's host-authoritative debug-command gate. So the two
+// links genuinely differ — normal link = the menu; ?debug=1 = the menu PLUS collider
+// wireframes + ping + accepted host debug commands. The menu itself constructs unconditionally
+// (see boot()); every debugMenu hook stays null-guarded in case the lazy import ever fails.
 const DEBUG = typeof URLSearchParams !== 'undefined' && new URLSearchParams(location.search).get('debug') === '1';
 let debugMenu = null; // set in boot() when DEBUG
 const canvas = document.getElementById('view');
@@ -970,10 +974,12 @@ function newSession() {
 // ---- boot -----------------------------------------------------------------
 (async function boot() {
   state.cfg = await loadConfig();
-  // Build the in-game debug menu ONLY under ?debug=1 (lazy import so a normal page never
-  // even fetches the module). It reads live state + drives host-authoritative debug
-  // commands through the referee's gated `debug:` family. See js/debug.js.
-  if (DEBUG) {
+  // Build the in-game debug menu — ON BY DEFAULT now (no ?debug=1 needed). Lazy import so
+  // it stays out of the initial parse, but it's constructed unconditionally. It reads live
+  // state + drives host-authoritative debug commands through the referee's gated `debug:`
+  // family (which the referee still only honours when the HOST loaded ?debug=1, so a normal
+  // match can't be tampered with even though the panel is visible). See js/debug.js.
+  try {
     const { DebugMenu } = await import('./debug.js');
     debugMenu = new DebugMenu({
       state, input, ui, cfg: state.cfg,
@@ -982,6 +988,8 @@ function newSession() {
       getSession: () => session,
       onExit: () => backToMenu('Left the match (debug exit).'),
     });
+  } catch (e) {
+    console.warn('[main] debug menu unavailable:', e && e.message); // stays null-guarded
   }
   newSession();
   wireMenu();

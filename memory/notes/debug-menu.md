@@ -1,15 +1,25 @@
-# In-game debug menu (`?debug=1`)
+# In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
-Added 2026-07-11 (requested by Jie). A lightweight in-game developer/debug panel. It is
-**OFF for normal play** and only appears when the page is loaded with the existing
-**`?debug=1`** flag — the SAME single switch that turns on the collider wireframe view
-(`notes/collider-debug.md`). One debug switch for everything.
+Added 2026-07-11 (requested by Jie). A lightweight in-game developer/debug panel.
+
+**2026-07-12 (VRmike): the MENU is now ON BY DEFAULT — no `?debug=1` needed.** `main.js`
+constructs `DebugMenu` unconditionally (still a lazy `import()`). `?debug=1` is UNCHANGED and
+still governs the *separable heavier* features it always did: the collider wireframe overlay
+(read directly in `scene.js`, `notes/collider-debug.md`), the per-peer ping traffic
+(`if (DEBUG) session.enablePing()`), and the referee's host-authoritative debug-command gate
+(`referee.debugEnabled`, from the HOST tab's `?debug=1`). So a visible-by-default panel still
+CAN'T tamper with a normal match — team/reset/morph are dropped unless the host loaded `?debug=1`
+(the panel notes this). The two deploy links now genuinely differ: normal link = the menu;
+`?debug=1` link = the menu PLUS collider wireframes + ping + accepted host debug commands.
+`index.html`/`style.css` still ship ZERO debug DOM/CSS (the module injects its own overlay), so
+default-on adds only that injected overlay.
 
 ## How to open / use
 
-Append **`?debug=1`** to the game URL (e.g. `https://<hash>.prop-hunt.pages.dev/?debug=1`).
-A **DEBUG** button appears top-left; tap it to expand/collapse the panel. It's phone-usable
-(thumb-sized toggle, collapsible, scrollable, never covers the whole screen).
+The **DEBUG** button appears top-left automatically (no URL flag). Tap it to expand/collapse the
+panel — phone-usable (thumb-sized toggle, collapsible, scrollable, never covers the whole screen).
+Add **`?debug=1`** (e.g. `https://<hash>.prop-hunt.pages.dev/?debug=1`) to ALSO get the collider
+wireframes + ping + host-authoritative debug commands.
 
 Sections:
 

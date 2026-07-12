@@ -154,13 +154,17 @@ export class UI {
     this.el.hudProps.textContent = `Props: ${propsAlive}/${propsTotal}`;
   }
 
-  // HUNTER-TOOLS v1: own health % on the HUD (main.js passes the local player's health from
-  // each snapshot). Green → amber → red as it drops. Both roles start at 100.
+  // HUNTER-TOOLS v1: own health as a filled BAR on the HUD (main.js passes the local player's
+  // health from each snapshot). The bar fills the spare width of the top row; the number is
+  // centred inside it. Fill goes green → amber → red as it drops. Both roles start at 100.
   setHealth(pct) {
     const el = this.el.hudHealth;
     if (!el) return;
-    const v = Math.max(0, Math.round(pct == null ? 100 : pct));
-    el.textContent = `❤ ${v}%`;
+    const v = Math.max(0, Math.min(100, Math.round(pct == null ? 100 : pct)));
+    const fill = el.querySelector('.health-fill');
+    const label = el.querySelector('.health-label');
+    if (fill) fill.style.width = `${v}%`;
+    if (label) label.textContent = `❤ ${v}%`;
     el.classList.toggle('crit', v <= 25);
     el.classList.toggle('warn', v > 25 && v <= 50);
   }
