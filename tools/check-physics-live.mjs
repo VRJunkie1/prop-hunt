@@ -196,6 +196,81 @@ for (const dyn of [true, false]) {
   w.destroy(); w2.destroy();
 }
 
+// ---- 7. DISGUISE COLLIDER REPLACEMENT (Part 1, 2026-07-13, VRmike). A disguised player's
+//         MOVEMENT body must BE the prop's true collider shape (cuboid/cylinder/…), NOT a
+//         person capsule — so they fit where the prop fits and stand where it stands. Verify:
+//         (a) the movement collider's Rapier shape matches the disguise primitive; (b) there
+//         is NO residual full-size capsule on that body; (c) grounding + stepping still work
+//         with the non-capsule body (walks, stays grounded, foot rests on the floor); and
+//         (d) un-disguising restores the base capsule.
+{
+  const dcat = {
+    crate: { shape: 'box', w: 1.5, h: 1.0, d: 1.5 },
+    barrel: { shape: 'cylinder', r: 0.5, h: 1.2 },
+    ball_prop: { shape: 'sphere', r: 0.6 },
+    canister: { shape: 'cylinder', r: 0.22, h: 0.6 }, // a TINY prop — the pink-capsule bug case
+  };
+  const shapeKind = (col) => {
+    const s = col.shape;
+    if (!s) return 'none';
+    if (s.halfExtents) return 'cuboid';
+    if (s.radius != null && s.halfHeight != null) {
+      if (s.type === 10 || s.type === 14) return 'cylinder';
+      if (s.type === 11 || s.type === 15) return 'cone';
+      return 'capsule';
+    }
+    if (s.radius != null) return 'ball';
+    return 'other';
+  };
+  // Count how many colliders on a player's body are movement (non-sensor) capsules.
+  const bodyShapes = (w, id) => {
+    const p = w.players.get(id);
+    const out = [];
+    for (let i = 0; i < p.body.numColliders(); i++) {
+      const col = p.body.collider(i);
+      out.push({ kind: shapeKind(col), sensor: col.isSensor ? col.isSensor() : false });
+    }
+    return out;
+  };
+  const dmap = { size: 40, fixtures: [] };
+  const w = new PhysicsWorld(RAPIER, dmap, [], dcat, { dynamicProps: true, rules, feel });
+  w.addPlayer('p', { x: 0, y: 0, z: 0 });
+
+  // (a)+(b) each disguise type → its own shape as the MOVEMENT collider, no residual capsule.
+  for (const [type, want] of [['crate', 'cuboid'], ['barrel', 'cylinder'], ['ball_prop', 'ball'], ['canister', 'cylinder']]) {
+    w.setPlayerCollider('p', type);
+    const move = w.players.get('p').collider;
+    check(`disguise-move-collider-is-prop-shape (${type})`, shapeKind(move) === want, `movement collider = ${shapeKind(move)} (want ${want})`);
+    // No leftover person-capsule movement collider on the body (a sensor capsule is fine — that
+    // is the shot-sensor path, not built here). The only movement (non-sensor) collider is the prop shape.
+    const moveCaps = bodyShapes(w, 'p').filter((s) => !s.sensor && s.kind === 'capsule').length;
+    check(`disguise-no-residual-capsule (${type})`, moveCaps === 0, `${moveCaps} residual movement capsule(s)`);
+  }
+
+  // (c) grounding + walking with a NON-capsule body: disguise as the tiny canister, drop onto
+  //     the floor, walk, and require the foot to rest on the floor (y≈0) and grounded to hold.
+  w.setPlayerCollider('p', 'canister');
+  w.setPlayerPosition('p', { x: 0, y: 0.5, z: 0 });
+  let gsum = 0, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < 300; i++) {
+    w.setPlayerInput('p', { mx: 1, mz: 0, yaw: 0, jump: false });
+    w.step(H);
+    const pp = w.players.get('p');
+    if (i > 120) { if (pp.grounded) gsum++; const y = w.getPlayer('p').y; minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  }
+  check('disguise-shape-grounds-stably', gsum > 150, `grounded ${gsum}/180 substeps after settle`);
+  check('disguise-shape-foot-on-floor', Math.abs(minY) < 0.06 && Math.abs(maxY) < 0.06, `foot y range [${minY.toFixed(3)},${maxY.toFixed(3)}] (want ≈0)`);
+  const walkedX = w.getPlayer('p').x;
+  check('disguise-shape-can-walk', walkedX > 3, `walked to x=${walkedX.toFixed(2)} (open floor, 6 u/s)`);
+
+  // (d) un-disguise → base capsule restored, offset reset.
+  w.setPlayerCollider('p', null);
+  const base = w.players.get('p');
+  check('undisguise-restores-capsule', shapeKind(base.collider) === 'capsule' && (base.colliderOffsetY || 0) === 0,
+    `collider=${shapeKind(base.collider)} offsetY=${base.colliderOffsetY}`);
+  w.destroy();
+}
+
 if (failures) {
   console.error(`\nphysics live-sim check FAILED (${failures} problem${failures > 1 ? 's' : ''})`);
   process.exit(1);

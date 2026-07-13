@@ -860,6 +860,10 @@ export class Referee {
         // (dispYaw, advanced above by updateDisguiseRotation) so a rotated box is hit at its
         // true corners. No-op for round/undisguised sensors.
         if (p.disguise && this.physics.setShotColliderYaw) this.physics.setShotColliderYaw(p.id, p.dispYaw);
+        // Part 1 (2026-07-13): the MOVEMENT collider is now the disguise's true prop shape, so
+        // it must also track the visible facing — a rotated table must COLLIDE rotated. Twin of
+        // the shot-sensor yaw above. No-op for round/undisguised (symmetric) colliders.
+        if (p.disguise && this.physics.setPlayerColliderYaw) this.physics.setPlayerColliderYaw(p.id, p.dispYaw);
         const frozen = p.role === ROLE.HUNTER && this.phase === PHASE.HIDING;
         this.physics.setPlayerInput(
           p.id,

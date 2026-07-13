@@ -545,6 +545,12 @@ export class PhysicsWorld {
     this.players.set(id, {
       body, collider, vy: 0, grounded: false,
       radius: this._pRadius, half: this._pHalf, disguiseType: null,
+      // MOVEMENT-COLLIDER ORIENTATION + vertical offset (Part 1, 2026-07-13). When disguised,
+      // p.collider IS the prop's real (possibly asymmetric) shape — it must yaw with the
+      // disguise facing (moveColliderYaw) and its base rests on the foot, offset from the body
+      // centre by colliderOffsetY (0 for the symmetric base capsule). The depenetration
+      // failsafes read colliderOffsetY so their proxy capsule sits on the real collider.
+      moveColliderYaw: 0, colliderOffsetY: 0,
       // HITBOX ACCURACY (2026-07). shotCollider is a SHOT-ONLY sensor attached to this same
       // kinematic body: it is the shape a bullet ray tests against (disguise-shaped when
       // disguised, capsule-matching when not), and it NEVER collides/pushes/blocks (a sensor,
@@ -597,21 +603,15 @@ export class PhysicsWorld {
     return { x: t.x, y: t.y - this._pCenterY, z: t.z, grounded: p.grounded };
   }
 
-  // Capsule (radius, cylinder-half-height) for a player wearing `disguiseType`, or the
-  // base player size when null. THE Bug-1 (solidity pass #3) mechanism: a disguised
-  // player's physics body used to stay a fixed tiny capsule (r 0.4) no matter how big
-  // their disguise LOOKED, so they could shove that big silhouette into — and fully
-  // inside — world props while the little capsule slipped into the gap ("hide inside a
-  // prop"). Fitting the capsule GIRTH to the disguise footprint makes a crate-disguised
-  // player collide crate-to-crate: they rest against world props instead of tunnelling in.
-  //   - radius fits the SMALLER horizontal half-extent of the disguise (so the capsule
-  //     sits inside the silhouette), never below the base player radius, and is capped
-  //     for passability (rules.disguiseColliderMaxRadius, default 0.55 → diameter 1.1,
-  //     still clears the 1.2-wide doors/walkways).
-  //   - TOTAL height is held constant at 2*_pCenterY: half = _pCenterY - radius. So the
-  //     centre height, grounding, jump, autostep and snap-to-ground feel are byte-identical
-  //     to the base capsule — only the belly gets fatter. No re-seat needed.
-  // Measured bounds first (dormant today — asset-dims not wired), else the primitive.
+  // FALLBACK ONLY (since Part 1, 2026-07-13): a capsule fitted TIGHTLY to a disguise's
+  // footprint. This was the old solidity-pass-#3 mechanism (grow the capsule girth to the
+  // disguise so a big silhouette collides crate-to-crate) and is retained as the documented
+  // fallback the plan calls for IF a future controller can't handle a non-capsule movement
+  // body. The DEFAULT movement collider is now the prop's TRUE shape — see
+  // _buildMoveColliderDesc / setPlayerCollider. Kept callable, not on the hot path.
+  //   - radius fits the SMALLER horizontal half-extent of the disguise, never below the base
+  //     player radius, capped for passability (rules.disguiseColliderMaxRadius).
+  //   - TOTAL height held constant at 2*_pCenterY (half = _pCenterY - radius).
   _capsuleDimsFor(type) {
     const baseR = this._pRadius;
     const c = type && this.catalog[type];
@@ -629,22 +629,80 @@ export class PhysicsWorld {
     return { r, half };
   }
 
-  // Resize a player's capsule collider to match their current disguise (Bug 1). Called
-  // by the host referee (applyDisguise/undisguise) and by each client's OWN prediction
-  // world (main.js onSnapshot) whenever the disguise changes, so both sims step an
-  // identically-sized body and never rubber-band. No-op when the disguise is unchanged.
-  // Total height/centre are preserved (see _capsuleDimsFor), so nothing needs re-seating.
+  // Build the MOVEMENT collider descriptor for a player wearing `disguiseType`. THIS is the
+  // Part-1 (2026-07-13, VRmike) fix: instead of a person-capsule grown to fit the disguise
+  // footprint (which still left a full-size body enclosing a tiny prop — the pink capsule the
+  // true-collider viz caught around a canister), the player's movement body IS the prop's own
+  // collider shape — the SAME cuboid/cylinder/cone/ball shapeFor() bakes for the world prop of
+  // that type. So a disguised player collides EXACTLY like what they look like: they fit where
+  // the prop fits and stand where the prop would stand. Undisguised => the base player capsule.
+  //   - The prop shape's BASE rests on the foot (translation offsetY = halfH - _pCenterY),
+  //     exactly like the drawn disguise mesh and the shot sensor, so the body centre stays at
+  //     _pCenterY and grounding / jump / the per-substep floor clamp are all unchanged.
+  //   - Every shapeFor primitive is CONVEX (cuboid/cylinder/cone/ball — never a trimesh, per the
+  //     phone-host perf rule), which Rapier's KinematicCharacterController supports for
+  //     grounding + autostep. Verified live in tools/check-physics-live.mjs (§7).
+  //   - No passability cap here: a big disguise is now genuinely big (harder through doorways) —
+  //     the intended, realistic side effect (the old 0.55 cap only shrank the fallback capsule).
+  // Returns { desc, radius, half, offsetY }; radius/half are a bounding-capsule PROXY the
+  // depenetration failsafes (_isPenetrating / _depenetrateFromProps) use — the REAL collision is
+  // the shaped collider itself. Measured bounds first (dormant today), else the primitive.
+  _buildMoveColliderDesc(disguiseType) {
+    const R = this.R;
+    const c = disguiseType && this.catalog[disguiseType];
+    if (c) {
+      const s = shapeFor(R, c);
+      const offsetY = s.halfH - this._pCenterY;
+      s.desc.setTranslation(0, offsetY, 0);
+      const h = halfExtentsFor(c);
+      const radius = Math.max(0.05, Math.min(h.hx, h.hz)); // inscribed horizontal half-extent
+      const half = Math.max(0.05, s.halfH - radius);
+      return { desc: s.desc, radius, half, offsetY };
+    }
+    return { desc: R.ColliderDesc.capsule(this._pHalf, this._pRadius), radius: this._pRadius, half: this._pHalf, offsetY: 0 };
+  }
+
+  // Swap a player's MOVEMENT collider to their current disguise's true prop shape (or the base
+  // capsule when null). Called by the host referee (applyDisguise / undisguise / morph / team /
+  // join) AND by each client's OWN prediction world (main.js onSnapshot) whenever the disguise
+  // changes, so both sims step an identically-shaped body and never rubber-band. No-op when the
+  // disguise is unchanged. The body centre stays at _pCenterY, so nothing needs re-seating.
   setPlayerCollider(id, disguiseType) {
     const p = this.players.get(id);
     if (!p) return;
     const type = disguiseType || null;
     if (p.disguiseType === type) return; // unchanged — skip the rebuild
-    const dims = this._capsuleDimsFor(type);
+    const built = this._buildMoveColliderDesc(type);
     if (p.collider && this.world.removeCollider) this.world.removeCollider(p.collider, false);
-    p.collider = this.world.createCollider(this.R.ColliderDesc.capsule(dims.half, dims.r), p.body);
-    p.radius = dims.r;
-    p.half = dims.half;
+    p.collider = this.world.createCollider(built.desc, p.body);
+    p.radius = built.radius;
+    p.half = built.half;
+    p.colliderOffsetY = built.offsetY;
     p.disguiseType = type;
+    // A rebuild resets the collider's rotation-wrt-parent; re-apply the tracked disguise facing
+    // so a rotated prop stays rotated across the swap (the referee/client also refresh it each
+    // tick, so this only avoids a single-frame axis-aligned box right after the swap).
+    this._applyMoveColliderYaw(p);
+  }
+
+  // Yaw the MOVEMENT collider about +Y to track the disguise's visible facing (dispYaw) — the
+  // exact twin of setShotColliderYaw for the shot sensor. A disguised player's movement body is
+  // now the prop's real (possibly asymmetric) shape, so a table turned 45° must COLLIDE turned
+  // too, or it would block/pass in the wrong places vs what the player sees. Called every tick
+  // for a disguised player by BOTH the host referee (authoritative) and each client's own
+  // prediction world (main.js). Harmless on a round/undisguised (symmetric capsule) collider.
+  setPlayerColliderYaw(id, yaw) {
+    const p = this.players.get(id);
+    if (!p) return;
+    p.moveColliderYaw = yaw || 0;
+    this._applyMoveColliderYaw(p);
+  }
+
+  _applyMoveColliderYaw(p) {
+    if (!p || !p.collider) return;
+    const q = yawQuat(p.moveColliderYaw || 0);
+    if (p.collider.setRotationWrtParent) p.collider.setRotationWrtParent(q);
+    else if (p.collider.setRotation) p.collider.setRotation(q);
   }
 
   // HITBOX ACCURACY (2026-07). Build the SHOT-ONLY sensor ColliderDesc for a player wearing
@@ -721,6 +779,9 @@ export class PhysicsWorld {
     const rr = Math.max(0.02, (p.radius != null ? p.radius : this._pRadius) - skin);
     try {
       const t = p.body.translation();
+      // Centre the proxy capsule on the REAL collider (a disguise shape rests at
+      // colliderOffsetY above the body centre; 0 for the base capsule).
+      const cy = t.y + (p.colliderOffsetY || 0);
       const shape = new R.Capsule(hh, rr);
       // filterPredicate (Rapier's final intersectionWithShape arg): consider ONLY the
       // static WORLD colliders (walls/floor/fixtures). Returning false for everything
@@ -731,7 +792,7 @@ export class PhysicsWorld {
         ? (col) => this._staticHandles.has(col.handle)
         : undefined;
       const hit = this.world.intersectionWithShape(
-        { x: t.x, y: t.y, z: t.z }, IDENT_QUAT, shape, this._moveFilter, undefined, p.collider, p.body, staticOnly
+        { x: t.x, y: cy, z: t.z }, IDENT_QUAT, shape, this._moveFilter, undefined, p.collider, p.body, staticOnly
       );
       return !!hit;
     } catch {
@@ -1081,6 +1142,9 @@ export class PhysicsWorld {
     const half = p.half != null ? p.half : this._pHalf;
     const radius = p.radius != null ? p.radius : this._pRadius;
     const clear = radius - this._propSkin; // an axis point must keep this much distance
+    // Sample around the REAL collider centre (a disguise shape rests at colliderOffsetY above
+    // the body centre; 0 for the base capsule) so the three axis points straddle the collider.
+    const cy = t.y + (p.colliderOffsetY || 0);
     // Two kinds of candidate push, chosen differently:
     //  - INSIDE sample (axis point swallowed by a prop): exit is THROUGH the nearest
     //    surface. Among inside samples take the CHEAPEST exit (smallest travel) — the
@@ -1091,7 +1155,7 @@ export class PhysicsWorld {
     let inX = 0, inY = 0, inZ = 0, inNeed = Infinity;
     let outX = 0, outY = 0, outZ = 0, outNeed = 0;
     for (const oy of [-half, 0, half]) {
-      const pt = { x: t.x, y: t.y + oy, z: t.z };
+      const pt = { x: t.x, y: cy + oy, z: t.z };
       let proj;
       try {
         proj = world.projectPoint(pt, false, undefined, undefined, undefined, undefined, propsOnly);

@@ -77,8 +77,11 @@ const props = [
 
 const w = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: true, rules, feel });
 w.addPlayer('local', { x: 0, y: 0, z: 6 });   // the LOCAL player's own capsule (VRmike's bug)
-w.addPlayer('remote', { x: 0, y: 0, z: 8 });  // a remote player's capsule (host authoritative)
-if (w.setPlayerCollider) w.setPlayerCollider('remote', 'crate'); // disguise-grown capsule
+w.addPlayer('remote', { x: 0, y: 0, z: 8 });  // a remote player, disguised below
+// Part 1 (2026-07-13, VRmike): a disguised player's MOVEMENT collider is now the prop's TRUE
+// shape (a crate => a cuboid), NOT a person capsule grown to fit — so the true-collider viz
+// shows ONLY the prop shape, with no residual full-size pink capsule enclosing it.
+if (w.setPlayerCollider) w.setPlayerCollider('remote', 'crate'); // disguise => prop-shaped move collider
 
 // Walk EVERY collider the engine is simulating, exactly like scene.updateTrueColliders, and
 // classify each via the same dispatch. Read the transform too so a break in that API surfaces.
@@ -98,10 +101,27 @@ check('forEachCollider iterated the live world', total > 0, `${total} colliders`
 check('every collider maps to a KNOWN shape branch (no "unsupported")', !census.unsupported, census.unsupported ? `${census.unsupported} unsupported` : 'all classified');
 check('every collider exposed a finite translation()/rotation()', transformsOk === total, `${transformsOk}/${total}`);
 check('cuboid colliders present (ground/walls/fixtures/box props)', (census.cuboid || 0) > 0, `${census.cuboid || 0}`);
-check('capsule colliders present (player movement bodies — local + remote)', (census.capsule || 0) >= 2, `${census.capsule || 0}`);
+// Exactly ONE capsule: the UNDISGUISED local player. The crate-disguised remote's movement body
+// is a cuboid now (Part 1), not a second capsule — the whole point of the fix.
+check('undisguised player keeps a capsule movement body (local only)', (census.capsule || 0) === 1, `${census.capsule || 0} capsule(s)`);
 check('cylinder collider present (barrel prop)', (census.cylinder || 0) >= 1, `${census.cylinder || 0}`);
 check('cone collider present (cone prop)', (census.cone || 0) >= 1, `${census.cone || 0}`);
 check('ball collider present (sphere prop)', (census.ball || 0) >= 1, `${census.ball || 0}`);
+
+// Part 1 assertion, made explicit per-player against the live engine: the crate-disguised
+// remote's own MOVEMENT collider IS a cuboid (the prop shape) and there is NO residual capsule
+// on its body — the true-collider viz will therefore show ONLY the crate shape, no pink capsule.
+const remoteBody = w.players.get('remote').body;
+let remoteMove = null, remoteCaps = 0;
+for (let i = 0; i < remoteBody.numColliders(); i++) {
+  const col = remoteBody.collider(i);
+  const kind = classifyShape(col.shape);
+  const isSensor = col.isSensor ? col.isSensor() : false;
+  if (!isSensor) remoteMove = kind;
+  if (!isSensor && kind === 'capsule') remoteCaps++;
+}
+check('disguised player movement collider IS the prop shape (crate => cuboid)', remoteMove === 'cuboid', `movement collider = ${remoteMove}`);
+check('disguised player has NO residual full-size capsule', remoteCaps === 0, `${remoteCaps} residual capsule(s)`);
 w.destroy();
 
 // The renderer must also handle mesh colliders (the task's whole point: SEE the polygon/mesh

@@ -831,6 +831,11 @@ function predictStep(input, dt) {
   const w = state.predict;
   if (!w) return;
   w.setPlayerInput(state.SELF_ID, { mx: input.mx, mz: input.mz, yaw: input.yaw, jump: input.jump });
+  // Part 1 (2026-07-13): our own movement collider is now the disguise's true prop shape —
+  // keep it yawed to the disguise facing so a rotated prop collides at its true silhouette,
+  // matching the host (both sims step an identically-oriented body → no rubber-band). Uses
+  // last frame's selfDispYaw; harmless (symmetric capsule) when undisguised.
+  if (w.setPlayerColliderYaw) w.setPlayerColliderYaw(state.SELF_ID, state.selfDisguised ? state.selfDispYaw : 0);
   w.step(dt);
   const p = w.getPlayer(state.SELF_ID);
   if (p) {
