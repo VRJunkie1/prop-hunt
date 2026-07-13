@@ -152,11 +152,13 @@ export class UI {
     el.className = 'link ' + (relayed ? 'relayed' : 'direct');
   }
 
-  // NOTE: the aim reticle is a FIXED crosshair at the exact screen centre, positioned
-  // entirely by CSS (#crosshair: top/left 50% + translate(-50%,-50%)). Nothing floats
-  // it any more — center-screen raycasts (scene.aimedDisguiseTarget / debugPick) fire
-  // through that same point, so there is ONE crosshair system. See setAimHint() for the
-  // only per-frame reticle state (a dim "no target" tint for props).
+  // NOTE: the aim reticle is a FIXED crosshair positioned entirely by CSS — nothing
+  // floats it per-frame. HUNTERS: exact screen centre (#crosshair: top/left 50%).
+  // PROPS: 66% of the way up the screen (.prop-aim → top 34%) so the reticle clears the
+  // player's own third-person body. The aim raycasts (scene.aimedDisguiseTarget /
+  // aimDirection / debugPick) fire through the SAME point (scene.setAimMode), so there
+  // is still ONE crosshair system. See setAimHint() for the only per-frame reticle
+  // state (a dim "no target" tint for props), setAimMode() for the role flip.
 
   setRole(role) {
     this.el.hudRole.textContent = role === 'hunter' ? 'HUNTER' : 'PROP';

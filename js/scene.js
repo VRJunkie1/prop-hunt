@@ -18,11 +18,16 @@ import { sizeHunterRig, measureRigBones, findBone } from '/shared/hunter-sizing.
 import { worldColliderBoxes } from '/shared/bounds.js';
 
 // Screen-centre in NDC (0,0) = the fixed reticle at the EXACT middle of the screen.
-// ONE shared center for every center-screen raycast so there's a single crosshair
-// system: the disguise-target pick (aimedDisguiseTarget) AND the ?debug=1 click-to-
-// inspect / focus box (debugPick) both fire through this point. Module-level so those
-// allocate nothing per frame.
+// ONE shared aim point for every reticle raycast so there's a single crosshair
+// system: the disguise-target pick (aimedDisguiseTarget), the hunter fire ray
+// (aimDirection) AND the ?debug=1 click-to-inspect / focus box (debugPick) all fire
+// through the SAME point. Module-level so those allocate nothing per frame.
+// HUNTERS aim through the exact centre; PROPS aim through a point 66% of the way UP
+// the screen (NDC y = 2*0.66-1 = +0.32) so the reticle doesn't overlap their own
+// third-person body (VRmike 2026-07-12). setAimMode() picks which; the CSS #crosshair
+// moves to the same spot via the .prop-aim class — reticle and ray always agree.
 const SCREEN_CENTER = new THREE.Vector2(0, 0);
+const PROP_AIM_NDC = new THREE.Vector2(0, 0.32);
 // +Y unit, reused to orient a tracer cylinder (default axis +Y) toward the shot vector.
 const UP_Y = new THREE.Vector3(0, 1, 0);
 
@@ -797,6 +802,14 @@ export class Scene3D {
   // collision proxies even after a real GLB swaps in — the raycaster still hits them.
   // `yaw`/`pitch` are unused now (the camera, positioned earlier this frame by
   // setCamera, already encodes them); kept in the signature so callers are unchanged.
+  // Which fixed reticle point the aim rays fire through: SCREEN_CENTER for hunters,
+  // PROP_AIM_NDC (66% up the screen) for props so the crosshair clears the player's own
+  // third-person body. main.js flips this alongside the #crosshair .prop-aim CSS class,
+  // so the visible reticle and every raycast stay one system.
+  setAimMode(propAim) {
+    this._aimNDC = propAim ? PROP_AIM_NDC : SCREEN_CENTER;
+  }
+
   aimedDisguiseTarget(pos, yaw, pitch, range) {
     if (!this.propMeshes || !this.propMeshes.size || !this.camera) return null;
     const targets = this._disguiseTargets;
@@ -805,10 +818,10 @@ export class Scene3D {
       if (rec.disguisable && rec.primitive) targets.push(rec.primitive);
     }
     if (!targets.length) return null;
-    // Fire from the camera through screen-centre. setCamera ran earlier this frame;
+    // Fire from the camera through the reticle point. setCamera ran earlier this frame;
     // refresh the world matrix so the ray matches exactly what's rendered.
     this.camera.updateMatrixWorld();
-    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+    this._raycaster.setFromCamera(this._aimNDC || SCREEN_CENTER, this.camera);
     const reach = range > 0 ? range : 4.5;
     // The third-person camera sits BEHIND the player, so a prop within `reach` of the
     // player can be up to ~camera-distance farther from the camera itself; extend far
@@ -1220,7 +1233,7 @@ export class Scene3D {
   aimDirection() {
     if (!this.camera) return null;
     this.camera.updateMatrixWorld();
-    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+    this._raycaster.setFromCamera(this._aimNDC || SCREEN_CENTER, this.camera);
     const d = this._raycaster.ray.direction;
     if (!d) return null;
     return { x: d.x, y: d.y, z: d.z };
@@ -1484,7 +1497,7 @@ export class Scene3D {
   debugPick() {
     if (!this.camera) return null;
     this.camera.updateMatrixWorld(); // the fly-cam moved this frame; keep the ray current
-    this._raycaster.setFromCamera(SCREEN_CENTER, this.camera);
+    this._raycaster.setFromCamera(this._aimNDC || SCREEN_CENTER, this.camera);
     this._raycaster.far = 60;
     const roots = this._debugTargets();
     if (!roots.length) { this._setFocusTarget(null); return null; }
