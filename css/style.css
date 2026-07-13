@@ -147,6 +147,10 @@ button.ghost:hover { background: #3d2a66; }
   pointer-events: none;
   text-shadow: 0 0 4px #000;
 }
+/* PROPS aim 66% up the screen (top 34%) so the reticle clears their own third-person
+   body; the raycast point (scene PROP_AIM_NDC) moves to match. Higher specificity than
+   the bare #crosshair rule, so it wins the top override. */
+#crosshair.prop-aim { top: 34%; }
 /* Prop aiming at nothing disguisable: dim the reticle as a "no target" hint. */
 #crosshair.no-target { color: #ffffff55; }
 #hud { position: absolute; inset: 0; pointer-events: none; }

@@ -207,7 +207,14 @@ input.onToggleView = () => {
 // THIRD-PERSON so they can see the disguise they're wearing. Called on the ROLE
 // message and again after buildWorld (role can arrive before the scene exists).
 function applyRoleView() {
-  if (scene) scene.setThirdPerson(state.role !== ROLE.HUNTER);
+  const isProp = state.role === ROLE.PROP;
+  if (scene) {
+    scene.setThirdPerson(state.role !== ROLE.HUNTER);
+    // Move the aim RAY 66% up the screen for props (clears their own body), dead-centre
+    // for hunters — and flip the visible reticle to the same spot so ray + crosshair agree.
+    scene.setAimMode(isProp);
+  }
+  ui.el.crosshair.classList.toggle('prop-aim', isProp);
 }
 
 // Ctrl+E: toggle the in-game level editor (desktop debug tool). Available only in
