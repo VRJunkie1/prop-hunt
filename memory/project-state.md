@@ -8,6 +8,8 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## DEPLOY-ONLY SHIP: mobile input fix `59cbfac` (2026-07-13, VRmike, branch build/90-deploy-only-no-code). NO code changed this session — a prior direct push failed on credentials, so this build re-runs the delivery step through the real pipeline. Gate re-run and GREEN: tree clean (`git_diff HEAD` empty, HEAD == 59cbfac), `check-input-mode.mjs` 9/9 (incl. the stylus-phone regression case), headless smoke clean on desktop AND phone (0 console errors, lobby renders). The fix (`js/input.js`) classifies by PRIMARY pointer, not any-pointer: `(pointer: coarse)` ⇒ touch even with a secondary S-Pen/mouse; `(pointer: fine)`/hover ⇒ desktop. Fixes Samsung/stylus phones mis-wired as desktop (pointer-lock request impossible on mobile, dead touch controls under a stuck overlay). Push + Cloudflare Pages deploy + URL post are handled core-side after this branch fast-forwards to main. See INPUT-MODE FIX in `notes/touch-controls.md`.
+
 ## Latest: CONVEX-HULL COLLIDERS for props & fixtures (2026-07-13, VRmike, branch build/83-convex-hull-colliders-for). Collider-overhaul option 1. ALL headless guards GREEN incl. new hull assertions + page boots clean (0 console errors). Owes a live pass (True-collider eyeball + phone-host FPS). FULL DETAIL: `notes/convex-hull-colliders.md`.
 
 Replaced hand-guessed BOX colliders on model-bearing, non-architecture props/fixtures with
