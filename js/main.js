@@ -93,6 +93,10 @@ const state = {
   pending: [], // [{ seq, mx, mz, yaw, jump, rotUnlock, dt }]
   corr: { x: 0, y: 0, z: 0 },
   SELF_ID: 'self', // stable id for the local player in the predict world
+  // Local-prediction grounded flag (read back from the predict world each step). While
+  // AIRBORNE (a jump/fall) the vertical axis is owned by local prediction and NOT reconciled
+  // against snapshots — see reconcilePredict for why (the first-person jump-judder fix).
+  grounded: true,
 
   // Disguise orientation lock (local view of our own model). While disguised, the
   // prop keeps the facing it had at disguise time unless right-click (rotUnlock) is
@@ -144,12 +148,39 @@ input.onAction = (name) => {
   if (name === 'fire') tryFire();
 };
 
+// PC PAUSE POLICY (2026-07-13, VRmike): ONLY an explicit Escape pauses on desktop. Losing
+// pointer lock by itself — Alt-Tab, the Windows key, or clicking another window — must NOT pause
+// or blur; the game keeps rendering and simply stops turning the camera (the mouse is uncaptured)
+// until the player clicks back in. The sneaky browser fact this hinges on: pressing Escape while
+// the mouse is captured does NOT arrive as a keypress — it arrives as "pointer lock lost". The
+// reliable tell to separate the two: Escape releases the lock while the game window KEEPS focus;
+// an ambient focus loss releases it WITHOUT focus. So the pause decision is built on
+// document.hasFocus() at unlock time (with a very-recent-blur backstop for browsers that fire
+// pointerlockchange a tick before focus settles).
+let _lastWindowBlurAt = -1e9;
+if (typeof window !== 'undefined') {
+  window.addEventListener('blur', () => { _lastWindowBlurAt = nowMs(); });
+}
+function nowMs() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+// True when a pointer-lock LOSS was an explicit Escape (window still focused), not an ambient
+// focus change (Alt-Tab / Windows key / other-window click).
+function unlockWasEscape() {
+  const hasFocus = (typeof document !== 'undefined' && typeof document.hasFocus === 'function')
+    ? document.hasFocus() : true;
+  const recentlyBlurred = (nowMs() - _lastWindowBlurAt) < 250; // a focus change just happened
+  return hasFocus && !recentlyBlurred;
+}
+
 // Overlay visibility follows the browser's real pointer-lock state (input.js events).
-// Two distinct unlocked states in-game:
-//   - never captured yet this session  -> the "Click to play" prompt (first entry);
-//   - captured, then released (Esc / alt-tab) -> the PAUSE MENU (Escape's job).
-// Locking (or Resume) hides both. The world keeps running underneath either way — this is
-// a menu overlay, not a real pause (multiplayer). See openPause()/closePause().
+// In-game unlocked states, in priority order:
+//   - UI mode (backtick)                       -> no overlay (free mouse, deliberate);
+//   - ambient focus loss (Alt-Tab / Win key)   -> NOTHING: no pause, no blur, keep rendering;
+//   - explicit Escape after playing            -> the PAUSE MENU (Escape's job);
+//   - never captured yet this session          -> the "Click to play" prompt (first entry).
+// Locking (or Resume) hides both overlays. The world keeps running underneath either way — the
+// pause menu is an overlay, not a real pause (multiplayer). See openPause()/closePause().
 input.onLockChange = (locked) => {
   if (state.editing) return; // editor owns the view; no overlay
   const inGame = !ui.el.game.classList.contains('hidden');
@@ -161,13 +192,13 @@ input.onLockChange = (locked) => {
     return;
   }
   if (!inGame || input.touch) return;
-  // Unlocked: the "Click to play" overlay is STATE-DRIVEN, not event-driven — it shows only when
-  // we're neither in the deliberate UI mode NOR paused. UI mode suppresses both the overlay and
-  // the pause menu (that's the whole point: a free mouse with no menu). This kills the race where
-  // whoever's event fired last decided the overlay. Otherwise: Esc-after-playing opens pause; a
-  // first, never-captured unlock shows the entry prompt.
   if (state.uiMode) { ui.setClickToPlay(false); return; }
-  if (state.hasLocked) openPause(); // Esc after playing -> pause menu
+  // Ambient focus loss (the mouse got freed because the window lost focus, NOT because Escape
+  // was pressed): do nothing visible — no pause, no overlay, no blur. The game keeps rendering;
+  // the camera just stops turning (mouse uncaptured). Clicking the canvas re-locks and resumes
+  // exactly where we were. Only an EXPLICIT Escape (or the never-captured first entry) shows UI.
+  if (state.hasLocked && !unlockWasEscape()) { ui.setClickToPlay(false); return; }
+  if (state.hasLocked) openPause(); // explicit Escape after playing -> pause menu
   else ui.setClickToPlay(true); // haven't captured yet -> the entry prompt
 };
 input.onLockError = (reason) => {
@@ -626,6 +657,7 @@ function onSnapshot(msg) {
         state.self.z = me.z;
         state.pending = [];
         state.corr.x = state.corr.y = state.corr.z = 0;
+        state.grounded = true; // fresh spawn stands on the ground (avoid a stale airborne flag)
         state.spawned = true;
       } else if (state.movable) {
         reconcilePredict(me); // rewind to authoritative + replay unacked inputs
@@ -735,6 +767,7 @@ function destroyPredict() {
   }
   state.pending = [];
   state.corr.x = state.corr.y = state.corr.z = 0;
+  state.grounded = true;
 }
 
 // Rewind + replay: on each authoritative snapshot, drop inputs the host has already
@@ -750,6 +783,31 @@ function reconcilePredict(me) {
   const dispY = state.self.y + state.corr.y;
   const dispZ = state.self.z + state.corr.z;
   const ack = Number.isFinite(me.ack) ? me.ack : 0;
+  // JUMP-JUDDER FIX (2026-07-13, diagnosed via tools/_jumpdiag host-case trace). While the
+  // local player is AIRBORNE, the vertical arc is fully determined by the SAME shared physics
+  // both sides run (gravity + jumpSpeed from rules.json), so the local prediction already has
+  // the correct height. Reconciling Y here snaps it to the authoritative snapshot, which is
+  // 15Hz, 1cm-quantised AND phase-shifted from the local sim (the two Rapier worlds step on
+  // different cadences — 60fps predict vs 30fps referee tick). That injected a large decaying
+  // vertical correction (measured up to ~0.45 m) EVERY snapshot — a sawtooth that reads as the
+  // camera "jerking downward" mid-jump. It hit even the HOST (zero latency, but the worlds
+  // still step out of phase); remote players never juddered because they're pure interpolation
+  // of the smooth authoritative arc. So: while airborne we let local prediction OWN the jump
+  // and SKIP reconciliation entirely — EXCEPT a genuine large teleport (respawn / anti-tunnel
+  // escape / hard desync), which must still snap immediately. Horizontal drift during the sub-
+  // second airborne window is negligible (host: near-zero; guest: << the 2.5 m snap threshold)
+  // and eases out on the next grounded reconcile. Grounded play is unchanged.
+  if (!state.grounded) {
+    const bigTeleport =
+      Math.hypot(me.x - state.self.x, me.z - state.self.z) > 2.5 ||
+      Math.abs((me.y || 0) - state.self.y) > 2.5;
+    if (!bigTeleport) {
+      // Drop acked inputs (keep the history bounded) but leave the local pose untouched.
+      state.pending = state.pending.filter((p) => p.seq > ack);
+      return true;
+    }
+    // else: fall through to the full snap-reconcile below (a real teleport, not a jump).
+  }
   state.pending = state.pending.filter((p) => p.seq > ack);
   w.setPlayerPosition(state.SELF_ID, { x: me.x, y: me.y || 0, z: me.z });
   for (const p of state.pending) predictStep(p, p.dt);
@@ -779,6 +837,7 @@ function predictStep(input, dt) {
     state.self.x = p.x;
     state.self.y = p.y;
     state.self.z = p.z;
+    state.grounded = !!p.grounded; // drives the airborne-skip in reconcilePredict
   }
 }
 

@@ -140,6 +140,12 @@ export class Input {
     // fire these). Action keys are gated on pointer lock below.
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
     window.addEventListener('keyup', (e) => this.onKeyUp(e));
+    // Window blur (Alt-Tab / Windows key / clicking another window): the browser stops
+    // delivering keyup, so any key held at that moment would "stick down" and keep the avatar
+    // walking/firing while the player is in another window. Since ambient focus loss no longer
+    // pauses (PC pause is Escape-only — see main.js onLockChange), clear all held input here so
+    // losing focus cleanly stops control until the player clicks back in.
+    window.addEventListener('blur', () => this._releaseHeldInput());
 
     if (this.touch) this._wireTouch(lockTrigger);
     else this._wireDesktop(lockTrigger);
@@ -403,6 +409,17 @@ export class Input {
   onKeyUp(e) {
     this.keys.delete(e.code);
     if (e.code === 'Space') this.jump = false;
+  }
+
+  // Drop every held control. Called on window blur so a key/button that was down when focus
+  // left (its keyup/mouseup lands in another window) can't "stick" and keep the avatar
+  // moving/firing while the player is Alt-Tabbed away. Look angles are untouched (they're
+  // absolute, not held). Movement resumes the instant the player clicks back in and presses keys.
+  _releaseHeldInput() {
+    this.keys.clear();
+    this.jump = false;
+    this.rotUnlock = false;
+    this.primaryHeld = false;
   }
 
   // True when a text field (name / room code) currently has focus. The ` and Esc hotkeys must

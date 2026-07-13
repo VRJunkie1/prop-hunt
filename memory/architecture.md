@@ -183,7 +183,13 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   pointer is unlocked AND not `state.paused` AND not `state.uiMode` (desktop "UI mode" —
   backtick `` ` `` frees the mouse for the DEBUG menu WITHOUT opening pause; see
   `notes/pause-menu.md`). `msg` explains a lock refusal. This killed the old event-order
-  race where whichever pointer-lock event fired last decided the overlay. Also paints a
+  race where whichever pointer-lock event fired last decided the overlay. **PC pause is
+  ESCAPE-ONLY (2026-07-13):** `onLockChange` opens the pause menu only when the unlock was a
+  real Escape (`unlockWasEscape()` = `document.hasFocus()` + no very-recent `window 'blur'`); an
+  ambient pointer-lock loss (Alt-Tab / Windows key / other-window click) does NOTHING — no pause,
+  no overlay, no blur; the game keeps rendering and just stops turning the camera until the player
+  clicks back in. `input._releaseHeldInput()` (on `window 'blur'`) drops stuck held keys so
+  focus-loss can't walk the avatar off. Touch untouched. See `notes/pause-menu.md`. Also paints a
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
   connection-type is *detected* in `net.js`, never here. Also owns the hunter
   **blindfold** overlay via `setBlindfold(blind, seconds)` — a plain show/hide of the
@@ -367,7 +373,13 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   a local prediction world for their OWN player and reconcile (rewind to the
   authoritative pose, replay unacked inputs, ease/snap the residual) — this is full
   prediction + reconciliation, the target design, NOT the interpolation-only
-  fallback. Remote players + awake props interpolate.
+  fallback. Remote players + awake props interpolate. **Vertical reconciliation is
+  FROZEN while the local player is airborne (2026-07-13 jump-judder fix):** the jump
+  arc is deterministic from the shared gravity/jumpSpeed, so reconciling Y against
+  15Hz phase-shifted, 1cm-quantised snapshots only injected a sawtooth camera judder
+  (even on the host — the two worlds step out of phase). While `!state.grounded` the
+  reconcile is skipped (a real >2.5m teleport still snaps); grounded play unchanged.
+  Detail: `notes/netcode.md`.
 - **Disguise orientation lock:** a disguised prop keeps a fixed facing while moving
   unless right-click / ROTATE is held (yaw-only, never tips). Referee-authoritative
   via `dispYaw` in the snapshot.

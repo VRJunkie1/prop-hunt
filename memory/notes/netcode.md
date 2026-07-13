@@ -1,5 +1,39 @@
 # netcode
 
+## 2026-07-13 JUMP-JUDDER FIX — vertical reconciliation is frozen while airborne (VRmike)
+**Symptom:** in FIRST person your own jump arc juddered (repeated downward jerks) — but
+watching OTHER players jump was perfectly smooth, and it happened even for the HOST.
+
+**Root cause (diagnosed, not guessed — `tools/_jumpdiag.mjs` host-case trace):** the local
+prediction world and the authoritative world compute the fast jump arc slightly OUT OF PHASE.
+They step on different cadences (60 fps predict loop vs 30 fps referee tick draining a fixed
+1/60 substep accumulator) and the snapshot `y` is 1 cm-quantised. The 15 Hz reconcile then
+snapped the local VERTICAL position onto that phase-shifted authoritative value every snapshot,
+injecting a large decaying `corr.y` offset (measured up to **~0.45 m**) — a sawtooth on
+`camera.position.y`. Because remote players are pure interpolation of the smooth authoritative
+arc they never juddered; because the two Rapier worlds step out of phase, even the HOST (zero
+network latency) showed it. NOT ground-snap (already disabled while `vy>0`) and NOT horizontal
+reconciliation. The harness reduced the injected correction from 0.449 m → **0.000 m** and the
+against-arc jerk frames from 3 → **0**.
+
+**Fix (`reconcilePredict` in `main.js`):** while the LOCAL player is airborne
+(`!state.grounded`, read back from the predict world each `predictStep`), SKIP reconciliation
+entirely — local prediction OWNS the jump. The vertical arc is deterministic from the SAME
+shared physics both sides run (gravity + jumpSpeed from `rules.json`), so there is nothing to
+correct; only quantisation/phase noise. Exceptions & safety:
+- A genuine **large teleport while airborne** (respawn / anti-tunnel escape / hard desync,
+  horizontal or vertical > 2.5 m from the predicted pose) STILL falls through to the normal
+  snap-reconcile, so a real correction is never swallowed.
+- `pending` is still trimmed by `ack` while airborne (bounded history); we just don't replay.
+- Horizontal drift during the sub-second airborne window is negligible (host ≈ 0; guest ≪ the
+  2.5 m snap threshold) and eases out on the first grounded reconcile. GROUNDED play — walking,
+  standing, wall-slide, prop-shove reconciliation — is completely unchanged.
+
+`state.grounded` is the local prediction's grounded flag (the snapshot carries no grounded
+field). Diagnostic harness kept at `tools/_jumpdiag.mjs` (authoring-only, not shipped, not a
+build gate): `npm i --no-save @dimforge/rapier3d-compat@0.14.0 && node tools/_jumpdiag.mjs [fix]`
+re-runs the baseline-vs-fix trace for any future regression.
+
 ## 2026-07-10 FIX PASS — STARTED payload now carries live prop state
 Because the world became knockable (see physics.md fix pass), the `S2C.STARTED`
 prop list changed, and mid-game join changed DELIBERATELY:

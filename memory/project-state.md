@@ -8,6 +8,52 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: INPUT + JUMP FIXES (2026-07-13, VRmike, branch build/76-input-jump-fixes-requested). All headless guards GREEN + page boots clean (zero console errors). Two independent fixes; each root-caused before touching code.
+
+**Part 1 — PC pause is ESCAPE-ONLY (ambient focus loss never pauses/blurs).** Before, ANY
+pointer-lock loss (Alt-Tab, Windows key, clicking another window) opened the pause menu, whose
+`backdrop-filter: blur(3px)` made the screen blurry/useless when the player just wanted to
+switch windows. The wrinkle: Escape-while-captured is delivered by the browser as "pointer lock
+lost" (`pointerlockchange`), the SAME event Alt-Tab fires — you can't listen for the Esc key. The
+tell: Escape keeps window focus (`document.hasFocus()===true`); a focus change doesn't (and fires
+`window 'blur'`). New `main.js unlockWasEscape()` = `document.hasFocus() && !(blur within 250ms)`;
+`onLockChange`'s unlocked branch now returns silently (no pause, no overlay, no blur, keeps
+rendering) on ambient loss and only pauses on a real Escape. Camera stops turning (mouse
+uncaptured) until the player clicks back in to re-lock. Added `input._releaseHeldInput()` on
+`window 'blur'` so a key held at focus-loss can't "stick down" and walk the avatar off. Touch/
+phone untouched. Detail: `notes/pause-menu.md`.
+
+**Part 2 — jerky first-person jump = vertical reconciliation snapping mid-arc (ROOT-CAUSED).**
+Clue that cracked it: OTHER players' jumps were smooth, own view juddered, even for the HOST.
+Built an instrumented host-case harness (`tools/_jumpdiag.mjs`) tracing displayed camera-Y vs
+authoritative-Y through a jump. Found: the local predict world and the authoritative world compute
+the fast arc slightly OUT OF PHASE (60fps predict vs 30fps referee tick + 1cm snapshot
+quantisation), and the 15Hz reconcile snapped the local VERTICAL position onto that phase-shifted
+value every snapshot — injecting a decaying `corr.y` up to **0.45 m** (a sawtooth on
+`camera.position.y`). Remote players interpolate the smooth authoritative arc → never juddered;
+the host has zero latency but its two worlds still step out of phase → juddered too. Fix
+(`reconcilePredict`): while the local player is AIRBORNE (`!state.grounded`), SKIP reconciliation —
+local prediction OWNS the deterministic jump arc (same shared gravity/jumpSpeed both sides). A real
+large teleport (>2.5 m) while airborne still snaps; `pending` still trims by `ack`; GROUNDED play
+unchanged. Harness confirms injected correction 0.449 m → **0.000 m**, against-arc jerks 3 → **0**.
+Detail: `notes/netcode.md` (2026-07-13 section). NOTE: the plan's leading suspect (ground-snap
+firing mid-jump) was NOT the cause — that's already disabled while `vy>0`; the harness pointed at
+reconciliation instead, so the fix targets the real mechanism, not camera smoothing.
+
+- **Files:** `js/main.js` (state.grounded + predictStep readback + reconcilePredict airborne-skip +
+  onLockChange Escape/focus split + blur tracker), `js/input.js` (`_releaseHeldInput` on blur),
+  `tools/_jumpdiag.mjs` (new diagnostic), `memory/notes/netcode.md`, `notes/pause-menu.md`,
+  `architecture.md`, this file. NO change to `shared/` (physics/referee/protocol), scene render
+  loop, or touch controls.
+- **Guards GREEN:** check-blindfold (render-loop API), check-debug-menu (Esc/lock invariants still
+  hold), check-input-mode, check-physics, check-physics-live (grounded stability), check-combat,
+  check-flicker. Page boots clean (normal). Diagnostic harness reproduces baseline judder + proves
+  the fix.
+- **OWED — live pass:** (1) own jump as HOST, own jump as a JOINING player, and watching someone
+  else jump — all smooth + identical. (2) Alt-Tab / Windows key / click-away → NO pause, NO blur,
+  game keeps rendering, camera stops turning; click back in → resume. (3) Escape → pause still
+  works. (4) phones unaffected.
+
 ## Latest: FLICKER FIX — hunter & disguise strobe/blink (2026-07-13, Jie via VRmike, branch build/75-flicker-fix-requested-by). All headless guards GREEN incl. a NEW `check-flicker.mjs` + page boots clean (zero console errors). Owes ONLY a live 2-player eyeball (headless can't render a moving skinned mesh).
 
 Problem (Jie): the hunter and the prop a player is disguised as flash/strobe from certain camera angles. Root cause (VRmike's diagnosis, confirmed) = three.js FRUSTUM CULLING with stale bounds — it judges "off-screen" from a bounding sphere computed ONCE at load: (a) the hunter is a SKINNED animated mesh whose animation swings limbs outside the bind-pose sphere → culled/blinked mid-stride; (b) disguise GLBs are cloned + RESCALED at runtime so their bounds lag the new scale.

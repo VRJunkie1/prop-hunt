@@ -1,5 +1,34 @@
 # Pause menu + rapid fire + mouse lock (2026-07-12, VRmike)
 
+## PC pause is ESCAPE-ONLY — ambient focus loss never pauses (2026-07-13, VRmike)
+
+**The rule:** on desktop, ONLY an explicit Escape pauses. Losing pointer lock by itself —
+Alt-Tab, the Windows key, clicking another window — must NOT pause or blur. The game keeps
+rendering; it just stops turning the camera (mouse uncaptured) until the player clicks back in.
+(Before this, ANY pointer-lock loss opened the pause menu, whose `backdrop-filter: blur(3px)`
+made the screen blurry/useless when the player only wanted to switch windows.)
+
+**The sneaky browser fact it hinges on:** pressing Escape while the mouse is captured does NOT
+arrive as a keypress — the browser delivers it as "pointer lock lost" (`pointerlockchange`),
+the SAME event an Alt-Tab produces. So we can't listen for the Escape key. The reliable tell:
+- **Escape** releases the lock while the game window KEEPS focus → `document.hasFocus() === true`.
+- **Ambient focus loss** releases it WITHOUT focus → `document.hasFocus() === false`, and a
+  `window 'blur'` fired.
+
+`main.js unlockWasEscape()` = `document.hasFocus() && !(blur within the last 250 ms)`. The blur
+recency (`_lastWindowBlurAt`, set by a `window 'blur'` listener) is a backstop for browsers that
+fire `pointerlockchange` a tick before focus settles. In `onLockChange`'s unlocked branch: if
+`state.hasLocked && !unlockWasEscape()` → **do nothing** (no pause, no overlay, no blur, keep
+rendering) and return; otherwise Escape → pause (or the never-captured first-entry prompt).
+
+**Stuck-key guard (`input.js`):** since ambient focus loss no longer pauses, a key held when
+focus left would "stick down" (its keyup lands in the other window) and keep the avatar walking/
+firing. A `window 'blur'` handler calls `input._releaseHeldInput()` (clears `keys`, `jump`,
+`rotUnlock`, `primaryHeld`); look angles are untouched (absolute, not held). Control resumes the
+instant the player clicks back in.
+
+**Touch/phone are untouched** — no pointer lock there; the `#pauseBtn` (☰) path is unchanged.
+
 ## Pause menu (an OVERLAY, not a real pause)
 
 Prop hunt is multiplayer with a host-authoritative referee, so the world must keep running —
@@ -7,9 +36,10 @@ the pause menu is a **local overlay only**. Nothing on the referee changes; the 
 
 - **Open:** desktop — Escape releases pointer lock (browser-native), which fires
   `input.onLockChange(false)`; `main.js` opens the menu IFF the pointer had been captured this
-  game (`state.hasLocked`) — the FIRST unlock in a match still shows the "Click to play" entry
-  prompt, a later unlock shows the pause menu. Touch — a `#pauseBtn` (☰, top-right) calls
-  `openPause()` directly (no pointer lock exists on touch).
+  game (`state.hasLocked`) AND the unlock was an actual Escape (`unlockWasEscape()`, above —
+  ambient focus loss is filtered out). The FIRST unlock in a match still shows the "Click to
+  play" entry prompt; a later Escape shows the pause menu. Touch — a `#pauseBtn` (☰, top-right)
+  calls `openPause()` directly (no pointer lock exists on touch).
 - **Close / Resume:** `closePause(true)` re-requests pointer lock on desktop (a user gesture, so
   it survives the browser's post-Escape lock cooldown); the lock-regained event hides the menu.
   On touch it just hides. Escape-again works because releasing lock re-opens, Resume re-locks.
