@@ -24,13 +24,14 @@ const mmFrom = (trueQueries) => (q) => ({ matches: trueQueries.includes(q) });
 
 console.log('input-mode classification check');
 
-// --- 1. TOUCHSCREEN PC (the actual bug): a mouse AND a touchscreen. any-pointer:fine +
-//        hover:hover match; touch is also present. MUST be desktop (false). ---
+// --- 1. TOUCHSCREEN PC (the original bug): a mouse AND a touchscreen. The PRIMARY pointer is
+//        the trackpad => (pointer: fine); only the SECONDARY any-pointer is coarse (the
+//        touchscreen). hover:hover matches. MUST be desktop (false). ---
 ok(prefersTouchControls({
-  matchMedia: mmFrom(['(any-pointer: fine)', '(hover: hover)', '(any-pointer: coarse)', '(pointer: coarse)']),
+  matchMedia: mmFrom(['(pointer: fine)', '(any-pointer: fine)', '(hover: hover)', '(any-pointer: coarse)']),
   maxTouchPoints: 10,
   hasOntouchstart: true,
-}) === false, 'touchscreen PC (fine pointer + touch)  => DESKTOP wiring');
+}) === false, 'touchscreen PC (primary fine + touch)   => DESKTOP wiring');
 
 // --- 2. PHONE: coarse pointer only, no hover, touch present. MUST be touch (true). ---
 ok(prefersTouchControls({
@@ -52,6 +53,16 @@ ok(prefersTouchControls({
   maxTouchPoints: 5,
   hasOntouchstart: true,
 }) === true, 'tablet (coarse pointer, no hover)        => TOUCH controls');
+
+// --- 4b. STYLUS PHONE (the 2026-07-13 game-breaking bug): a real phone WITH a stylus, e.g. a
+//         Samsung with S-Pen. PRIMARY pointer is the finger => (pointer: coarse); the S-Pen
+//         makes (any-pointer: fine) ALSO match. The old any-pointer:fine test called this
+//         DESKTOP and requested pointer lock on a phone. MUST be touch (true). ---
+ok(prefersTouchControls({
+  matchMedia: mmFrom(['(pointer: coarse)', '(any-pointer: coarse)', '(any-pointer: fine)']),
+  maxTouchPoints: 5,
+  hasOntouchstart: true,
+}) === true, 'stylus phone (primary coarse + S-Pen)    => TOUCH controls');
 
 // --- 5. HYBRID laptop with a stylus + trackpad: fine present alongside coarse. Desktop. ---
 ok(prefersTouchControls({

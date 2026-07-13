@@ -50,14 +50,15 @@ function unlockAudio() {
 // maxTouchPoints > 0) — so a Windows PC with a touchscreen (or touch-capable drivers)
 // answered YES and got the phone scheme: no pointer lock, no Escape pause, no left-click
 // hold-fire. The RIGHT question is "does this device have a PRECISE pointer (a mouse /
-// trackpad)?" — decide the PRIMARY control mode by POINTER CAPABILITY:
-//   - a fine pointer ('(any-pointer: fine)') OR real hover ('(hover: hover)') => DESKTOP
+// trackpad)?" — decide the PRIMARY control mode by the PRIMARY POINTER ('(pointer: …)'):
+//   - PRIMARY pointer coarse ('(pointer: coarse)') => TOUCH controls, even if a SECONDARY
+//     stylus/mouse makes '(any-pointer: fine)' also match (real phones incl. Samsung S-Pen).
+//     Keying off any-pointer:fine — the earlier fix — misclassified stylus phones as desktop
+//     (VRmike, 2026-07-13: game-breaking mobile bug, pointer-lock overlay over dead controls).
+//   - PRIMARY pointer fine ('(pointer: fine)') OR real hover ('(hover: hover)') => DESKTOP
 //     wiring (pointer lock + mouse-look + keyboard), EVEN when the screen is ALSO touchable
-//     (a hybrid laptop). Correctness over cleverness: we ship the desktop classification
-//     alone rather than ALSO dual-wiring the on-screen touch pads (which would race the
-//     mouse over primaryHeld and the canvas look zone — the plan explicitly OK'd this
-//     fallback).
-//   - no fine pointer at all (real phones / tablets) => TOUCH controls, unchanged.
+//     (a hybrid laptop whose primary input is the trackpad). Correctness over cleverness: we
+//     ship the desktop classification alone rather than ALSO dual-wiring the touch pads.
 // Returns TRUE when the device should use the TOUCH scheme. Pure + fully INJECTABLE (pass an
 // `env` of {matchMedia, maxTouchPoints, hasOntouchstart}) so tools/check-input-mode.mjs can
 // unit-test every device combo with mocked signals. See memory/notes/input-mode.md.
@@ -75,12 +76,20 @@ export function prefersTouchControls(env) {
   const q = (s) => {
     try { const r = mm && mm(s); return !!(r && r.matches); } catch { return false; }
   };
-  // PRIMARY SIGNAL: a precise pointer or real hover => DESKTOP wiring, regardless of touch.
+  // PRIMARY SIGNAL: classify by the PRIMARY pointer ('(pointer: …)'), NOT any-pointer. A phone
+  // with a stylus (Samsung S-Pen etc.) advertises '(any-pointer: fine)', yet its PRIMARY
+  // pointer is the finger => it MUST get touch controls. Keying off any-pointer:fine (the old
+  // code) misclassified those phones as DESKTOP, requested pointer lock (impossible on mobile),
+  // and left the "blocked mouse capture" overlay stuck over dead touch controls (VRmike,
+  // 2026-07-13). A hybrid touchscreen laptop is unaffected: its PRIMARY pointer is the trackpad
+  // ('(pointer: fine)'), only its secondary any-pointer is coarse — so it still gets desktop.
   if (mm) {
-    if (q('(any-pointer: fine)') || q('(hover: hover)')) return false;
-    // matchMedia present and it reports a coarse-only / no-hover device => TOUCH.
-    if (q('(any-pointer: coarse)') || q('(pointer: coarse)')) return true;
-    // else: media queries inconclusive — fall through to the raw touch signal.
+    // Primary pointer is coarse (finger) => TOUCH, even if a secondary stylus/mouse exists.
+    if (q('(pointer: coarse)')) return true;
+    // Primary pointer is fine (mouse/trackpad) or real hover => DESKTOP, even when the screen
+    // is ALSO touchable (a hybrid laptop whose primary input is the trackpad).
+    if (q('(pointer: fine)') || q('(hover: hover)')) return false;
+    // Primary-pointer queries inconclusive — fall through to the raw touch signal below.
   }
   // FALLBACK (old / matchMedia-less browsers): touch present => touch controls, else desktop
   // (a keyboard+mouse box that fails feature detection must NOT lose pointer lock / Esc / fire).
