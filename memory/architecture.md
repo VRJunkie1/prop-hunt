@@ -165,7 +165,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   idle/run state machine is driven by velocity DERIVED from successive snapshots, and a
   rifle parented to the `Wrist.R` bone. The LOCAL hunter never renders it (stays
   first-person). Registry: `cfg.characterModels`. Detail:
-  `memory/notes/hunter-character-model.md`.
+  `memory/notes/hunter-character-model.md`. **Flicker/strobe fix (2026-07-13):** every
+  PLAYER-ATTACHED mesh (skinned hunter, disguise GLB/primitive, capsule) is built through
+  the ONE choke point `meshForPlayer` → module-level `preparePlayerModel(root)`, which
+  traverses and sets `frustumCulled=false` + recomputes geometry bounds. This stops
+  three.js from culling (blinking) a skinned mesh whose animation swings limbs outside the
+  bind-pose sphere, and a disguise clone whose bounds lag its runtime rescale. WORLD
+  props/scenery keep normal culling (surgical — only the handful of player objects opt
+  out). Guarded by `tools/check-flicker.mjs`. Detail: `memory/notes/flicker-culling.md`.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The HUD **health
   readout is a filled BAR** (2026-07-12, `#hudHealth` = `.health-fill` + centred `.health-label`;
   green→amber→red): `.hud-top` spans the row and `flex-wrap`s so the bar fills the spare width on

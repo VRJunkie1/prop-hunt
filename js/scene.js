@@ -121,6 +121,34 @@ export function instantiateModel(template, target, dims, scale) {
   return holder;
 }
 
+// FLICKER FIX (2026-07-13, for Jie via VRmike). Player-attached models strobe/blink
+// from certain camera angles because three.js frustum culling judges "off-screen" from
+// a bounding sphere computed ONCE at load: (a) the hunter is a SKINNED animated mesh —
+// the animation swings limbs outside the bind-pose sphere, so mid-stride the renderer
+// wrongly culls and blinks him; (b) disguise GLBs are cloned + RESCALED at runtime, so
+// their volumes can lag the new scale. Fix: for the handful of player-attached objects
+// (only ever a few — hunter, disguise, capsule) turn culling OFF so the renderer can
+// never skip them, and recompute the geometry bounds so anything that DOES still read
+// them (aim raycast, highlight/focus box) stays accurate after a swap/rescale. World
+// props/scenery are untouched and keep their normal culling optimization. This is the
+// ONE choke point meshForPlayer routes every player mesh through — keep it that way so a
+// future refactor can't silently drop the flag (tools/check-flicker.mjs guards it).
+export function preparePlayerModel(root) {
+  if (!root) return root;
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false; // never let animation/rescale blink a player-attached mesh
+    const g = o.geometry;
+    if (g) {
+      // Refresh bounds so post-swap/rescale raycasts + highlight boxes stay correct
+      // (belt-and-braces — culling is already off; harmless if bounds were fine).
+      if (typeof g.computeBoundingSphere === 'function') g.computeBoundingSphere();
+      if (typeof g.computeBoundingBox === 'function') g.computeBoundingBox();
+    }
+  });
+  return root;
+}
+
 export class Scene3D {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -536,6 +564,14 @@ export class Scene3D {
   // WITHOUT opts.animated, so they keep the neutral capsule and their first-person
   // view is untouched this pass (you don't see your own body yet).
   meshForPlayer(p, opts = {}) {
+    // FLICKER FIX: every player-attached mesh (hunter / disguise GLB / disguise
+    // primitive / capsule) goes out through preparePlayerModel — culling OFF + fresh
+    // bounds — so animation can't blink the skinned hunter and a rescaled disguise
+    // clone can't cull. Single choke point on purpose (see preparePlayerModel).
+    return preparePlayerModel(this._buildPlayerMesh(p, opts));
+  }
+
+  _buildPlayerMesh(p, opts = {}) {
     if (opts.animated && p.hunter && !p.disguise && this._hunterModelReady()) {
       const soldier = this._buildHunterModel(this.characterModels.hunter);
       if (soldier) return soldier; // else fall through to the capsule (load pending/failed)
