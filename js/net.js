@@ -29,6 +29,7 @@
 // trip on a CDN fetch (net::ERR_FAILED) in a sandbox with no outbound network.
 // Same "CDN import, no build step"; the download just happens on demand.
 import { Referee } from '/shared/referee.js';
+import { C2S } from '/shared/protocol.js';
 
 // Cached PeerJS `Peer` constructor. `loadPeer()` fetches the CDN bundle once on
 // the first create()/join() and reuses it thereafter.
@@ -191,6 +192,15 @@ export class Session {
   join(name, room) {
     this.name = cleanName(name);
     this._startGuest(String(room || '').toUpperCase().trim());
+  }
+
+  // Change our own lobby display name. Keeps our cached `name` in sync (so it's
+  // right if we ever re-announce) and asks the host to make it official; the host
+  // trims/caps/de-dupes and rebroadcasts the roster (LOBBY-only). Same pipe as
+  // everything else — host loopback or the guest DataConnection.
+  rename(name) {
+    this.name = cleanName(name);
+    this.send({ t: C2S.RENAME, name: this.name });
   }
 
   // Send a game message (C2S) to the referee. Host: straight into the local

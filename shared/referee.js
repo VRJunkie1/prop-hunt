@@ -20,6 +20,10 @@ import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty } from './da
 
 const DEG2RAD = Math.PI / 180;
 
+// Lobby display-name cap. Mirrors js/net.js cleanName() (the join-time cleaner)
+// so a name looks the same whether it's set at join or via a lobby rename.
+const NAME_MAX = 16;
+
 function send(player, obj) {
   try {
     player.send(obj);
@@ -187,6 +191,45 @@ export class Referee {
     this.broadcastLobby();
   }
 
+  // ---- lobby rename (host-authoritative) ----------------------------------
+  // Change a player's OWN display name from the lobby. Every player — the host and
+  // an invite-link guest alike — routes here through C2S.RENAME (no special-casing);
+  // a player can only rename THEMSELVES because the referee looks up the sender by
+  // their connection id (handleMessage), never a name in the payload. The host is the
+  // authority: it trims whitespace, caps the length, REJECTS an empty name (keeps the
+  // old one), and de-dupes so two people can't share a name. Then it rebroadcasts the
+  // roster (broadcastLobby) — the SAME rebroadcast a join fires — so every lobby list,
+  // including late joiners, updates live. LOBBY-ONLY: a rename mid-round is ignored so
+  // scoreboards and elimination messages don't shuffle names mid-match (rename again
+  // back in the lobby). The chosen name rides every later snapshot, so it carries into
+  // the game for the scoreboard/feed automatically.
+  applyRename(player, rawName) {
+    if (this.phase !== PHASE.LOBBY) return; // lobby-only; a live match keeps its names
+    const cleaned = String(rawName == null ? '' : rawName).slice(0, NAME_MAX).trim();
+    if (!cleaned) return; // reject empty/whitespace-only — keep the current name
+    const unique = this._uniqueName(cleaned, player.id);
+    if (unique === player.name) return; // no actual change → no needless rebroadcast
+    player.name = unique;
+    this.broadcastLobby();
+  }
+
+  // Resolve a name clash so two players never share a display name: if `name` is taken
+  // by ANOTHER player, append the smallest free integer suffix ("Alex" -> "Alex2"),
+  // trimming the base so the result still fits the length cap. Case-insensitive compare.
+  _uniqueName(name, exceptId) {
+    const taken = new Set();
+    for (const p of this.players.values()) {
+      if (p.id !== exceptId && p.name) taken.add(p.name.toLowerCase());
+    }
+    if (!taken.has(name.toLowerCase())) return name;
+    for (let n = 2; n < 10000; n++) {
+      const suffix = String(n);
+      const candidate = name.slice(0, NAME_MAX - suffix.length) + suffix;
+      if (!taken.has(candidate.toLowerCase())) return candidate;
+    }
+    return name; // pathological (thousands of clashes) — give up gracefully
+  }
+
   destroy() {
     clearInterval(this.interval);
     this._physicsToken++;
@@ -204,6 +247,9 @@ export class Referee {
       case C2S.READY:
         player.ready = !!msg.ready;
         this.broadcastLobby();
+        break;
+      case C2S.RENAME:
+        this.applyRename(player, msg.name);
         break;
       case C2S.START:
         if (player.id === this.hostId) this.startMatch();

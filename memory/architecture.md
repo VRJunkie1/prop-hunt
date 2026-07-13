@@ -438,6 +438,19 @@ pick; `resetToLobby` deliberately keeps it (a map is a lobby setting, not
 per-player state). Picker UI (`js/ui.js`) renders from `maps.json` and holds no
 game logic — non-host disable is cosmetic. Detail: `memory/notes/map-selection.md`.
 
+## Lobby name changes (host-authoritative, any player)
+
+Any player — host or invite-link guest — can rename themselves from the lobby at any time.
+Your OWN lobby row is an editable field (`ui.js _buildSelfNameField`); everyone else's is
+read-only. Commit → `ui.onRename` → `session.rename(name)` → `C2S.RENAME{name}` → the ONE
+gate `Referee.applyRename` (LOBBY-only; trims/caps-16/rejects-empty/de-dupes via
+`_uniqueName`) → `broadcastLobby()` (the same rebroadcast a join fires, so late joiners
+update live). Names already ride every snapshot/`STARTED`, and there are no nameplates in
+`scene.js`, so the chosen name carries into the scoreboard/feed with no scene change. Renames
+are ignored mid-round (scoreboards stay stable); the name is saved to localStorage
+(`main.js saveName`) and pre-fills next time. Guard: `tools/check-lobby-rename.mjs`. Detail:
+`memory/notes/lobby-rename.md`.
+
 ## Role/identity hiding
 
 Snapshots expose `hunter: bool` (seekers are meant to be visible) and `disguise`

@@ -8,6 +8,49 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: LOBBY NAME CHANGES (2026-07-13, VRmike, branch build/78-lobby-name-changes-requested). All headless guards GREEN incl. a NEW `check-lobby-rename.mjs` + page boots clean (zero console errors). Simple additive feature — rides the existing host-authoritative roster rebroadcast. Owes only a live 2-player eyeball (headless can't reach the lobby — it needs PeerJS).
+
+Let ANY player (host OR an invite-link guest) change their display name from the lobby at any
+time; edits propagate live to all peers and carry into the game. Rode entirely on plumbing that
+was already live — one new message type down the roster pipe.
+
+- **Editable field for everyone (`js/ui.js`).** In `renderLobby`, your OWN row is now an
+  editable `<input class="name-edit">` (tap to edit — phone-friendly), built by
+  `_buildSelfNameField`; other rows stay read-only spans (you can only rename yourself). Commit
+  on blur/Enter, cancel on Escape → `ui.onRename`. **Mid-edit re-render guard:** `renderLobby`
+  clears `playerList.innerHTML` on every `S2C.LOBBY`; the new `_rerendering` flag turns the
+  torn-down input's blur into a no-op, and `_editingName`/`_nameDraft` + focus/caret restore keep
+  your typing intact when an unrelated lobby update (join/ready/map-pick) lands.
+- **Relay + transport (`js/main.js`, `js/net.js`).** `ui.onRename` → `saveName` (localStorage,
+  pre-fills next time) + `session.rename(name)`; new `Session.rename` updates the cached name and
+  sends `C2S.RENAME{name}` over the host loopback or the guest DataConnection (net.js now imports
+  `C2S`). Name also saved on create/join; menu field pre-filled from localStorage at boot.
+- **Authority (`shared/referee.js`).** New `C2S.RENAME` case → `applyRename(player, name)`:
+  LOBBY-only (mid-round ignored so scoreboards/"who tagged whom" stay stable), trim + cap
+  `NAME_MAX` (16) + REJECT empty (keep old) + de-dupe via `_uniqueName` (smallest free integer
+  suffix, case-insensitive: "Host"→"Host2"), then `broadcastLobby()` — the SAME rebroadcast a
+  join fires, so late joiners/invite-link players update live for free. A player can only rename
+  ITSELF (sender resolved by connection id; no target in the payload).
+- **Carries into the game — automatically.** Snapshots + `STARTED` already send `p.name` live and
+  the scoreboard/feed read it per-message; there are NO nameplates in `scene.js` caching a name, so
+  the final lobby name shows in-game with zero scene change (verified by reading scene.js).
+- **Protocol/CSS:** `shared/protocol.js` +`C2S.RENAME`; `css/style.css` +`.name-edit`/`.name-self`/
+  `.you-tag` styling (host row keeps the ★).
+- **Verify — NEW `tools/check-lobby-rename.mjs` (build-gating):** drives the real referee — a
+  NON-HOST peer rename updates the roster AND the rebroadcast `S2C.LOBBY` carries the new name to
+  every peer (the exact requested assertion); length cap; empty rejection; de-dupe incl.
+  case-insensitive; host renames itself; mid-round ignored; unknown sender no-op. GREEN. Regression
+  sweep GREEN: check-combat (referee), check-blindfold (scene/ui API), check-debug-menu (Esc/lock +
+  `_isTyping` name-field guard still holds — the ` hotkey already no-ops while typing in the new
+  field), check-input-mode. Page boots clean (zero console errors).
+- **Files:** `shared/protocol.js`, `shared/referee.js`, `js/net.js`, `js/ui.js`, `js/main.js`,
+  `css/style.css`, `tools/check-lobby-rename.mjs` (new), `memory/notes/lobby-rename.md` (new),
+  `memory/architecture.md`, this file. NO change to physics/netcode/snapshot format/scene.
+- **OWED — live 2-player pass:** in the lobby, a GUEST (invite-link) edits their name → the HOST's
+  list and all peers update live; the host renames itself too; two players pick the same name → one
+  auto-suffixes; start a round → the scoreboard/feed use the final names; back in the lobby you can
+  rename again; a rename attempt mid-round does nothing.
+
 ## Latest: INPUT + JUMP FIXES (2026-07-13, VRmike, branch build/76-input-jump-fixes-requested). All headless guards GREEN + page boots clean (zero console errors). Two independent fixes; each root-caused before touching code.
 
 **Part 1 — PC pause is ESCAPE-ONLY (ambient focus loss never pauses/blurs).** Before, ANY

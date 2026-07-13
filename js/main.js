@@ -1111,19 +1111,41 @@ function updateEditorButton() {
 }
 
 // ---- menu wiring ----------------------------------------------------------
+// Remember the player's chosen name locally (no account/server) so it pre-fills next
+// time — set at create/join and on every lobby rename. localStorage can throw (private
+// mode / blocked), so both helpers swallow errors and degrade to "not remembered".
+const NAME_KEY = 'prophunt.name';
+function saveName(name) {
+  try { localStorage.setItem(NAME_KEY, String(name || '').slice(0, 16)); } catch { /* storage blocked */ }
+}
+function loadSavedName() {
+  try { return localStorage.getItem(NAME_KEY) || ''; } catch { return ''; }
+}
+
 // create()/join() hand off to PeerJS (the free public broker introduces the two
 // browsers); everything after (ready, start, and all gameplay) rides the peer
 // link via session.send().
 function wireMenu() {
   const nameEl = ui.el.name;
+  // Pre-fill the name from last time (saved locally, no account) so returning players
+  // don't retype it. Only if the field is empty, so we never clobber a fresh entry.
+  if (!nameEl.value) nameEl.value = loadSavedName();
   document.getElementById('createBtn').addEventListener('click', () => {
+    saveName(nameEl.value);
     session.create(nameEl.value);
   });
   document.getElementById('joinBtn').addEventListener('click', () => {
     const room = ui.el.roomCode.value.toUpperCase().trim();
     if (!room) return ui.menuError('Enter a room code.');
+    saveName(nameEl.value);
     session.join(nameEl.value, room);
   });
+  // Lobby rename: relay the requested name to the host (authority) and remember it locally
+  // so it pre-fills next time. The referee trims/caps/de-dupes and rebroadcasts the roster.
+  ui.onRename = (name) => {
+    saveName(name);
+    session.rename(name);
+  };
   ui.el.readyBtn.addEventListener('click', () => {
     ui.el.readyBtn._ready = !ui.el.readyBtn._ready;
     session.send({ t: C2S.READY, ready: ui.el.readyBtn._ready });

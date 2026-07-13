@@ -99,6 +99,20 @@ button.ghost:hover { background: #3d2a66; }
 }
 .player-list .ready { color: #7be38b; }
 .player-list .host::after { content: " ★"; color: gold; }
+/* Your own row is an editable name field (rename yourself any time in the lobby). */
+.player-list .name-self { display: flex; align-items: center; gap: 8px; }
+.player-list .name-edit {
+  background: #241645;
+  color: #fff;
+  border: 1px solid #3a2a63;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  max-width: 150px;
+}
+.player-list .name-edit:focus { outline: none; border-color: #8a6cff; background: #2c1b56; }
+.player-list .name-edit.host { color: gold; }
+.player-list .you-tag { font-size: 11px; opacity: .7; }
 /* Diagnostic connection-type badge (direct vs relayed). See ui.js setLink(). */
 .player-list .link { font-size: 11px; letter-spacing: .04em; opacity: .8; align-self: center; }
 .player-list .link.direct { color: #7be38b; }

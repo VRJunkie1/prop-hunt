@@ -64,6 +64,17 @@ export class UI {
     // gate; the picker only disables buttons for non-hosts cosmetically.
     this.maps = null;
     this.onPickMap = () => {};
+
+    // Lobby rename: main.js injects onRename(newName) to relay a C2S.RENAME (the host is
+    // the authority). Your OWN lobby row is an editable field; these track its in-progress
+    // edit so a roster rebroadcast (someone else joins/readies) mid-typing doesn't wipe what
+    // you're entering or steal focus. _rerendering guards the blur that fires when the old
+    // input is torn down by a re-render (that's not a real "user finished editing").
+    this.onRename = () => {};
+    this._editingName = false;
+    this._nameDraft = '';
+    this._nameInput = null;
+    this._rerendering = false;
   }
 
   show(screen) {
@@ -85,21 +96,44 @@ export class UI {
 
   renderLobby({ room, hostId, players, mapId, result }, selfId) {
     this.el.lobbyCode.textContent = room;
+    // Clearing the list tears down the focused name input, which fires its blur — the
+    // _rerendering flag tells that blur "this is a re-render, not the user finishing" so
+    // it neither commits nor drops the editing state (restored below).
+    this._rerendering = true;
     this.el.playerList.innerHTML = '';
+    this._rerendering = false;
+    this._nameInput = null;
     for (const p of players) {
       const li = document.createElement('li');
       li.dataset.id = p.id;
-      const name = document.createElement('span');
-      name.textContent = p.name + (p.id === selfId ? ' (you)' : '');
-      if (p.id === hostId) name.classList.add('host');
+      let nameNode;
+      if (p.id === selfId) {
+        // YOUR row is editable — rename yourself any time in the lobby, whether you're the
+        // host or joined via an invite link. Everyone else's row stays read-only (you can
+        // only rename yourself; the host validates and rebroadcasts). Keep whatever you're
+        // typing on a mid-edit re-render (use the live draft, not the roster value).
+        nameNode = this._buildSelfNameField(p, hostId === p.id);
+      } else {
+        nameNode = document.createElement('span');
+        nameNode.textContent = p.name;
+        if (p.id === hostId) nameNode.classList.add('host');
+      }
       const status = document.createElement('span');
       status.textContent = p.ready ? 'ready' : '';
       status.classList.add('ready');
       const link = document.createElement('span');
       link.classList.add('link');
       this._paintLink(link, this.links.get(p.id));
-      li.append(name, link, status);
+      li.append(nameNode, link, status);
       this.el.playerList.appendChild(li);
+    }
+    // If the roster refreshed while you were editing your name, restore focus + caret so
+    // typing isn't interrupted by an unrelated lobby update (join/ready/map pick).
+    if (this._editingName && this._nameInput) {
+      const inp = this._nameInput;
+      inp.focus();
+      const end = inp.value.length;
+      try { inp.setSelectionRange(end, end); } catch { /* not all inputs support it */ }
     }
     const isHost = hostId === selfId;
     this.el.startBtn.classList.toggle('hidden', !isHost);
@@ -110,6 +144,45 @@ export class UI {
     this.el.lobbyHint.textContent = resultNote + (isHost
       ? 'You are host. Start whenever you like — you can go solo, and friends can join mid-round.'
       : 'Waiting for the host to start…');
+  }
+
+  // Build the editable name field for YOUR own lobby row. Tap to edit (works on phones);
+  // commit on blur or Enter, cancel on Escape. The host is the authority — we just relay
+  // the requested name via onRename; the referee trims/caps/de-dupes and rebroadcasts the
+  // roster, so the next render shows the OFFICIAL name. Mid-edit re-renders are handled by
+  // renderLobby (draft kept, focus restored, _rerendering-guarded blur).
+  _buildSelfNameField(p, isHost) {
+    const wrap = document.createElement('span');
+    wrap.className = 'name-self';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'name-edit';
+    input.maxLength = 16;
+    input.setAttribute('aria-label', 'Your display name');
+    input.title = 'Tap to change your name';
+    // Keep the in-progress draft on a re-render; otherwise show the official roster name.
+    input.value = (this._editingName ? this._nameDraft : p.name) || '';
+    if (isHost) input.classList.add('host');
+    const authName = p.name; // the roster's current official name (skip a no-op commit)
+    input.addEventListener('focus', () => { this._editingName = true; this._nameDraft = input.value; });
+    input.addEventListener('input', () => { this._nameDraft = input.value; });
+    input.addEventListener('blur', () => {
+      if (this._rerendering) return; // torn down by a roster re-render, not a real edit-end
+      this._editingName = false;
+      const v = input.value;
+      if (v.trim() && v !== authName) this.onRename(v);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') { this._editingName = false; input.value = authName; input.blur(); }
+    });
+    this._nameInput = input;
+    wrap.appendChild(input);
+    const tag = document.createElement('span');
+    tag.className = 'you-tag';
+    tag.textContent = isHost ? '(you) ★' : '(you)';
+    wrap.appendChild(tag);
+    return wrap;
   }
 
   // Render the lobby map picker straight from the shared maps catalog. Every
