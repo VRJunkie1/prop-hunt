@@ -125,6 +125,71 @@ ok(/_handlePingPong\([\s\S]*?\)\)\s*return;/.test(netSrc), 'net.js intercepts pi
 ok(/this\.pings\s*=\s*new Map\(\)/.test(netSrc), 'net.js keeps a per-peer pings map');
 
 // ---------------------------------------------------------------------------
+// 6) DESKTOP "UI MODE" (backtick `) — mid-game debug access on PC (2026-07-12, Jie).
+//    A deliberate third state that frees the mouse for the DEBUG menu WITHOUT opening the pause
+//    menu. These static asserts lock the careful interaction points the plan flagged:
+//    (a) the ` hotkey is text-input-guarded; (b) the "Click to play" overlay decision is
+//    STATE-driven off uiMode (not a race); (c) the re-lock click can't route into the fire
+//    handler; (d) every resume/pause path clears the flag (never latched); (e) the DEBUG
+//    button/panel sit ABOVE the pause menu so debug is reachable from both paths.
+// ---------------------------------------------------------------------------
+const inputSrc = read('js', 'input.js');
+
+// (a) the hotkey + its typing guard live in input.js.
+ok(/onToggleUiMode/.test(inputSrc) && /onRequestPause/.test(inputSrc),
+  'input.js declares onToggleUiMode + onRequestPause callbacks');
+ok(/e\.code === 'Backquote'/.test(inputSrc) && /this\.onToggleUiMode\(\)/.test(inputSrc),
+  'input.js handles the ` (Backquote) key and fires onToggleUiMode');
+ok(/Backquote'\)\s*\{\s*if \(this\.touch \|\| this\._isTyping\(\)\) return;/.test(inputSrc),
+  'the ` hotkey NO-OPs while typing in a text field (and on touch) — never yanks you out mid-name');
+ok(/_isTyping\s*\(\)\s*\{[\s\S]*?INPUT[\s\S]*?TEXTAREA/.test(inputSrc),
+  'input._isTyping() detects focus in an INPUT/TEXTAREA (name/room fields)');
+ok(/e\.code === 'Escape'[\s\S]*?!this\.locked[\s\S]*?this\.onRequestPause\(\)/.test(inputSrc),
+  'input.js opens pause on Esc ONLY while the pointer is unlocked (locked Esc defers to the browser)');
+
+// (c) the re-lock click can't fire the rifle: the canvas mousedown fire path is gated on lock.
+ok(/mousedown[\s\S]*?if \(!this\.locked\) return;[\s\S]*?this\.primaryHeld = true; this\.onAction\('primary'\)/.test(inputSrc),
+  'canvas mousedown fire/hold is gated on this.locked — the UI-mode resume click never shoots');
+
+// (b) the overlay decision + flag lifecycle live in main.js and key off state.uiMode.
+ok(/uiMode: false/.test(mainSrc), 'main.js declares state.uiMode (the third state)');
+ok(/function enterUiMode\(\)/.test(mainSrc) && /function exitUiMode\(/.test(mainSrc),
+  'main.js defines enterUiMode()/exitUiMode()');
+ok(/state\.uiMode = true;[\s\S]*?exitPointerLock\(\)/.test(mainSrc),
+  'enterUiMode sets the flag BEFORE releasing the lock (so onLockChange sees it — no race)');
+ok(/if \(state\.uiMode\) \{ ui\.setClickToPlay\(false\); return; \}/.test(mainSrc),
+  'onLockChange: UI mode suppresses BOTH the Click-to-play overlay AND the pause menu (state-driven)');
+ok(/if \(locked\) \{[\s\S]*?state\.uiMode = false;/.test(mainSrc),
+  'onLockChange clears uiMode the instant the pointer re-locks (derive/reset, never latch)');
+ok(/if \(inGame && !state\.paused && !state\.uiMode\) ui\.setClickToPlay\(true, reason\)/.test(mainSrc),
+  'onLockError also suppresses the overlay in UI mode (no stale prompt)');
+// (d) every resume/pause path clears the flag. openPause + the two match-exit resets + STARTED
+//     + onLockChange-on-lock = at least 5 assignments; require the key ones explicitly.
+ok(/function openPause\(\)[\s\S]*?state\.uiMode = false;/.test(mainSrc),
+  'openPause() clears uiMode — Esc→pause from UI mode hands over to the pause menu');
+const uiModeClears = (mainSrc.match(/state\.uiMode = false;/g) || []).length;
+ok(uiModeClears >= 4, `every resume/pause/exit path resets uiMode (${uiModeClears} clears — lock, pause, back-to-menu, lobby, started)`);
+ok(/const halt = state\.freeCam \|\| state\.paused \|\| state\.uiMode;/.test(mainSrc),
+  'the input loop halts movement in UI mode (avatar holds still, like pause)');
+ok(/state\.role !== ROLE\.HUNTER \|\| !state\.movable \|\| state\.paused \|\| state\.uiMode/.test(mainSrc),
+  'tryFire() is blocked in UI mode (belt-and-braces; primaryHeld is already clear while unlocked)');
+ok(/input\.onToggleUiMode = \(\) =>/.test(mainSrc) && /input\.onRequestPause = \(\) =>/.test(mainSrc),
+  'main.js wires the ` toggle + Esc-pause callbacks into input');
+
+// (e) z-order: the DEBUG button + panel sit above the pause menu overlay.
+const pauseZ = parseInt((css.match(/\.pause-menu\s*\{[^}]*z-index:\s*(\d+)/) || [])[1], 10);
+const toggleZ = parseInt((debugSrc.match(/#dbgToggle\{[^}]*z-index:(\d+)/) || [])[1], 10);
+const panelZ = parseInt((debugSrc.match(/#dbgPanel\{[^}]*z-index:(\d+)/) || [])[1], 10);
+ok(Number.isFinite(pauseZ) && Number.isFinite(toggleZ) && toggleZ > pauseZ,
+  `DEBUG button z-index (${toggleZ}) sits ABOVE the pause menu (${pauseZ}) — reachable over the pause overlay`);
+ok(Number.isFinite(panelZ) && panelZ > pauseZ,
+  `open DEBUG panel z-index (${panelZ}) sits ABOVE the pause menu (${pauseZ}) — usable from both paths`);
+
+// The pause controls list documents the new key.
+const uiSrc = read('js', 'ui.js');
+ok(/\['`',/.test(uiSrc), "pause-menu controls list documents the ` key (free the mouse for debug/UI)");
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\ndebug-menu check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

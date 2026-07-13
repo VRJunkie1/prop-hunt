@@ -346,6 +346,7 @@ export class UI {
           ['E', 'Disguise (prop)'],
           ['1 / 2', 'Pick hunter tool'],
           ['V', 'Toggle view'],
+          ['`', 'Free the mouse for debug/UI — click the view to resume'],
           ['Esc', 'This menu (releases the mouse; Resume re-locks)'],
         ];
     return rows.map(([k, v]) => `<div class="pause-help-row"><b>${k}</b><span>${v}</span></div>`).join('');

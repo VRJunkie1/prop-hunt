@@ -118,6 +118,14 @@ const state = {
   hasLocked: false,
   lastPlayers: null,
 
+  // Desktop "UI mode" (backtick `). A deliberate THIRD state — not playing, not paused: the
+  // pointer lock is released so the mouse is free to click the DEBUG menu / any UI, but the
+  // pause menu is NOT opened and the "Click to play" overlay is suppressed. Clicking the game
+  // canvas re-locks and clears this (via onLockChange); Esc opens pause (which also clears it).
+  // Derived/reset from live state everywhere — never latched — so the click-to-play rule can
+  // never see a stale value after the pointer re-locks. Desktop-only; always false on touch.
+  uiMode: false,
+
   // Debug FREE CAM (js/debug.js, ?debug=1 only). While true the render camera is flown
   // locally by the debug module and the physics player is frozen (no prediction, zeroed
   // movement sent), so the body stays put. Always false in normal play.
@@ -147,19 +155,33 @@ input.onLockChange = (locked) => {
   const inGame = !ui.el.game.classList.contains('hidden');
   if (locked) {
     state.hasLocked = true;
+    state.uiMode = false; // re-locked (incl. clicking the canvas from UI mode) -> leave UI mode
     closePause(false); // re-locked -> drop the pause overlay
     ui.setClickToPlay(false);
     return;
   }
   if (!inGame || input.touch) return;
+  // Unlocked: the "Click to play" overlay is STATE-DRIVEN, not event-driven — it shows only when
+  // we're neither in the deliberate UI mode NOR paused. UI mode suppresses both the overlay and
+  // the pause menu (that's the whole point: a free mouse with no menu). This kills the race where
+  // whoever's event fired last decided the overlay. Otherwise: Esc-after-playing opens pause; a
+  // first, never-captured unlock shows the entry prompt.
+  if (state.uiMode) { ui.setClickToPlay(false); return; }
   if (state.hasLocked) openPause(); // Esc after playing -> pause menu
   else ui.setClickToPlay(true); // haven't captured yet -> the entry prompt
 };
 input.onLockError = (reason) => {
   if (state.editing) return;
   const inGame = !ui.el.game.classList.contains('hidden');
-  if (inGame && !state.paused) ui.setClickToPlay(true, reason);
+  if (inGame && !state.paused && !state.uiMode) ui.setClickToPlay(true, reason);
 };
+// UI mode (backtick) + Esc-in-UI-mode routing. See enterUiMode()/exitUiMode() below.
+input.onToggleUiMode = () => {
+  if (input.touch) return;
+  if (state.uiMode) exitUiMode(true); // ` again -> re-lock and resume
+  else enterUiMode();
+};
+input.onRequestPause = () => openPause(); // Esc while unlocked (UI mode) -> pause takes over
 
 // ---- pause menu (Escape / on-screen button) -------------------------------
 // A menu OVERLAY — it does NOT pause the simulation (multiplayer: the world runs on the
@@ -170,6 +192,7 @@ input.onLockError = (reason) => {
 function openPause() {
   const inGame = !ui.el.game.classList.contains('hidden');
   if (state.paused || !inGame || state.editing) return;
+  state.uiMode = false; // pause takes over from UI mode (the two are mutually exclusive)
   state.paused = true;
   if (document.pointerLockElement) document.exitPointerLock(); // release the mouse (no-op on touch)
   ui.setClickToPlay(false);
@@ -185,6 +208,32 @@ function closePause(relock) {
     else ui.setClickToPlay(!input.locked);
   }
 }
+// ---- desktop "UI mode" (backtick `) ---------------------------------------
+// A deliberate THIRD state (not playing, not paused): release the pointer lock so the mouse is
+// free to click the DEBUG button / open debug panel / any UI, WITHOUT opening the pause menu and
+// WITHOUT the "Click to play" overlay (both are suppressed off state.uiMode — the overlay rule in
+// onLockChange keys off it, not off whichever event fired last). Clicking the game canvas re-locks
+// and clears uiMode via onLockChange; Esc opens the pause menu (openPause clears it too). A click
+// on the debug panel/buttons targets that DOM element (which sits above the canvas), so it neither
+// re-locks nor punches through to a shot. The re-lock click can't fire the rifle either: the
+// canvas mousedown handler is gated on `this.locked`, which is false until the lock actually
+// engages. Desktop-only; a no-op on touch (no pointer lock, and the ` key never reaches here).
+function enterUiMode() {
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (state.uiMode || state.paused || state.editing || !inGame || input.touch) return;
+  state.uiMode = true; // set BEFORE releasing lock so the onLockChange(false) handler sees it
+  if (document.pointerLockElement) document.exitPointerLock(); // free the mouse — no pause menu
+  ui.setClickToPlay(false); // deliberate free-mouse state: never show the entry overlay
+  ui.feed('UI mode: mouse freed for debug/menus. Click the game to resume (` to toggle).');
+}
+function exitUiMode(relock) {
+  if (!state.uiMode) return;
+  state.uiMode = false;
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (relock && inGame && !input.touch) canvas.requestPointerLock(); // resume play (a user gesture)
+  else if (inGame && !input.touch) ui.setClickToPlay(!input.locked); // derive the overlay from live lock
+}
+
 // Touch has no pointer lock: tapping the overlay dismisses it and NOW brings up
 // the on-screen controls + joystick (deferred to here so the controls never sit
 // on top of the "Tap to play" overlay and steal its tap). Audio is unlocked inside
@@ -272,7 +321,7 @@ function tryDisguise() {
 // screen-centre ray the disguise pick uses) — the HOST re-runs the shot against its
 // authoritative world, decides the hit + damage, and broadcasts the tracer to everyone.
 function tryFire() {
-  if (state.role !== ROLE.HUNTER || !state.movable || state.paused) return;
+  if (state.role !== ROLE.HUNTER || !state.movable || state.paused || state.uiMode) return;
   if (state.tool !== 'rifle') return; // prop finder does nothing (yet)
   const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
   if (!dir) return;
@@ -336,6 +385,7 @@ function handleGameMessage(msg) {
           releaseWakeLock();
           state.paused = false;
           state.hasLocked = false;
+          state.uiMode = false; // never carry the free-mouse state across rounds
           ui.hidePause();
           ui.setClickToPlay(false);
           ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
@@ -377,6 +427,7 @@ function handleGameMessage(msg) {
       });
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
+      state.uiMode = false; // fresh match starts uncaptured, not in the free-mouse state
       // First time we need Three.js: build the renderer now (lazy CDN load). The
       // render catalog merges the disguise props with the static fixtures catalog
       // (kept in separate files so fixtures can't leak into the disguise pool) into
@@ -470,6 +521,7 @@ function backToMenu(msg) {
   resetReadyButton();
   state.paused = false;
   state.hasLocked = false;
+  state.uiMode = false; // drop the free-mouse state on the way back to the menu
   ui.hidePause();
   ui.setBlindfold(false); // clear any active blindfold overlay + release look
   input.lookFrozen = false;
@@ -763,7 +815,7 @@ function frameBody(now) {
   // RAPID FIRE: while the primary is HELD, auto-repeat the rifle at the configured RPM for a
   // live hunter. The host still enforces its own rate cap, so this only paces client sends.
   if (
-    input.primaryHeld && !state.paused &&
+    input.primaryHeld && !state.paused && !state.uiMode &&
     state.role === ROLE.HUNTER && state.alive && state.movable && state.tool === 'rifle' &&
     now - lastFireAt >= fireIntervalMs()
   ) {
@@ -775,8 +827,9 @@ function frameBody(now) {
     // frame's input, recording it for reconciliation. Real collide-and-slide against
     // walls/fixtures happens right here, with zero network latency. Skipped while the
     // debug free cam is on so the physics player stays put (main sends zeroed movement too).
-    // Also skipped while paused, so the avatar holds still at the menu (world runs on host).
-    if (state.movable && !state.freeCam && !state.paused) {
+    // Also skipped while paused OR in UI mode, so the avatar holds still while a menu/debug UI is
+    // up (the world keeps running on the host).
+    if (state.movable && !state.freeCam && !state.paused && !state.uiMode) {
       state.seq++;
       const { mx, mz } = input.moveVector();
       const inp = { seq: state.seq, mx, mz, yaw: input.yaw, jump: input.jump, rotUnlock: input.rotUnlock, dt };
@@ -789,7 +842,7 @@ function frameBody(now) {
     state.corr.x *= 0.85;
     state.corr.y *= 0.75;
     state.corr.z *= 0.85;
-  } else if (state.movable && !state.freeCam && !state.paused) {
+  } else if (state.movable && !state.freeCam && !state.paused && !state.uiMode) {
     // Flat 2D fallback prediction (Rapier not loaded): integrate + nudge toward the
     // authoritative position. Identical to the pre-physics behaviour.
     const { mx, mz } = input.moveVector();
@@ -878,9 +931,9 @@ function startInputLoop() {
     // Debug free cam: send zeroed movement so the (frozen) physics player stays put while
     // the local camera flies. The last real input.mx/mz would otherwise keep the referee
     // driving the body forward, so we must actively send a stop.
-    // Free cam OR the pause menu -> send zeroed movement so the (frozen) body stays put while
-    // the local view is detached; the world keeps running on the host regardless.
-    const halt = state.freeCam || state.paused;
+    // Free cam OR the pause menu OR UI mode -> send zeroed movement so the (frozen) body stays put
+    // while the local view is detached; the world keeps running on the host regardless.
+    const halt = state.freeCam || state.paused || state.uiMode;
     const { mx, mz } = halt ? { mx: 0, mz: 0 } : input.moveVector();
     // seq = the latest predicted-frame id; the host echoes it back as `ack` so we
     // know which inputs it has applied. jump/rotUnlock drive physics + the disguise

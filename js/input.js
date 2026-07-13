@@ -73,6 +73,11 @@ export class Input {
     this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag' | 'primary'
     this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
     this.onLockError = () => {}; // (reason: string) => void    (desktop pointer lock)
+    // Backtick (`) toggles a DESKTOP "UI mode": release the mouse for the DEBUG menu / any UI
+    // WITHOUT opening the pause menu (main.js owns the state). onRequestPause is Escape while the
+    // pointer is already unlocked (e.g. in UI mode) — pause takes over. Both no-op while typing.
+    this.onToggleUiMode = () => {}; // () => void  ` key: toggle desktop UI mode (free mouse, no pause)
+    this.onRequestPause = () => {}; // () => void  Esc while unlocked: open the pause menu
     this.onTouchPlay = () => {}; // () => void  fired when a touch player taps the overlay
     this.onToggleView = () => {}; // () => void  V key: third-person <-> first-person
     this.onToggleEdit = () => {}; // () => void  Ctrl/Cmd+E: toggle the level editor (desktop)
@@ -321,6 +326,25 @@ export class Input {
       this.onToggleEdit();
       return;
     }
+    // Backtick (`) — toggle desktop "UI mode": free the mouse for the DEBUG menu / UI WITHOUT
+    // opening the pause menu (a deliberate third state; see main.js). Handled FIRST, before the
+    // pointer-lock action gate, so it also toggles back OUT while unlocked. Does NOTHING while
+    // typing in a text field (a backtick in a name/room code stays a plain character — we return
+    // WITHOUT preventDefault) or on touch (no pointer lock there).
+    if (e.code === 'Backquote') {
+      if (this.touch || this._isTyping()) return;
+      e.preventDefault();
+      this.onToggleUiMode();
+      return;
+    }
+    // Escape while the pointer is NOT locked (e.g. UI mode) opens the pause menu — pause TAKES
+    // OVER from UI mode. When the pointer IS locked the browser's own Esc releases the lock and
+    // main.js opens pause from the resulting pointerlockchange, so we defer to that path here to
+    // avoid double-handling. Ignored while typing / on touch.
+    if (e.code === 'Escape') {
+      if (!this.touch && !this.locked && !this._isTyping()) this.onRequestPause();
+      return;
+    }
     this.keys.add(e.code);
     if (e.code === 'Space') {
       this.jump = true; // held; physics only jumps when grounded
@@ -336,6 +360,16 @@ export class Input {
   onKeyUp(e) {
     this.keys.delete(e.code);
     if (e.code === 'Space') this.jump = false;
+  }
+
+  // True when a text field (name / room code) currently has focus. The ` and Esc hotkeys must
+  // not fire while the player is typing — a backtick in a name is just a character, and Esc in a
+  // field should blur/clear it, not toggle game state.
+  _isTyping() {
+    const a = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!a) return false;
+    const tag = a.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || a.isContentEditable === true;
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).

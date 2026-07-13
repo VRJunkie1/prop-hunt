@@ -170,12 +170,15 @@ ok(/top:\s*50%/.test(crossRule) && /left:\s*50%/.test(crossRule) && /translate\(
   'css #crosshair is pinned to the exact screen centre (top/left 50% + translate(-50%,-50%))');
 ok(!/aimScreenPoint/.test(mainSrc) && !/aimScreenPoint/.test(sceneSrc), 'the floating-reticle path (aimScreenPoint) is fully removed — one crosshair system');
 
-// (d) DISGUISE RAY FROM CAMERA CENTRE. aimedDisguiseTarget raycasts through SCREEN_CENTER
-//     (the shared screen-centre NDC, same as debugPick), not a player-origin cast.
+// (d) DISGUISE RAY FROM CAMERA CENTRE. aimedDisguiseTarget raycasts through the shared reticle
+//     NDC (same as debugPick), not a player-origin cast. Since the prop-aim pass (setAimMode) the
+//     fired point is `this._aimNDC || SCREEN_CENTER` — hunters use SCREEN_CENTER, props the raised
+//     point, both defaulting to SCREEN_CENTER — so accept that form as well as the plain literal.
+const AIM_NDC = /setFromCamera\((this\._aimNDC \|\| )?SCREEN_CENTER/;
 const aimTgt = (sceneSrc.match(/aimedDisguiseTarget\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
-ok(/setFromCamera\(SCREEN_CENTER/.test(aimTgt), 'scene aimedDisguiseTarget fires from the CAMERA CENTRE (setFromCamera(SCREEN_CENTER)) — through the reticle');
+ok(AIM_NDC.test(aimTgt), 'scene aimedDisguiseTarget fires from the CAMERA CENTRE (setFromCamera(_aimNDC||SCREEN_CENTER)) — through the reticle');
 ok(/const SCREEN_CENTER = new THREE\.Vector2\(0, 0\)/.test(sceneSrc), 'scene defines the shared SCREEN_CENTER (0,0 NDC) used by both the disguise pick and debugPick');
-ok(/setFromCamera\(SCREEN_CENTER/.test((sceneSrc.match(/debugPick\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0]), 'debugPick uses the SAME SCREEN_CENTER ray (unified crosshair/raycast)');
+ok(AIM_NDC.test((sceneSrc.match(/debugPick\s*\([^)]*\)\s*\{[\s\S]*?\n  \}/) || [''])[0]), 'debugPick uses the SAME shared reticle ray (unified crosshair/raycast)');
 
 // ---------------------------------------------------------------------------
 if (fails) {

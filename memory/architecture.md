@@ -167,10 +167,12 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   green→amber→red): `.hud-top` spans the row and `flex-wrap`s so the bar fills the spare width on
   PC and drops to its own full-width row on mobile portrait — two fixed CSS layouts, no runtime
   measurement. `setHealth(pct)` sets the fill width + label + warn/crit class. The
-  "Click to play" overlay is shown/hidden purely by `setClickToPlay(visible,
-  msg?)`, called from `main.js` in response to `input.js` pointer-lock events
-  (overlay up while uncaptured, down once the browser confirms lock, back on
-  release; `msg` explains a refusal). Also paints a
+  "Click to play" overlay is shown/hidden by `setClickToPlay(visible, msg?)`, but the
+  DECISION is **state-driven** in `main.js` (2026-07-12): the overlay shows only when the
+  pointer is unlocked AND not `state.paused` AND not `state.uiMode` (desktop "UI mode" —
+  backtick `` ` `` frees the mouse for the DEBUG menu WITHOUT opening pause; see
+  `notes/pause-menu.md`). `msg` explains a lock refusal. This killed the old event-order
+  race where whichever pointer-lock event fired last decided the overlay. Also paints a
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
   connection-type is *detected* in `net.js`, never here. Also owns the hunter
   **blindfold** overlay via `setBlindfold(blind, seconds)` — a plain show/hide of the

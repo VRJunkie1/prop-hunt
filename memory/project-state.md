@@ -8,6 +8,50 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: DEBUG MENU ACCESS ON PC MID-GAME — desktop "UI mode" on backtick (2026-07-12, Jie, branch build/67-debug-menu-access-on). All headless guards GREEN + page boots clean (zero console errors). Owes a live desktop pass (pointer-lock behaviour can't be seen headless).
+
+Problem (Jie): on desktop the pointer lock trapped the mouse so the top-left DEBUG button couldn't
+be clicked; Esc opened the pause menu which COVERED the debug button; and the "Click to play"
+overlay popped up on every unlock, intercepting clicks. Fix = a deliberate THIRD input state.
+
+- **NEW desktop "UI mode" on the backtick (`) key** (`state.uiMode` in `js/main.js`;
+  `input.onToggleUiMode`). Pressing ` mid-game RELEASES pointer lock WITHOUT opening the pause menu:
+  the mouse is free, the "Click to play" overlay is SUPPRESSED, and the DEBUG button + open panel are
+  fully clickable. ` again (or clicking the game canvas) re-locks and resumes.
+- **"Click to play" is now STATE-DRIVEN, not event-driven** — `onLockChange` shows it only when the
+  pointer is unlocked AND `!uiMode` AND `!paused`. Kills the race Jie flagged (overlay decided by
+  whoever's event fired last). `onLockError` suppresses it in UI mode too.
+- **Flag lifecycle is derive/reset, never latch** (same discipline as the blindfold): `uiMode` is
+  cleared on EVERY resume/pause/exit path — the instant the pointer re-locks (`onLockChange` locked
+  branch), `openPause()` (Esc→pause from UI mode hands over to the menu), `exitUiMode`, back-to-menu,
+  return-to-lobby, and match START. So the overlay rule can never see a stale on-flag.
+- **Resume click can't shoot** — the canvas `mousedown` fire/hold path is gated on `this.locked`
+  (already was), which is false until the lock engages, so the click that re-locks never registers a
+  shot or arms hold-to-fire. `primaryHeld` also clears on any lock loss.
+- **Hotkey is text-input-guarded** — `input._isTyping()` (focus in INPUT/TEXTAREA) makes ` a no-op
+  while naming a room, so a backtick in a name is just a character. Also Esc-while-unlocked opens
+  pause (so UI mode can still reach the pause menu); Esc-while-locked defers to the browser's native
+  pointer-lock release (unchanged path). Both desktop-only.
+- **Z-ORDER fix** — the injected `#dbgToggle` (52) / `#dbgPanel` (51) now sit ABOVE the pause menu
+  overlay (`.pause-menu` z-index 50, `js/debug.js` styles), so debug is reachable from BOTH paths:
+  backtick UI mode OR Esc→pause (button/panel visible over the pause backdrop).
+- **Movement halts in UI mode** like pause (input loop sends zeroed movement, prediction skipped) so
+  the avatar holds still while you fiddle with debug; `tryFire` also guards `uiMode`.
+- **Docs:** pause-menu Controls list gains a `` ` `` row ("Free the mouse for debug/UI — click the
+  view to resume"), `js/ui.js _controlsHtml`.
+- **Guards:** `tools/check-debug-menu.mjs` +section 6 statically asserts all the above (hotkey +
+  typing guard, state-driven overlay, no-race flag set-before-unlock, resume-click-not-firing, every
+  reset clears the flag, z-order above pause, docs row). Also fixed 2 STALE assertions in
+  `check-blindfold.mjs` that predated this work (the prop-aim `setAimMode` pass changed the aim ray to
+  `this._aimNDC || SCREEN_CENTER`; the literal-`SCREEN_CENTER` regex hadn't been updated — now accepts
+  the unified form). Full suite green: check-debug-menu, check-blindfold, check-combat, check-physics.
+- **Files:** `js/input.js`, `js/main.js`, `js/debug.js`, `js/ui.js`, `tools/check-debug-menu.mjs`,
+  `tools/check-blindfold.mjs`, notes. Zero gameplay/netcode/referee change; touch untouched.
+- **OWED — live desktop pass:** mid-game ` → mouse free, no "Click to play", DEBUG button + panel
+  clickable (and clickable over the pause menu too); click the canvas → back in the action with no
+  phantom shot; Esc pause still behaves; ` → Esc → Resume leaves no stuck state; a `` ` `` typed in
+  the name field stays a character.
+
 ## RESUME NOTE (2026-07-12, resume of the crashed pose/anim/damage/debug/fire/pause run): the crashed attempt had already COMMITTED its full work as `9cb60ad` (the harness commits partial trees); the HTTPException struck AFTER the commit, during the final deploy/link-posting step — NOT mid-edit. Working tree verified CLEAN at HEAD (`git diff HEAD` empty — no partial/uncommitted leftovers). Re-ran the WHOLE guard suite on resume, ALL GREEN: `check-combat` (incl. §E re-disguise small→large multiplier + §F fire-rate 700 rpm/66 ms), `check-debug-menu` (collapsed default + collider toggle), `check-hunter-model` (idle = `Idle_Gun_Pointing` gun-up clip), `check-blindfold` (scene-API guard), `check-physics`, `check-hunter-model-size`. Page boots with ZERO console errors in normal + `?debug=1` + phone-portrait; DEBUG menu confirmed COLLAPSED-by-default by screenshot (only the `DEBUG ▸` button top-left). No code changes needed — the seven-part pass below is complete and coherent. Still owes the live 2-player pass noted at the end of that section.
 
 ## Latest: HUNTER RIFLE POSE/ANIM POLISH + DAMAGE-MULT PROOF + DEBUG UPGRADES + RAPID-FIRE/MOUSE-LOCK/PAUSE MENU (2026-07-12, VRmike, on `main`). All headless checks GREEN + page boots clean (normal + ?debug=1 + phone). Rifle pose, hold-to-fire feel, mouse-lock/pause flow owe a live 2-player pass.

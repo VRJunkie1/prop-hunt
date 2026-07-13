@@ -45,11 +45,13 @@ export class DebugMenu {
     const s = el('style');
     s.id = 'dbgStyle';
     s.textContent = `
-      #dbgToggle{position:fixed;top:8px;left:8px;z-index:46;min-width:44px;min-height:44px;
+      /* z-index 52/51 sit ABOVE the pause menu overlay (.pause-menu z-index:50) so the DEBUG
+         button + open panel stay reachable from BOTH paths: backtick UI mode AND Esc→pause. */
+      #dbgToggle{position:fixed;top:8px;left:8px;z-index:52;min-width:44px;min-height:44px;
         padding:8px 12px;border:0;border-radius:10px;background:#12081fdd;color:#ff5af0;
         font:bold 13px/1 monospace;letter-spacing:1px;box-shadow:0 2px 8px #0008;cursor:pointer;}
       #dbgToggle:active{transform:scale(.96);}
-      #dbgPanel{position:fixed;top:58px;left:8px;z-index:45;width:min(80vw,270px);
+      #dbgPanel{position:fixed;top:58px;left:8px;z-index:51;width:min(80vw,270px);
         max-height:76dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
         background:#12081fee;color:#f0e6ff;border:1px solid #ff2fd066;border-radius:12px;
         padding:8px 10px 12px;font:12px/1.4 monospace;box-shadow:0 4px 16px #000a;}

@@ -34,6 +34,34 @@ the pause menu is a **local overlay only**. Nothing on the referee changes; the 
   every `60000/rpm` ms for a live hunter with the rifle. Damage/bullet is unchanged (5%, host-side).
 - Props still single-tap disguise (the held auto-repeat is hunter-only).
 
+## Desktop "UI mode" (backtick `) — mid-game debug/UI access (2026-07-12, Jie)
+
+A deliberate THIRD input state next to playing/paused, so you can reach the DEBUG menu mid-game on
+PC without the pointer lock trapping the mouse. `state.uiMode` in `js/main.js`; the ` key toggles it
+via `input.onToggleUiMode`.
+
+- **Enter (` mid-game):** `enterUiMode()` sets `uiMode = true` **before** calling
+  `document.exitPointerLock()` (so the resulting `onLockChange(false)` sees the flag — no race) and
+  hides "Click to play". The mouse is now free; NO pause menu opens.
+- **"Click to play" is STATE-DRIVEN** (the key fix): `onLockChange`'s unlocked branch shows the
+  overlay only when `!uiMode && !paused` (`if (state.uiMode) { setClickToPlay(false); return; }`),
+  and `onLockError` guards `!uiMode` too. No longer "whoever's event fired last wins".
+- **Exit / resume:** clicking the game canvas re-locks (input.js canvas click → `requestPointerLock`)
+  → `onLockChange(locked=true)` clears `uiMode`. ` again → `exitUiMode(true)` re-locks. Esc while
+  unlocked → `input.onRequestPause` → `openPause()` (which also clears `uiMode` — pause takes over).
+- **Never latches:** `uiMode` is reset to false on the lock-regained branch, `openPause`, `exitUiMode`,
+  back-to-menu, return-to-lobby, and match START — same derive/reset discipline as the blindfold.
+- **Resume click can't shoot:** the canvas `mousedown` fire path is gated on `this.locked` (false
+  until the lock engages), so the re-lock click never fires the rifle or arms hold-to-fire.
+- **Typing guard:** `input._isTyping()` (INPUT/TEXTAREA focus) makes ` and unlocked-Esc no-ops while
+  naming a room. Desktop-only (no-op on touch — no pointer lock there).
+- **Movement halts** in UI mode like pause (`halt` in the input loop + prediction skip + `tryFire`
+  guard), so the avatar holds still while you use the UI.
+- **Z-order:** `js/debug.js` bumps `#dbgToggle` (52) / `#dbgPanel` (51) ABOVE `.pause-menu` (z 50), so
+  the DEBUG button + panel are reachable from BOTH paths (backtick UI mode OR Esc→pause).
+- Controls list documents the key (`ui._controlsHtml` desktop rows). Guard: `check-debug-menu.mjs`
+  section 6.
+
 ## Mouse lock
 
 Already captured on the in-game canvas click for BOTH roles (props are third-person but still use

@@ -1,5 +1,15 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-12 (Jie) — REACHABLE MID-GAME ON PC.** Two fixes so the panel is actually usable during a
+desktop match: (1) the injected overlay z-index was raised above the pause menu — `#dbgToggle` 46→52,
+`#dbgPanel` 45→51, both now over `.pause-menu` (z 50) — so the DEBUG button + open panel are clickable
+from BOTH the pause menu (Esc→pause) and the new backtick UI mode. (2) A new desktop **"UI mode"** on
+the `` ` `` key releases the pointer lock WITHOUT opening the pause menu (`state.uiMode`), so the mouse
+is free to click DEBUG and the "Click to play" overlay is suppressed (state-driven). Clicking the game
+canvas re-locks and resumes; the resume click can't fire the rifle (mousedown gated on lock). Full
+flow: `memory/notes/pause-menu.md` + `input-mouselook.md`. Guard: `check-debug-menu.mjs` section 6.
+
+
 **2026-07-12 (VRmike) upgrades:** (a) the menu now **starts COLLAPSED** — only the small
 `DEBUG ▸` button shows top-left; the panel opens on click (`_buildDom` sets `_collapsed=true`
 and hides `#dbgPanel`). (b) A new **"Colliders" toggle** (`_toggleColliders`) drives a new

@@ -56,3 +56,17 @@ just add `pointer-events:none` to the overlay — it needs to *receive* the clic
   left-click primary) are unchanged by this fix.
 - The stale `client/` copy of `input.js` is dead code (served root is the repo
   root) — don't sync fixes into it; it's awaiting `git rm`.
+
+## Desktop "UI mode" (backtick `) — mid-game debug/UI access (2026-07-12, Jie)
+
+Third input state so a PC player can reach the DEBUG menu without the pointer lock trapping the
+mouse. Full flow in `memory/notes/pause-menu.md`. Input-layer contract only, here:
+- `input.js` fires `onToggleUiMode` on the ` (Backquote) key, handled FIRST (before the pointer-lock
+  action gate, like Ctrl+E) so it works while unlocked too. `onRequestPause` fires on Esc **only while
+  `!this.locked`** (UI mode) — a LOCKED Esc still goes through the browser's native pointer-lock
+  release, so that path is unchanged and never double-handled.
+- Both are gated by `input._isTyping()` (INPUT/TEXTAREA focus) so a backtick in a name/room field is a
+  plain character (we return WITHOUT preventDefault) — and both are no-ops on touch.
+- The overlay decision moved to `js/main.js` and is now STATE-DRIVEN off `state.uiMode`/`state.paused`
+  (not the event that fired) — see the pause-menu note. `main.js` owns the `uiMode` flag; `input.js`
+  only reports the key + the lock state.
