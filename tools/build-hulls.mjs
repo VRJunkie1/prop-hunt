@@ -238,8 +238,11 @@ const report = { hulled: [], excluded: [], skippedRound: [], unverifiable: [] };
 function bake(catalogName, type, c) {
   if (type.startsWith('_') || !c || !c.model) return;
   if (c.arch) return; // architecture (floors/walls) stays a cuboid — a box IS right there
-  // Round primitives keep their shape (a cylinder/ball hugs better than a faceted hull).
-  if (c.shape !== 'box') { report.skippedRound.push({ type, shape: c.shape, from: catalogName }); return; }
+  // ROUND primitives are hulled too (change 2026-07-13, VRmike): the original bake kept
+  // cylinder/ball/cone props on their hand-authored primitives on the theory a round shape
+  // "hugs better than a faceted hull" — in practice the authored dims were guesses and fit
+  // badly (plates wearing oversized cylinders), while the 260-direction hull sampler hugs
+  // round meshes tightly. Now EVERY model-bearing, non-arch prop gets a hull.
   const scale = typeof c.modelScale === 'number' ? c.modelScale : mapScale;
   const file = join(root, 'assets', c.model);
   if (!existsSync(file)) { report.unverifiable.push({ type, model: c.model, why: 'file missing' }); return; }
@@ -338,7 +341,7 @@ if (report.excluded.length) {
 }
 console.log(`\nHULLED ${report.hulled.length} type(s):`);
 for (const h of report.hulled) console.log(`    ${h.type.padEnd(16)} ${String(h.pts).padStart(3)} pts   world ${h.worldSize}   (${h.from})`);
-console.log(`\nKEPT ROUND PRIMITIVE ${report.skippedRound.length} type(s): ${report.skippedRound.map((r) => r.type).join(', ')}`);
+if (report.skippedRound.length) console.log(`\nKEPT ROUND PRIMITIVE ${report.skippedRound.length} type(s): ${report.skippedRound.map((r) => r.type).join(', ')}`);
 if (report.unverifiable.length) {
   console.log(`\nUNVERIFIABLE ${report.unverifiable.length} (kept on primitive):`);
   for (const u of report.unverifiable) console.log(`    - ${u.type} (${u.model || '?'}): ${u.why}`);
