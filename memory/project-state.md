@@ -8,6 +8,44 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: HITBOX ACCURACY FIX — disguise-shaped shot sensor + collider/visual audit (2026-07-13, Jie, branch build/69-hitbox-accuracy-fix-requested). ALL headless guards GREEN incl. a NEW live-Rapier combat section; page boots clean. Owes a live playtest (disguise as a table, shoot the corners; check ?debug=1 orange wires).
+
+Problem (Jie): shots tested against physics primitives that didn't match the visible models — worst for
+disguised players, who registered hits ONLY on their movement capsule (a person-shaped capsule squeezed
+into the disguise footprint), so shots at a table disguise's visible corners whiffed and shots ABOVE a
+low disguise (where the tall capsule pokes over) hit empty air. FOUR parts, all shipped:
+
+1. **Disguise-shaped SHOT SENSOR** (`shared/physics.js`). Every player now carries a second collider on
+   the SAME kinematic body: a `setSensor(true)` shot-only shape built from the SAME `shapeFor()` the real
+   prop uses (cuboid/cylinder/ball/cone from catalog dims), based at the foot like the drawn disguise;
+   capsule-matching when undisguised. `setShotCollider(id,type)` / `setShotColliderYaw(id,yaw)` build/keep
+   it in sync; the HOST referee calls them on disguise/undisguise/morph/join and every tick (yaw←dispYaw).
+   The MOVEMENT capsule (`setPlayerCollider`) is UNTOUCHED — the sensor never collides/pushes/depenetrates
+   (excluded from every EXCLUDE_SENSORS movement/projectPoint query). `raycastShot` now EXCLUDES all
+   movement capsules (predicate) so a player is hit ONLY through the sensor — no phantom hit above a short
+   disguise, no capsule+sensor double-hit (castRay returns one nearest anyway). `describeCollider` maps the
+   sensor → `{kind:'player',id}` (capsule kept as a fallback if a sensor fails to build). Host stays authoritative.
+2. **Collider↔visual audit** (`tools/check-collider-visual.mjs`, NEW). Parses every referenced GLB's true
+   native bbox directly from the GLB binary (same approach as measure-glbs/check-hunter-model-size, no
+   Three, no deps), computes the RENDERED size via `bounds.meshSize` (native × map.modelScale 0.75, or
+   modelDims), and fails any entry whose collider UNDER-covers the visual (>5 cm AND >8%). Found 31
+   offenders → fixed in props.json/fixtures.json (see note). Round colliders' horizontal is inscribed by
+   design (reported); their height is asserted.
+3. **Debug visibility** (`js/scene.js`). The ?debug=1 / debug-menu collider overlay now ALSO draws each
+   player's SHOT hitbox — the disguise-shaped sensor — as an ORANGE wire (`_addPlayerShotWire`), distinct
+   from the GREEN movement-capsule wire, parented to the (yawed) player mesh. Mismatches are now visible.
+4. **Verify** (`tools/check-combat.mjs` section G, NEW — live Rapier). Fires rays at a table disguise's
+   corner/edge (hit=player), just outside + above the low silhouette (miss), a rotated-45° corner (hit —
+   yaw tracking), and post-undisguise (sensor tracks the current shape). Damage-vs-current-disguise stays
+   proven in section E. Rapier added to devDependencies (pinned 0.14.0) so the live sections run in CI/sandbox.
+
+Regression sweep GREEN: check-physics, check-physics-solidity, check-physics-live (depenetration failsafe +
+disguise-capsule sizing byte-identical — only shots changed, not how bodies move), check-combat, check-debug-menu,
+check-disguise-eligibility, check-blindfold. Finding: `asset-dims.json` is STALE vs the current GLBs (e.g.
+fridge depth 1.51→ actually 2.24 native), so the old fridge collider under-covered the real model by 0.55 m —
+the fresh-parse audit caught what the stale-data check-physics missed. asset-dims.json left as-is (not
+consumed at runtime; regenerating would clobber its curated notes) — see notes/asset-dims.md follow-up.
+
 ## Latest: DEBUG MENU ACCESS ON PC MID-GAME — desktop "UI mode" on backtick (2026-07-12, Jie, branch build/67-debug-menu-access-on). All headless guards GREEN + page boots clean (zero console errors). Owes a live desktop pass (pointer-lock behaviour can't be seen headless).
 
 Problem (Jie): on desktop the pointer lock trapped the mouse so the top-left DEBUG button couldn't

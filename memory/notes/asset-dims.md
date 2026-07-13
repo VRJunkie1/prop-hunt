@@ -60,6 +60,36 @@ one attach reaches all three. No parallel path.
 everywhere → every `||` falls through to the exact pre-seam path. **Byte-for-byte
 the prior build; zero regression.** Verified by inspection, not runtime (headless).
 
+## 2026-07-13 (HITBOX ACCURACY) — the seam is DORMANT + asset-dims.json is STALE
+
+Two facts a future session needs before trusting `asset-dims.json`:
+
+- **The `measured` seam is dormant (key-shape mismatch).** `config.js` reads `assetDims.dims`
+  (type-keyed `{diner_chair:{w,h,d}}`), but the shipped `asset-dims.json` is keyed by **GLB path**
+  (`"restaurant/door.glb":{w,h,d}`) — the output shape of `tools/measure-glbs.mjs` — with NO `dims`
+  wrapper. So `assetDims.dims` is `undefined`, `c.measured` is never attached, and the game uses the
+  **primitive footprints** in props.json/fixtures.json for BOTH colliders and (via `native × modelScale`)
+  meshes. (Same fact physics.md pass #3-relaunch recorded.) Net: the primitive `w/h/d/r` ARE the shipping
+  hitbox sizes — which is why the hitbox audit fixes them there, not in asset-dims.json.
+- **asset-dims.json values are STALE vs the current GLBs.** Some GLBs were re-fetched/replaced after the
+  file was generated, so a few entries are wrong (measured `fridge.glb` depth 1.51 → the current GLB is
+  ~2.24 native). `tools/check-physics.mjs` trusts asset-dims for "mesh size", so it verified the old
+  fridge collider (1.13 d) against a stale 1.13 mesh and passed — while the REAL rendered fridge is 1.68
+  deep, a 0.55 m shoot-through gap. `tools/check-collider-visual.mjs` (NEW) parses the GLBs FRESH, so it
+  is the accurate collider↔visual check; it caught this.
+- **modelScale overrides modelSize for restaurant.** `scene.instantiateModel` prefers a numeric `scale`
+  (= per-entry `modelScale` ?? map `modelScale` 0.75) over the fit-to-`target` path, so a per-entry
+  `modelSize` is IGNORED whenever the map sets `modelScale` (every restaurant model). Several small food
+  garnishes therefore render at `native × 0.75` (much larger than their intended `modelSize`), and the
+  hitbox fixes widened their colliders to match. FOLLOW-UP (out of scope here, visual not hitbox): if the
+  giant garnishes look wrong, give them a per-entry `modelScale` (or make `modelSize` win over map scale
+  in scene.js + bounds.js together) so BOTH visual and collider shrink to the intended size.
+
+**Recommendation:** regenerate `asset-dims.json` via `node tools/measure-glbs.mjs` to un-stale it — but
+that tool overwrites the curated `_derivation`/`_kits` header, so re-add those notes after, and re-run
+`check-physics.mjs` (some entries verify against bigger meshes then). Deferred this build (asset-dims is
+not consumed at runtime; the fresh-parse audit already gates accuracy).
+
 ## When you populate it
 
 - A **round** item that genuinely needs a cylinder/cone collider (barrel, ball,

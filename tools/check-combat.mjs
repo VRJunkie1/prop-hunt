@@ -287,6 +287,96 @@ console.log('\nF) rapid-fire config');
 }
 
 // ---------------------------------------------------------------------------
+// G) DISGUISE-SHAPED SHOT SENSOR — LIVE raycast against the REAL PhysicsWorld (HITBOX
+//    ACCURACY, 2026-07). A disguised player is shot on a disguise-shaped SENSOR matched to the
+//    prop primitive (not the movement capsule). Fire rays at the EDGES of a table disguise and
+//    assert player hits; fire just OUTSIDE and above the low silhouette and assert misses. Needs
+//    Rapier (WASM): if it's not installed the section SKIPs (never fails a build it can't run).
+// ---------------------------------------------------------------------------
+console.log('\nG) disguise-shaped shot sensor (live Rapier raycast)');
+let RAPIER = null;
+try { RAPIER = (await import('@dimforge/rapier3d-compat')).default; } catch { /* not installed */ }
+if (!RAPIER) {
+  console.log('  … SKIP: @dimforge/rapier3d-compat not installed (run `npm install`, or `npm i --no-save @dimforge/rapier3d-compat@0.14.0`). Sensor geometry unverified this run.');
+} else {
+  await RAPIER.init();
+  const { PhysicsWorld } = await import('../shared/physics.js');
+  // A plain arena; a box "table" disguise (2.25 × 0.75 × 1.5, like kitchen_table) at the origin.
+  const map = { size: 40, fixtures: [] };
+  const TABLE = { shape: 'box', w: 2.25, h: 0.75, d: 1.5 };
+  const cat = { table: TABLE };
+  const world = new PhysicsWorld(RAPIER, map, [], cat, { dynamicProps: true, rules, feel: {} });
+  world.addPlayer('P', { x: 0, y: 0, z: 0 });     // the (soon-to-be) disguised prop-player
+  world.setPlayerCollider('P', 'table');           // movement capsule grows (capped) — UNCHANGED behaviour
+  world.setShotCollider('P', 'table');             // NEW: disguise-shaped shot sensor
+  world.step(1 / 60);                              // let the kinematic body settle its transform
+
+  // Footprint half-extents (axis-aligned, dispYaw = 0): x∈[-1.125,1.125], y∈[0,0.75], z∈[-0.75,0.75].
+  const HW = TABLE.w / 2, HD = TABLE.d / 2, TOP = TABLE.h;
+  // Cast straight DOWN from above a point; returns the classified hit (or null).
+  const shootDown = (x, z, fromY = 5) => world.raycastShot('HUNTER', { x, y: fromY, z }, { x: 0, y: -1, z: 0 }, 20);
+  // Cast horizontally along +x through the player's column at height y.
+  const shootAcross = (y) => world.raycastShot('HUNTER', { x: -6, y, z: 0 }, { x: 1, y: 0, z: 0 }, 40);
+
+  const cornerNear = shootDown(HW - 0.06, HD - 0.06); // just INSIDE a table corner (visible surface)
+  ok(cornerNear && cornerNear.info && cornerNear.info.kind === 'player' && cornerNear.info.id === 'P',
+    `a ray at the table CORNER registers on the player (kind=${cornerNear ? cornerNear.info.kind : 'miss'})`);
+
+  const edgeMid = shootDown(HW - 0.06, 0); // middle of a long edge
+  ok(edgeMid && edgeMid.info && edgeMid.info.kind === 'player',
+    `a ray at the table EDGE registers on the player (kind=${edgeMid ? edgeMid.info.kind : 'miss'})`);
+
+  const outside = shootDown(HW + 0.4, 0); // just OUTSIDE the footprint (and outside the fat capsule)
+  ok(!(outside && outside.info && outside.info.kind === 'player'),
+    `a ray just OUTSIDE the table footprint MISSES the player (kind=${outside ? outside.info.kind : 'clean miss'})`);
+
+  // The tall movement capsule (≈1.8 m) pokes far above the 0.75 m table — a ray at 1.4 m through
+  // the player's column must NOT register a phantom hit above the visible disguise. This is the
+  // core WYSIWYG guarantee (capsule excluded from the shot ray).
+  const aboveTop = shootAcross(1.4);
+  ok(!(aboveTop && aboveTop.info && aboveTop.info.kind === 'player'),
+    `a ray ABOVE the low disguise (y=1.4, capsule height ≈1.8) does NOT phantom-hit the player (kind=${aboveTop ? aboveTop.info.kind : 'clean miss'})`);
+
+  // A ray THROUGH the table's actual height (y=0.4) does register.
+  const throughBody = shootAcross(0.4);
+  ok(throughBody && throughBody.info && throughBody.info.kind === 'player',
+    `a ray through the disguise body (y=0.4) registers on the player (kind=${throughBody ? throughBody.info.kind : 'miss'})`);
+
+  // No double-hit: castRay returns the single nearest collider, and every movement capsule is
+  // excluded — so a corner hit is via the SENSOR, and there is exactly one player collider in
+  // the returned hit. (Structural: one ray → one hit; asserted implicitly by the single kind above.)
+
+  // ROTATION: a point just beyond the AXIS-ALIGNED footprint in +z (z=0.95 > HD=0.75) misses;
+  // after yawing the disguise 45° the same point falls inside the rotated table and registers —
+  // proving the sensor tracks dispYaw so a turned table is shot at its TRUE corners.
+  const beyondZ = shootDown(0, 0.95);
+  ok(!(beyondZ && beyondZ.info && beyondZ.info.kind === 'player'),
+    `(axis-aligned) a ray beyond the table's +z edge misses (kind=${beyondZ ? beyondZ.info.kind : 'clean miss'})`);
+  world.setShotColliderYaw('P', Math.PI / 4); // turn the disguise 45°
+  world.step(1 / 60);
+  const rotatedIn = shootDown(0, 0.95);
+  ok(rotatedIn && rotatedIn.info && rotatedIn.info.kind === 'player',
+    `(rotated 45°) the SAME point now registers on the player — the sensor tracks dispYaw (kind=${rotatedIn ? rotatedIn.info.kind : 'miss'})`);
+  world.setShotColliderYaw('P', 0); // restore axis-aligned for the undisguise checks below
+  world.step(1 / 60);
+
+  // Damage multiplier keys off the CURRENT disguise even after a live re-shape: undisguise →
+  // the sensor becomes capsule-matching and the tall-capsule column is hit again at body height.
+  world.setPlayerCollider('P', null);
+  world.setShotCollider('P', null);
+  world.step(1 / 60);
+  const undisguisedTop = shootAcross(1.4); // now the capsule-matching sensor reaches up to ≈1.8
+  ok(undisguisedTop && undisguisedTop.info && undisguisedTop.info.kind === 'player',
+    `after UNDISGUISE, the capsule-matching sensor is hit at body height (y=1.4) — sensor tracks the CURRENT shape`);
+  const undisguisedWide = shootDown(HW - 0.06, 0); // the old table corner is now empty air
+  ok(!(undisguisedWide && undisguisedWide.info && undisguisedWide.info.kind === 'player'),
+    `after UNDISGUISE, the former table footprint no longer registers (sensor shrank with the disguise)`);
+
+  world.destroy();
+  console.log('  (damage multiplier vs CURRENT disguise is proven end-to-end in section E above.)');
+}
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\ncombat check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

@@ -54,6 +54,10 @@ so this started from the last-good commit (8e28bc3) with a clean tree.
   classifies the hit via handle→entity maps built at world construction:
   `_propHandleToId` (props), `_staticFixtureTypeByHandle` (map fixtures by type), players by
   live collider handle, else `world` (ground/boundary walls = free-miss architecture).
+  **HITBOX ACCURACY (2026-07-13):** a player is hit through a disguise-shaped SHOT SENSOR, not
+  the movement capsule — `raycastShot` excludes movement capsules so shots match the visible
+  disguise (corners hit; no phantom hit above a low disguise; no double-hit). See
+  `notes/hitbox-accuracy.md`.
 - Everyone sees the shot: host broadcasts `EVENT kind:'shot' {by, o*, i*, hit}` (muzzle o*,
   impact i*); `scene.spawnTracer` draws a cylinder tracer + a muzzle-flash sphere,
   `scene.updateEffects` fades/retires them (~0.12 s). No physics world (2D fallback) => a

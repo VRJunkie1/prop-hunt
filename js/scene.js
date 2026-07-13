@@ -586,11 +586,14 @@ export class Scene3D {
           animVel: null,
           disguiseType: p.disguise || null, // for the debug player-capsule collider wire
           colliderWire: null,
+          shotWire: null, // the ?debug=1 SHOT-hitbox (disguise sensor) outline
         };
         this.players.set(p.id, entry);
       }
-      // Debug collider view: attach a capsule wire to a new/rebuilt player entry.
+      // Debug collider view: attach the movement-capsule wire AND the shot-hitbox wire to a
+      // new/rebuilt player entry (a disguise change rebuilds the entry, so both re-attach).
       if (this._colliderViewOn && !entry.colliderWire) this._addPlayerColliderWire(entry);
+      if (this._colliderViewOn && !entry.shotWire) this._addPlayerShotWire(entry);
       // Derive velocity from this snapshot's displacement BEFORE overwriting target
       // (target still holds the previous snapshot's pose). Smoothed to damp net jitter.
       if (entry.hunterCtl) {
@@ -1410,8 +1413,12 @@ export class Scene3D {
         if (w) this._colliderWires.push({ obj: w, parent: rec.container });
       }
     }
-    // Every player CAPSULE (new geometry, sized from the same collider source physics uses).
-    for (const entry of this.players.values()) this._addPlayerColliderWire(entry);
+    // Every player CAPSULE (movement collider, green) + SHOT hitbox (disguise sensor, orange),
+    // sized from the same collider sources physics uses (halfExtentsFor / _capsuleDimsFor).
+    for (const entry of this.players.values()) {
+      this._addPlayerColliderWire(entry);
+      this._addPlayerShotWire(entry);
+    }
   }
 
   _clearColliderView() {
@@ -1420,7 +1427,8 @@ export class Scene3D {
     this._colliderWires = [];
     for (const entry of this.players.values()) {
       if (entry.colliderWire && entry.mesh) entry.mesh.remove(entry.colliderWire);
-      if (entry) entry.colliderWire = null;
+      if (entry.shotWire && entry.mesh) entry.mesh.remove(entry.shotWire);
+      if (entry) { entry.colliderWire = null; entry.shotWire = null; }
     }
   }
 
@@ -1448,6 +1456,36 @@ export class Scene3D {
     w.position.y = centerY - (entry.mesh.userData.baseY || 0);
     entry.mesh.add(w);
     entry.colliderWire = w;
+  }
+
+  // SHOT-hitbox wire (ORANGE, distinct from the green movement-capsule wire) — draws the exact
+  // shape the authoritative shot raycast tests: a disguised player's disguise-shaped SENSOR
+  // (physics.setShotCollider builds it from the SAME halfExtentsFor footprint), or a capsule-
+  // matching box when undisguised. Parented to the player mesh so it tracks position AND the
+  // disguise's yaw (the mesh is turned to dispYaw), making a collider/visual mismatch obvious
+  // at a glance in ?debug=1. New geometry — the old overlay only drew the movement capsule.
+  _addPlayerShotWire(entry) {
+    if (!entry || !entry.mesh || entry.shotWire) return;
+    const rules = this.rules || {};
+    const baseR = rules.playerRadius != null ? rules.playerRadius : 0.4;
+    const halfCyl = rules.playerHalfHeight != null ? rules.playerHalfHeight : 0.5;
+    const baseY = entry.mesh.userData.baseY || 0;
+    const type = entry.disguiseType;
+    let w, h, d, centerAboveFoot;
+    if (type && this.catalog && this.catalog[type]) {
+      const he = halfExtentsFor(this.catalog[type]);
+      w = he.hx * 2; h = he.hy * 2; d = he.hz * 2;
+      centerAboveFoot = he.hy; // disguise base rests on the foot; centre halfH above it
+    } else {
+      // Capsule-matching sensor (undisguised): a box hugging the base movement capsule.
+      w = d = baseR * 2;
+      h = 2 * (baseR + halfCyl);
+      centerAboveFoot = baseR + halfCyl;
+    }
+    const wire = this._wireBox(w, h, d, 0xff8c1a);
+    wire.position.y = centerAboveFoot - baseY;
+    entry.mesh.add(wire);
+    entry.shotWire = wire;
   }
 
   // ---- debug menu: free cam (?debug=1) --------------------------------------

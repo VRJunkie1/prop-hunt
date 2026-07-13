@@ -545,6 +545,13 @@ export class PhysicsWorld {
     this.players.set(id, {
       body, collider, vy: 0, grounded: false,
       radius: this._pRadius, half: this._pHalf, disguiseType: null,
+      // HITBOX ACCURACY (2026-07). shotCollider is a SHOT-ONLY sensor attached to this same
+      // kinematic body: it is the shape a bullet ray tests against (disguise-shaped when
+      // disguised, capsule-matching when not), and it NEVER collides/pushes/blocks (a sensor,
+      // excluded from every movement/depenetration query). Built + kept in sync by the host
+      // referee via setShotCollider/setShotColliderYaw. Distinct from `collider` (the movement
+      // capsule) so "what you SEE is what you SHOOT" without disturbing how bodies MOVE.
+      shotCollider: null, shotDisguiseType: undefined,
       input: { mx: 0, mz: 0, yaw: 0, jump: false },
       safePos: { x: t0.x, y: t0.y, z: t0.z },
     });
@@ -640,6 +647,64 @@ export class PhysicsWorld {
     p.disguiseType = type;
   }
 
+  // HITBOX ACCURACY (2026-07). Build the SHOT-ONLY sensor ColliderDesc for a player wearing
+  // `disguiseType` (or a capsule matching the base body when null). Disguised => the SAME
+  // primitive shapeFor() gives the real prop of that type (cuboid/cylinder/ball/cone from
+  // catalog/measured dims), positioned so its BASE rests on the player's foot exactly like
+  // the drawn disguise mesh (scene.meshForPlayer rests a disguise flush at y=0). Not disguised
+  // => a capsule matching the movement body, centred on it. Always flagged setSensor(true):
+  // shots pass through it (it can be ray-hit) but it produces no contact forces and is excluded
+  // from every movement/depenetration query (all of which pass EXCLUDE_SENSORS), so it can
+  // never block/push/bump a body or another player.
+  _buildShotColliderDesc(disguiseType) {
+    const R = this.R;
+    const c = disguiseType && this.catalog[disguiseType];
+    let desc;
+    if (c) {
+      const s = shapeFor(R, c);
+      desc = s.desc;
+      // Body origin sits _pCenterY above the foot; the disguise's centre sits halfH above it.
+      desc.setTranslation(0, s.halfH - this._pCenterY, 0);
+    } else {
+      desc = R.ColliderDesc.capsule(this._pHalf, this._pRadius);
+    }
+    desc.setSensor(true);
+    return desc;
+  }
+
+  // Attach / replace a player's shot sensor for their current disguise (or null = base
+  // capsule shape). Called by the HOST referee on every disguise change and undisguise (and
+  // once per player when they enter the physics world) so the authoritative shot raycast
+  // always tests the shape the player currently LOOKS like. The client prediction world never
+  // raycasts shots, so it never needs this — kept host-only to stay lean. Total body height /
+  // movement capsule are untouched (only this extra sensor changes). No-op if unchanged.
+  setShotCollider(id, disguiseType) {
+    const p = this.players.get(id);
+    if (!p) return;
+    const type = disguiseType || null;
+    if (p.shotCollider && p.shotDisguiseType === type) return; // unchanged — skip the rebuild
+    if (p.shotCollider && this.world.removeCollider) this.world.removeCollider(p.shotCollider, false);
+    try {
+      p.shotCollider = this.world.createCollider(this._buildShotColliderDesc(type), p.body);
+    } catch {
+      p.shotCollider = null; // API gap: leave no sensor — describeCollider/raycast fall back to the capsule
+    }
+    p.shotDisguiseType = type;
+  }
+
+  // Yaw the shot sensor about +Y to track a disguise's visible facing (dispYaw), so a rotated
+  // box disguise (a table turned 45°) is shot-tested at its TRUE corners — the movement body
+  // is a symmetric capsule and carries no facing, so the sensor owns orientation. Cheap; the
+  // referee calls it each tick for disguised players (right after updateDisguiseRotation).
+  // Harmless on a round/undisguised sensor. Guarded across rapier-compat versions.
+  setShotColliderYaw(id, yaw) {
+    const p = this.players.get(id);
+    if (!p || !p.shotCollider) return;
+    const q = yawQuat(yaw || 0);
+    if (p.shotCollider.setRotationWrtParent) p.shotCollider.setRotationWrtParent(q);
+    else if (p.shotCollider.setRotation) p.shotCollider.setRotation(q);
+  }
+
   // Is the player capsule genuinely PENETRATING a solid collider right now? (Bug 2
   // depenetration.) Tests a SKIN-SHRUNK capsule so ordinary resting-on-a-surface
   // contact — which is what a grounded player has every frame — reads as clear; only a
@@ -726,10 +791,23 @@ export class PhysicsWorld {
     const shooter = this.players.get(shooterId);
     try {
       const ray = new R.Ray(origin, dir);
+      // Exclude every player's MOVEMENT CAPSULE from the shot: a player is hit only through
+      // their disguise-shaped SHOT SENSOR (built alongside the capsule), so shooting above a
+      // short disguise (the tall capsule pokes over a low table) can no longer register a
+      // phantom hit, and one bullet can never count twice (capsule + sensor). A player whose
+      // sensor failed to build keeps their capsule hittable (fallback) — only capsules paired
+      // with a live sensor are excluded. The shooter's own body (capsule AND sensor) is already
+      // excluded via filterExcludeRigidBody below.
+      const excludedCapsules = new Set();
+      for (const p of this.players.values()) {
+        if (p.collider && p.shotCollider) excludedCapsules.add(p.collider.handle);
+      }
+      const predicate = excludedCapsules.size ? (col) => !excludedCapsules.has(col.handle) : undefined;
       const hit = this.world.castRay(
         ray, maxToi, true, undefined, undefined,
         shooter ? shooter.collider : undefined,
-        shooter ? shooter.body : undefined
+        shooter ? shooter.body : undefined,
+        predicate
       );
       if (!hit) return null;
       const toi = hit.timeOfImpact != null ? hit.timeOfImpact : hit.toi;
@@ -751,6 +829,11 @@ export class PhysicsWorld {
     // rapier-compat versions.
     const h = typeof col === 'object' && col.handle != null ? col.handle : col;
     for (const [id, p] of this.players) {
+      // The disguise-shaped SHOT SENSOR is the primary player hit-test (what you SEE is what
+      // you SHOOT). The movement capsule is kept as a fallback classification for a player
+      // whose sensor failed to build — but the shot ray excludes capsules (see raycastShot),
+      // so in practice a player hit is always via the sensor.
+      if (p.shotCollider && p.shotCollider.handle === h) return { kind: 'player', id };
       if (p.collider && p.collider.handle === h) return { kind: 'player', id };
     }
     if (this._propHandleToId && this._propHandleToId.has(h)) return { kind: 'prop', id: this._propHandleToId.get(h) };

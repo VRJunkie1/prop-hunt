@@ -13,6 +13,13 @@ start/join a match. Every physics collider is drawn as a wireframe box **over** 
   including the thin-wall thickening the anti-tunnel pass applies.
 - **yellow** — each prop's collider, parented to the prop's container, so it **tracks the prop
   live** as it's shoved (a moving yellow box = a real dynamic body; the disguise-vs-prop tell).
+- **green** — each remote player's MOVEMENT capsule (walk/collision body).
+- **orange** — each remote player's SHOT hitbox (the disguise-shaped shot sensor a bullet tests
+  against; capsule-matching when undisguised). Added 2026-07-13 (hitbox accuracy). Parented to the
+  (yawed) player mesh, so a table disguise's orange box turns with it. If the orange box doesn't hug
+  the visible disguise model → that's a collider/visual mismatch (shots would whiff at the gap); the
+  headless `tools/check-collider-visual.mjs` gates the same thing. NOTE: wires are drawn for REMOTE
+  players only (self is first-person) — use the debug free cam to inspect your own.
 
 If a cyan/red box floats in open space with no mesh under it → that's an invisible wall. If a
 prop's mesh sits outside its yellow box → that's the ghost-prop misalignment. Both are now

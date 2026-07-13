@@ -30,13 +30,13 @@
   "stew_bowl": { "shape": "sphere", "r": 0.4, "color": "#b06a3a", "model": "restaurant/stew_bowl.glb" },
   "cutting_board": { "shape": "box", "w": 1.13, "h": 0.11, "d": 0.75, "color": "#c8a06a", "model": "restaurant/cutting_board.glb" },
   "burger": { "shape": "cylinder", "r": 0.36, "h": 0.64, "color": "#b5762e", "model": "restaurant/burger.glb" },
-  "veg_burger": { "shape": "cylinder", "r": 0.42, "h": 0.5, "color": "#8aa53a", "model": "restaurant/vegetable_burger.glb" },
+  "veg_burger": { "shape": "cylinder", "r": 0.42, "h": 0.64, "color": "#8aa53a", "model": "restaurant/vegetable_burger.glb" },
   "tomato": { "shape": "sphere", "r": 0.3, "color": "#d23b2e", "model": "restaurant/tomato.glb" },
   "lettuce": { "shape": "sphere", "r": 0.35, "color": "#5fae3f", "model": "restaurant/lettuce.glb" },
-  "cheese": { "shape": "box", "w": 0.6, "h": 0.4, "d": 0.6, "color": "#e6c24a", "model": "restaurant/cheese.glb" },
+  "cheese": { "shape": "box", "w": 0.74, "h": 0.4, "d": 0.6, "color": "#e6c24a", "model": "restaurant/cheese.glb" },
   "onion": { "shape": "sphere", "r": 0.3, "color": "#d9c9a3", "model": "restaurant/onion.glb" },
   "potato": { "shape": "sphere", "r": 0.28, "color": "#b98a52", "model": "restaurant/potato.glb" },
-  "carrot": { "shape": "cylinder", "r": 0.13, "h": 0.7, "color": "#e07a2e", "model": "restaurant/carrot.glb" },
+  "carrot": { "shape": "cylinder", "r": 0.13, "h": 0.95, "color": "#e07a2e", "model": "restaurant/carrot.glb" },
   "ketchup": { "shape": "cylinder", "r": 0.16, "h": 0.6, "color": "#c62a1f", "model": "restaurant/ketchup.glb" },
   "mustard": { "shape": "cylinder", "r": 0.16, "h": 0.6, "color": "#e2b53a", "model": "restaurant/mustard_bottle.glb" }
 }

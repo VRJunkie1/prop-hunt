@@ -228,6 +228,14 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   own capsule excluded) and `physics.describeCollider` classifies the hit
   (player / prop / static-fixture-by-type / world) via handle→entity maps built at world
   construction. Everyone sees the tracer via `EVENT kind:'shot'` → `scene.spawnTracer`.
+  **HITBOX ACCURACY (2026-07-13):** a player is hit through a disguise-shaped SHOT SENSOR
+  (`physics.setShotCollider`, the same `shapeFor()` primitive the real prop uses), NOT the
+  movement capsule — `raycastShot` excludes every movement capsule so "what you see is what
+  you shoot" (a table disguise's corners hit; the tall capsule over a low disguise can't
+  phantom-hit; no capsule+sensor double-hit). The sensor is a `setSensor(true)` collider on
+  the same kinematic body, host-wired on disguise/undisguise + yaw-tracked to `dispYaw`, and
+  is excluded from ALL movement/depenetration queries (movement capsule + `setPlayerCollider`
+  unchanged). Full detail: `notes/hitbox-accuracy.md`.
 - **Health/damage lives entirely on the host** (`shared/referee.js`), sized from the SAME
   footprint physics uses. `shared/damage.js` (PURE) is the one size→multiplier source
   (`entrySize` via `physics.halfExtentsFor`, lerped over `rules.damage` anchors), imported by

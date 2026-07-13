@@ -4,8 +4,9 @@
   "description": "Skeleton multiplayer prop hunt — static site (Cloudflare Pages), P2P WebRTC between browsers via PeerJS's free public broker. No server, no build step.",
   "type": "module",
   "private": true,
-  "_devDependencies_note": "three is ONLY for the offline authoring checks under tools/ (e.g. check-hunter-model-size.mjs loads the real GLB with GLTFLoader and runs the SAME sizing code the game ships). The GAME never uses node_modules — it imports three from the CDN importmap in index.html. Pinned to the app's version (0.161.0) so the check matches what ships.",
+  "_devDependencies_note": "three + @dimforge/rapier3d-compat are ONLY for the offline authoring checks under tools/ (check-hunter-model-size.mjs loads the real GLB with GLTFLoader and runs the SAME sizing code the game ships; check-combat.mjs / check-physics-live.mjs stand up the REAL Rapier PhysicsWorld to verify shot hitboxes + collision). The GAME never uses node_modules — it imports three + Rapier from CDN at runtime. Both pinned to the app's versions (three 0.161.0, rapier 0.14.0) so the checks match what ships.",
   "devDependencies": {
-    "three": "0.161.0"
+    "three": "0.161.0",
+    "@dimforge/rapier3d-compat": "0.14.0"
   }
 }

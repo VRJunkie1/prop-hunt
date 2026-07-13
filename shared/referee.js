@@ -148,7 +148,13 @@ export class Referee {
     player.dispYaw = player.yaw;
     // If the world's physics is already up, give the newcomer a body immediately
     // (otherwise integrate() adds it on the next tick via the join-race guard).
-    if (this.physics) this.physics.addPlayer(player.id, player.pos);
+    if (this.physics) {
+      this.physics.addPlayer(player.id, player.pos);
+      // HITBOX ACCURACY: give the newcomer a shot sensor matching their current look
+      // (disguise-shaped if already disguised, capsule-matching otherwise) so bullets test
+      // against what they visibly are, not the raw movement capsule.
+      if (this.physics.setShotCollider) this.physics.setShotCollider(player.id, player.disguise || null);
+    }
 
     // Catch-up: with a knockable world, a late joiner must receive the CURRENT
     // position of every prop that has moved (resting or not), or they'd see kicked
@@ -252,6 +258,9 @@ export class Referee {
     if (r === ROLE.HUNTER) {
       player.disguise = null;
       if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, null);
+      // HITBOX ACCURACY: back to a capsule-matching shot sensor (undisguised hunter is shot
+      // on their body shape, no leftover disguise silhouette).
+      if (this.physics && this.physics.setShotCollider) this.physics.setShotCollider(player.id, null);
     }
     player.dispYaw = player.yaw;
     send(player, { t: S2C.ROLE, role: r });
@@ -280,6 +289,7 @@ export class Referee {
     if (!c) return; // not a real catalog type
     player.disguise = type;
     if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, type);
+    if (this.physics && this.physics.setShotCollider) this.physics.setShotCollider(player.id, type); // disguise-shaped shot sensor
     player.dispYaw = player.yaw;
     send(player, { t: S2C.EVENT, kind: 'disguised', type });
   }
@@ -326,6 +336,9 @@ export class Referee {
     // clipping into world props. Guarded — no-op on the 2D fallback (physics not up).
     // The disguised player's OWN client mirrors this on its prediction body (main.js).
     if (this.physics && this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, prop.type);
+    // HITBOX ACCURACY: swap the shot sensor to the disguise's shape so bullets now register on
+    // the visible prop silhouette (a table's corners, a chair's back), not the movement capsule.
+    if (this.physics && this.physics.setShotCollider) this.physics.setShotCollider(player.id, prop.type);
     // Lock the disguise's facing to the player's current look direction. From here
     // it stays fixed while they move (a real prop doesn't spin as it slides) UNLESS
     // right-click is held (rotUnlock), which lets them re-aim it on yaw only — never
@@ -688,6 +701,9 @@ export class Referee {
           // If a prop already disguised during the async WASM load (the match ran on the
           // 2D fallback meanwhile), size their capsule to it now (solidity pass #3).
           if (p.disguise) world.setPlayerCollider(p.id, p.disguise);
+          // HITBOX ACCURACY: attach every player's shot sensor (disguise-shaped or capsule-
+          // matching) so the authoritative shot raycast tests the visible shape from the start.
+          if (world.setShotCollider) world.setShotCollider(p.id, p.disguise || null);
         }
       }
       this.physics = world;
@@ -826,7 +842,14 @@ export class Referee {
     if (this.physics) {
       for (const p of this.players.values()) {
         if (!p.alive) continue;
-        if (!this.physics.hasPlayer(p.id)) this.physics.addPlayer(p.id, p.pos); // join race
+        if (!this.physics.hasPlayer(p.id)) {
+          this.physics.addPlayer(p.id, p.pos); // join race
+          if (this.physics.setShotCollider) this.physics.setShotCollider(p.id, p.disguise || null);
+        }
+        // HITBOX ACCURACY: keep a disguised player's shot sensor oriented to its visible facing
+        // (dispYaw, advanced above by updateDisguiseRotation) so a rotated box is hit at its
+        // true corners. No-op for round/undisguised sensors.
+        if (p.disguise && this.physics.setShotColliderYaw) this.physics.setShotColliderYaw(p.id, p.dispYaw);
         const frozen = p.role === ROLE.HUNTER && this.phase === PHASE.HIDING;
         this.physics.setPlayerInput(
           p.id,
