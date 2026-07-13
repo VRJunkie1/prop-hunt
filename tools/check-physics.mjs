@@ -58,6 +58,17 @@ const fixtures = cfg('fixtures.json');
 const rules = cfg('rules.json');
 const assetDims = cfg('asset-dims.json'); // native GLB bboxes, keyed by GLB path
 
+// CONVEX-HULL SEAM (mirror js/config.js): attach baked hulls so worldColliderBoxes/halfExtentsFor
+// see the shipping shape — the code-built walls/columns/archway + thin model panels are hulled and
+// no longer thickened, so this guard reflects the real engine (and the ?debug=1 AABB overlay).
+let hullDefs = {};
+try { hullDefs = (cfg('hulls.json').hulls) || {}; } catch { hullDefs = {}; }
+for (const [type, h] of Object.entries(hullDefs)) {
+  if (!h || !Array.isArray(h.v) || h.v.length < 12 || !h.aabb) continue;
+  if (props[type]) { props[type].hullVerts = h.v; props[type].hullAabb = h.aabb; }
+  if (fixtures[type]) { fixtures[type].hullVerts = h.v; fixtures[type].hullAabb = h.aabb; }
+}
+
 const TOL = 0.05; // 5 cm slack on every size comparison (rounding in the authored data)
 const playerRadius = rules.playerRadius ?? 0.4;
 const playerHalfHeight = rules.playerHalfHeight ?? 0.5;

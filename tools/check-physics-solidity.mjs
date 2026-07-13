@@ -19,9 +19,10 @@
 //      player to slide into. (Round colliders — cylinders/spheres — intentionally hug the
 //      body and are tighter than the GLB's square bbox; reported, not asserted.)
 //   B. WALL TUNNEL incl. the TOP FACE: every static box collider is at least as TALL as its
-//      mesh (no top-face gap to stand on nothing and fall through), and the anti-tunnel
-//      min wall thickness clears the player capsule radius (thin panels get thickened past
-//      the capsule so it can't pop through).
+//      mesh (no top-face gap to stand on nothing and fall through). Convex-hull round 3: a
+//      HULLED/measured static uses its mesh-hugging shape and is asserted NOT to exceed the
+//      mesh (no oversized floating box); the anti-tunnel min-wall-thickness grow is a fallback
+//      for any remaining un-hulled primitive thin panel and still clears the capsule radius.
 //   C. BELOW FLOOR: the ground slab's top sits exactly on the floor plane the engine clamps
 //      to (physics.FLOOR_Y), covers the whole arena, and is far thicker than one substep's
 //      fall — and the engine now clamps every player's foot to FLOOR_Y each substep, so a
@@ -53,6 +54,17 @@ const props = cfg('props.json');
 const fixtures = cfg('fixtures.json');
 const rules = cfg('rules.json');
 const assetDims = cfg('asset-dims.json'); // native GLB bboxes (build-time reference)
+
+// CONVEX-HULL SEAM (mirror js/config.js): attach each baked hull's verts/AABB onto its catalog
+// entry so halfExtentsFor() returns the HULL footprint (the shipping collider), exactly as the
+// engine sees it. Without this the guard would check the dormant primitive, not what's built.
+let hullDefs = {};
+try { hullDefs = (cfg('hulls.json').hulls) || {}; } catch { hullDefs = {}; }
+for (const [type, h] of Object.entries(hullDefs)) {
+  if (!h || !Array.isArray(h.v) || h.v.length < 12 || !h.aabb) continue;
+  if (props[type]) { props[type].hullVerts = h.v; props[type].hullAabb = h.aabb; }
+  if (fixtures[type]) { fixtures[type].hullVerts = h.v; fixtures[type].hullAabb = h.aabb; }
+}
 
 const TOL = 0.05; // 5 cm slack on every size comparison (rounding in the authored data)
 const SUBSTEP = 1 / 60; // physics fixed substep (physics.js _fixedDt)
@@ -181,13 +193,45 @@ for (const [mapId, map] of Object.entries(maps)) {
       unverified++;
       note(`B "${type}" (map ${mapId}): mesh height unverifiable (scaled GLB "${c.model}" not in asset-dims.json)`);
     }
-    // THICKENING: confirm pass-#3's grow still fires for thin wall panels (regression guard).
-    if (he.box) {
+    // OVER-COVERAGE / THICKENING (convex-hull round 3, 2026-07-13, VRmike). The engine only
+    // applies the anti-tunnel grow to a primitive box that has NO true render-derived shape;
+    // a HULLED (or measured) fixture uses its mesh-hugging shape as-is (physics.js _buildStatic
+    // hasTrueShape gate). Mirror that decision here:
+    //   - hulled/measured  -> assert the collider does NOT exceed its mesh by more than TOL
+    //     (the "no oversized box floating outside the wall/archway" invariant VRmike asked for).
+    //   - un-hulled box     -> the thin-panel grow still fires (kept as defense-in-depth); assert
+    //     it clears the capsule radius, as pass #3 required.
+    const hulled = !!(c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0);
+    const measured = !!(c.measured && c.measured.w > 0 && c.measured.h > 0 && c.measured.d > 0);
+    if (c.floor) {
+      note(`B "${type}" (map ${mapId}): floor piece — collider is a thick-DOWNWARD anti-tunnel slab with the visible top flush; downward extension is below the floor (invisible), not an over-coverage of the visible geometry.`);
+    } else if (hulled || measured) {
+      // A hulled/measured static uses its true shape — the engine's hasTrueShape gate skips the
+      // anti-tunnel grow, so this collider is NEVER thickened. Assert over-coverage only where the
+      // mesh reference is EXACT: a code-built box (raw w/h/d = the drawn BoxGeometry) or a
+      // modelDims override. For a scaled GLB the only reference here is asset-dims.json, which can
+      // be STALE (it is not consumed at runtime — hulls supersede it); its over-coverage is
+      // verified against the FRESH GLB by check-collider-visual and LIVE by check-true-colliders.
+      const exactRef = !c.model || (c.modelDims && c.modelDims.w > 0 && c.modelDims.h > 0 && c.modelDims.d > 0);
+      if (exactRef && mesh) {
+        const overW = 2 * he.hx - mesh.w, overH = 2 * he.hy - mesh.h, overD = 2 * he.hz - mesh.d;
+        ok(
+          overW <= TOL && overH <= TOL && overD <= TOL,
+          `B "${type}" ${hulled ? 'hull' : 'measured'} collider hugs its mesh — no over-coverage > ${TOL}m ` +
+            `(over w:${overW.toFixed(2)} h:${overH.toFixed(2)} d:${overD.toFixed(2)}) — no floating oversized box`
+        );
+      } else {
+        note(`B "${type}" (map ${mapId}): hulled — not thickened (uses its mesh-hugging hull); over-coverage verified against the fresh GLB (check-collider-visual) + live engine (check-true-colliders).`);
+      }
+    } else if (he.box) {
+      // FALLBACK: only a genuinely un-hulled, un-measured primitive box thin panel still gets the
+      // anti-tunnel grow (defense-in-depth for any future un-hulled wall). With round 3, every
+      // shipped static panel is hulled, so this branch should not fire on the current maps.
       const g = thickenWallHalfExtents(he.hx, he.hz, minWallHalf);
       if (g.grew) {
         ok(
           Math.min(g.hx, g.hz) >= minWallHalf - 1e-9,
-          `B "${type}" thin wall panel thickened to >= ${minWallHalf} half (${g.hx.toFixed(2)}×${g.hz.toFixed(2)}) — no fast-jump tunnel`
+          `B "${type}" un-hulled thin wall panel thickened to >= ${minWallHalf} half (${g.hx.toFixed(2)}×${g.hz.toFixed(2)}) — no fast-jump tunnel`
         );
       }
     }

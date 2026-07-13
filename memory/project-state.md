@@ -8,6 +8,44 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: CONVEX HULLS FOR EVERYTHING — round 3 (2026-07-13, VRmike, branch build/94-convex-hulls-for-everything). Hull the CODE-BUILT architecture (white walls, columns, archway) that round 2 skipped. ALL headless guards GREEN + page boots clean (0 console errors, ?debug=1). Owes a live True-collider eyeball. FULL DETAIL: `notes/convex-hull-colliders.md` (ROUND 3 section).
+
+Round 2 (`600ddcf`) hulled every MODEL-bearing prop but skipped `arch` + code-built (model-less)
+geometry, so VRmike's debug screenshots still showed loose boxes floating outside the walls /
+columns / archway. Round 3 makes it truly everything.
+- **Two sources of the oversized boxes, both fixed:** (a) the arch pieces (`kitchen_wall`,
+  `wall_post`, `wall_header`) were model-less box primitives the hull bake skipped; (b)
+  `_buildStatic`'s anti-tunnel thin-wall THICKENING grew `wall_header`/`kitchen_wall`/`door`/
+  `shelf` to 1.2 m deep around a 0.4–0.58 m mesh — the floating boxes.
+- **`tools/build-hulls.mjs`** drops the `arch` skip + adds a `bakeBox` path: a model-less box is
+  hulled from the SAME `w/h/d` the renderer draws (`BoxGeometry`), so the hull can't drift (plan
+  step 2 — no separate geometry module needed for a plain box). 94 hull types (was ~89): +arch
+  +`crate`/`chair`. Safety scan still "all pieces, no room shells."
+- **`shared/physics.js` + `shared/bounds.js`** gate the thickening behind `hasTrueShape` (hull or
+  measured) → hulled panels use their mesh-hugging shape, no oversizing. Tunnel safety kept
+  without growth: panels are backed by boundary walls / high lintels + swept controller + CCD +
+  depenetration + floor clamp. bounds.js mirrors the gate so the `?debug=1` AABB overlay +
+  check-physics agree with the engine.
+- **Two documented exceptions** (reported by the checks, not silent): `floor_kitchen` (thick-down
+  slab, visible top flush) + round primitives (`canister`). Arch flags UNTOUCHED → walls stay
+  non-disguisable (plan step 6).
+- **Verify (Rapier installed dev-only):** `check-true-colliders.mjs` NEW live-restaurant coverage
+  section reports **92/92 box-collidable types on hulls, 0 over-coverage**, 2 documented
+  exceptions. `check-collider-visual` (all 94 hull AABBs == render), `check-physics`,
+  `check-physics-solidity`, `check-physics-live`, `check-combat`, `check-disguise-eligibility`,
+  `check-debug-menu` all GREEN. Page boots clean.
+- **Files:** `tools/build-hulls.mjs`, `shared/config/hulls.json` (regenerated), `shared/physics.js`
+  (`_buildStatic` gate), `shared/bounds.js` (mirror gate), `tools/check-{true-colliders,
+  collider-visual,physics,physics-solidity}.mjs`, notes (`convex-hull-colliders.md`,
+  `physics.md`, `collider-debug.md`), this file. NO netcode/protocol/referee/render change; NO
+  disguise-rule change.
+- **Latent bug noted, not fixed (out of scope):** `asset-dims.json` is stale for a few appliances
+  (fridge native depth 1.51 vs GLB 2.24) AND `js/config.js` fetches it with a broken backslash
+  path — both inert at runtime (hulls supersede `measured`), so no gameplay impact.
+- **OWED — live pass:** True Colliders (magenta) — archway posts/beams, walls, columns hug the
+  visible geometry (no floating boxes); walk through the archway/doorways (no bouncing off empty
+  air), stand on floors, jump the divider (no tunnel), disguise + get hit.
+
 ## DEPLOY-ONLY SHIP: hull ALL model-bearing props `600ddcf` (2026-07-13, VRmike, branch build/92-deploy-only-no-code). NO code changed this session — a prior direct push failed on credentials, so this build re-runs delivery through the real pipeline. Gate re-run and GREEN in the deploy env: tree clean, HEAD == 600ddcf; full seven-check suite passed — check-true-colliders (89 baked hulls, 0 box fallbacks), check-physics-live, check-physics, check-physics-solidity, check-collider-visual (89 hull AABB == mesh, 0 under-coverage), check-disguise-eligibility, check-input-mode; headless desktop smoke clean (0 console errors, menu renders). The commit removes the round-primitive skip in `tools/build-hulls.mjs` so every model-bearing non-arch prop (incl. cylinder/ball/cone props: plates, pots, barrels) gets a convex hull from real mesh verts; `hulls.json` 49→89 entries; safety scan still "all pieces, no room shells" (0 exclusions). Push + Cloudflare Pages deploy + fresh pages.dev URL handled core-side after this branch fast-forwards to main. OWED: live feel-test — walking into tables/props should feel snug, not sticky (static checks can't judge feel). See `notes/convex-hull-colliders.md`.
 
 ## DEPLOY-ONLY SHIP: mobile input fix `59cbfac` (2026-07-13, VRmike, branch build/90-deploy-only-no-code). NO code changed this session — a prior direct push failed on credentials, so this build re-runs the delivery step through the real pipeline. Gate re-run and GREEN: tree clean (`git_diff HEAD` empty, HEAD == 59cbfac), `check-input-mode.mjs` 9/9 (incl. the stylus-phone regression case), headless smoke clean on desktop AND phone (0 console errors, lobby renders). The fix (`js/input.js`) classifies by PRIMARY pointer, not any-pointer: `(pointer: coarse)` ⇒ touch even with a secondary S-Pen/mouse; `(pointer: fine)`/hover ⇒ desktop. Fixes Samsung/stylus phones mis-wired as desktop (pointer-lock request impossible on mobile, dead touch controls under a stuck overlay). Push + Cloudflare Pages deploy + URL post are handled core-side after this branch fast-forwards to main. See INPUT-MODE FIX in `notes/touch-controls.md`.

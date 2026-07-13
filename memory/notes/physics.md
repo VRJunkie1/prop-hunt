@@ -3,6 +3,21 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-13 CONVEX HULLS FOR EVERYTHING — round 3 (VRmike, `build/94-convex-hulls-for-everything`)
+Round 2 skipped `arch` + code-built geometry; VRmike's debug screenshots showed oversized boxes
+floating outside the white walls / columns / archway. Round 3 hulls the code-built architecture
+too — EVERY collidable object now hugs its render geometry. `tools/build-hulls.mjs` bakes hulls for
+MODEL-LESS box entries (`kitchen_wall`/`wall_post`/`wall_header` + `crate`/`chair`) from their raw
+`w/h/d` (= the `BoxGeometry` the renderer draws — one source, no drift). The `_buildStatic`
+anti-tunnel thin-wall THICKENING is now gated behind `hasTrueShape` (hull/measured) → a hulled panel
+is NOT grown, so `wall_header`/`kitchen_wall`/`door`/`shelf` stop floating a 1.2 m box around a
+0.4–0.58 m mesh. Tunnel safety kept without oversizing (panels are backed by boundary walls or are
+high lintels; swept controller + CCD + depenetration + floor clamp remain). `shared/bounds.js`
+mirrors the gate (the `?debug=1` AABB overlay + `check-physics.mjs` now match the engine). Two
+documented exceptions: `floor_kitchen` (thick-down slab, top flush) + round primitives (`canister`).
+Arch flags untouched → walls stay non-disguisable. **FULL DETAIL: `notes/convex-hull-colliders.md`
+(ROUND 3 section).**
+
 ## 2026-07-13 CONVEX-HULL COLLIDERS for props & fixtures (VRmike — collider overhaul option 1)
 Model-bearing, non-`arch`, BOX-shaped props/fixtures now use a **convex hull baked from the
 model's real mesh vertices** (at final world scale) instead of a hand-guessed cuboid. It is the

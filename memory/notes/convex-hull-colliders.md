@@ -3,6 +3,68 @@
 Landed 2026-07-13 (`build/83-convex-hull-colliders-for`, VRmike). Read this before touching
 collider shapes, `shapeFor`, the hull bake, or the disguised-player collider.
 
+## ROUND 3 — "CONVEX HULLS FOR EVERYTHING" (2026-07-13, VRmike, `build/94-convex-hulls-for-everything`)
+Round 2 (below) hulled every MODEL-bearing prop/fixture but SKIPPED `arch` and any code-built
+(model-less) geometry. VRmike's debug screenshots showed big loose wireframe boxes floating
+outside the white walls / columns / archway. Round 3 hulls the code-built architecture too, so
+EVERY collidable object hugs its render geometry — no exceptions but two documented ones.
+
+**What changed:**
+- **`tools/build-hulls.mjs`** — dropped the `if (c.arch) return` skip; added a `bakeBox` path for
+  MODEL-LESS box entries. Their render mesh is `makePropMesh`'s raw `BoxGeometry(c.w,c.h,c.d)`, so
+  the hull is exactly the box's 8 corners from the SAME catalog `w/h/d` — drift-proof by
+  construction (plan step 2: for a plain box there is no separate geometry module to extract, the
+  dims ARE the single source). Now bakes `kitchen_wall`, `wall_post`, `wall_header` (arch) +
+  `crate`, `chair` (model-less disguise props). The room-shell/entombment safety scan still runs
+  (a single box is one island; only the room-scale test applies). **94 hull types** (was ~89).
+- **Two documented exceptions** (`hulls.json.scan.skippedFloor` / `skippedRound`, and reported by
+  the checks): **`floor_kitchen`** keeps its thick-DOWNWARD anti-tunnel slab (visible top flush;
+  the extension is BELOW the floor, invisible — not an oversized floating box); **round model-less
+  primitives** (`canister`, and the primitive-map `barrel`/`ball`/etc.) keep their true
+  cylinder/ball collider (hugs the drawn 16-gon tighter than a faceted hull — the round rule).
+- **`shared/physics.js` `_buildStatic`** — the anti-tunnel thin-wall THICKENING is now a FALLBACK,
+  gated behind a `hasTrueShape` check (has a baked hull OR measured bounds). A hulled panel uses
+  its mesh-hugging shape as-is → **no more oversized box** (this WAS the bug: `wall_header`/
+  `kitchen_wall`/`door`/`shelf` grew to 1.2 m deep around a 0.4–0.58 m mesh). Every shipped thin
+  panel is now hulled, so nothing thickens; the grow stays only for a future un-hulled primitive.
+  **Tunnel safety is preserved WITHOUT oversizing:** each un-thickened panel is backed by a
+  boundary wall (`kitchen_wall` x=±17.4 / `door` z=17.6 / `shelf` z=−16.5 vs the inner face 17.5)
+  or is a high lintel (`wall_header` y=2.1), and the swept KinematicCharacterController + CCD +
+  static-only depenetration + per-substep floor clamp all remain.
+- **`shared/bounds.js` `worldColliderBoxes`** — MIRRORS the same `hasTrueShape` gate (the
+  "fix both together" invariant, collider-debug.md) and uses `halfExtentsFor` (hull AABB) for the
+  footprint, so the `?debug=1` box/capsule "Colliders" overlay + `check-physics.mjs` show the real
+  un-thickened collider, not a stale loose box.
+- **Arch flags UNTOUCHED** (plan step 6): `kitchen_wall`/`wall_post`/`wall_header`/`floor_kitchen`
+  keep `arch:true` → still non-disguisable (`check-disguise-eligibility` green). Colliders changed,
+  disguise rule did not.
+
+**Verification (all green, Rapier installed via `npm i --no-save @dimforge/rapier3d-compat@0.14.0`):**
+- `check-true-colliders.mjs` — NEW live-restaurant coverage section: builds the real world and
+  reports **92/92 box-collidable types on hulls, 0 over-coverage** (collider AABB ≤ render + 0.05 m),
+  2 documented exceptions (floor + round). Explicitly names any object still on a primitive + why.
+- `check-collider-visual.mjs` — extended to audit code-built box entries (raw `w/h/d` = the drawn
+  box); every hull AABB == render bounds both directions.
+- `check-physics-solidity.mjs` — attaches hulls; the "thin panel thickened" assertion became "a
+  hulled static hugs its mesh (no over-coverage)"; thickening kept as a fallback only.
+- `check-physics.mjs` — attaches hulls; now shows un-thickened arch sizes (was 1.2 m deep).
+- `check-physics-live.mjs` — players stand on floors, hull disguises ground+walk, undisguised
+  capsule intact. `check-combat.mjs`, `check-disguise-eligibility.mjs`, `check-debug-menu.mjs` green.
+  Page boots clean (0 console errors, `?debug=1`).
+- **NOTE — `asset-dims.json` is STALE for some appliances** (e.g. fridge native depth 1.51 vs the
+  GLB's true 2.24). It is NOT consumed at runtime (config.js's fetch path is broken with backslashes
+  AND hulls supersede `measured`), so it's inert for gameplay — but the solidity check no longer
+  ASSERTS over-coverage against it for scaled GLBs (uses the fresh-GLB check + live engine instead).
+  A latent pre-existing bug, left untouched (out of scope).
+
+**Live pass OWED (VRmike):** enable "True Colliders" (magenta) in-match — the archway posts/beams,
+white walls, and columns should now hug the visible geometry with no floating boxes. Walk through
+the archway/doorways (no bouncing off empty air in the opening), stand on the floor, brush the
+walls, jump into the divider (no tunnel/fall-through), take a disguise + get hit (hulls ride the
+disguise + damage path). Below is the round-2 detail, still current.
+
+---
+
 ## What shipped
 Every hand-guessed BOX collider on a **model-bearing, non-architecture** prop/fixture is now a
 **convex hull generated from that model's ACTUAL mesh vertices** (Rapier

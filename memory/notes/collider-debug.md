@@ -42,6 +42,13 @@ SAME collider-size helpers `shared/physics.js` builds real colliders from. So "w
 ever diverge, that's the bug — fix `shared/bounds.js` and `physics.js _buildStatic` together
 (the constants and placement math are mirrored there with a "MUST match" comment).
 
+**2026-07-13 (convex-hull round 3):** `worldColliderBoxes` now mirrors `_buildStatic`'s
+`hasTrueShape` gate — a fixture with a baked hull (or measured bounds) uses its mesh-hugging shape
+and is NOT thickened (the anti-tunnel grow is a fallback for un-hulled primitives only), and the
+box footprint comes from `halfExtentsFor` (the hull AABB). So the AABB "Colliders" overlay no
+longer draws the oversized loose boxes VRmike reported around the walls/archway; the "True
+Colliders" magenta overlay draws the exact convex polyhedron. Both agree with the engine.
+
 ## TRUE Rapier collider overlay — "True Colliders" toggle (2026-07-13, VRmike)
 The overlay above (and the box/capsule "Colliders" toggle) draws **box/capsule approximations**
 built from `shared/bounds.js` — AABBs and capsules sized from the collider source. That is NOT

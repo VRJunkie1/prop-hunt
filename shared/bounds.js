@@ -67,7 +67,8 @@ export function worldColliderBoxes(map, catalog, rules) {
   for (const f of map.fixtures || []) {
     const c = catalog[f.type];
     if (!c || !c.static) continue;
-    const halfH = halfExtentsFor(c).hy; // == shapeFor's halfH
+    const he = halfExtentsFor(c); // hull AABB first, else measured, else primitive — matches shapeFor
+    const halfH = he.hy; // == shapeFor's halfH
     if (c.floor) {
       // Floor piece: ~1 m thick, extended DOWNWARD, visible top held flush (fix #5).
       const top = 2 * halfH + (f.y || 0);
@@ -75,12 +76,17 @@ export function worldColliderBoxes(map, catalog, rules) {
       boxes.push({ kind: 'fixture', type: f.type, cx: f.x, cy: top - thick / 2, cz: f.z, hx: xzHalf(c, 'w'), hy: thick / 2, hz: xzHalf(c, 'd'), rot: f.rot || 0, floor: true });
       continue;
     }
-    // Thin-wall PANEL thickening (Bug 2): grow only the thin horizontal axis, symmetric
-    // about the centre. All current static fixtures are boxes.
-    const isBox = c.shape === 'box' || (c.measured && c.measured.w > 0 && c.measured.d > 0);
-    const hx0 = xzHalf(c, 'w');
-    const hz0 = xzHalf(c, 'd');
-    const grown = isBox ? thickenWallHalfExtents(hx0, hz0, minHalf) : { hx: hx0, hz: hz0, grew: false };
+    // Thin-wall PANEL thickening (Bug 2) — now a FALLBACK (convex-hull round 3). MUST match
+    // physics.js _buildStatic's hasTrueShape gate: a fixture with a baked HULL (or measured
+    // bounds) uses its mesh-hugging shape as-is (no grow), so this debug/guard box equals the
+    // real collider instead of an oversized panel. The grow only applies to an un-hulled,
+    // un-measured primitive box. Footprint half-extents come from halfExtentsFor (the hull AABB
+    // for a hulled fixture), so the box hugs exactly what the engine simulates.
+    const hasTrueShape =
+      (c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0) ||
+      (c.measured && c.measured.w > 0 && c.measured.h > 0 && c.measured.d > 0);
+    const isBox = !hasTrueShape && c.shape === 'box';
+    const grown = isBox ? thickenWallHalfExtents(he.hx, he.hz, minHalf) : { hx: he.hx, hz: he.hz, grew: false };
     boxes.push({ kind: 'fixture', type: f.type, cx: f.x, cy: halfH + (f.y || 0), cz: f.z, hx: grown.hx, hy: halfH, hz: grown.hz, rot: f.rot || 0, thickened: grown.grew });
   }
   return boxes;

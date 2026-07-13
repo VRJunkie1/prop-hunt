@@ -199,6 +199,108 @@ if (hullTypes.length) {
   dw.destroy();
 }
 
+// ---- LIVE RESTAURANT COVERAGE (convex-hull round 3, 2026-07-13, VRmike) --------------------
+// The task's requirement (4): confirm hull coverage is now 100% of the restaurant's collidable
+// objects, that no collider exceeds its render geometry by more than an epsilon, and EXPLICITLY
+// report any object still on a primitive collider and why. This builds the REAL restaurant world
+// (map.fixtures -> static colliders incl. the code-built walls/columns/archway; map.props +
+// knockable fixtures -> prop colliders) exactly as the game does, then walks every collider and
+// compares its true Rapier shape AABB against the object's rendered geometry.
+console.log('\nlive restaurant collider coverage (100% hull + no over-coverage):');
+const EPS = 0.05; // 5 cm slack (authoring rounding); a real oversized box is ~0.4–0.8 m over
+const maps = JSON.parse(fs.readFileSync(new URL('../shared/config/maps.json', import.meta.url), 'utf8'));
+const propsCat = JSON.parse(fs.readFileSync(new URL('../shared/config/props.json', import.meta.url), 'utf8'));
+const fixturesCat = JSON.parse(fs.readFileSync(new URL('../shared/config/fixtures.json', import.meta.url), 'utf8'));
+// Attach baked hulls exactly as js/config.js does (mutate the catalog entries in place).
+for (const [type, h] of Object.entries(hullDoc.hulls || {})) {
+  if (!h || !Array.isArray(h.v) || h.v.length < 12 || !h.aabb) continue;
+  if (propsCat[type]) { propsCat[type].hullVerts = h.v; propsCat[type].hullAabb = h.aabb; }
+  if (fixturesCat[type]) { fixturesCat[type].hullVerts = h.v; fixturesCat[type].hullAabb = h.aabb; }
+}
+const rCatalog = { ...propsCat, ...fixturesCat };
+const restaurant = maps.restaurant;
+
+// Render bounds of a catalog entry (what the player sees) — independent of the collider:
+//   hulled -> the baked hull AABB (check-collider-visual proves it == the GLB / code-built box);
+//   raw box -> the BoxGeometry(w,h,d) makePropMesh draws; round -> the primitive's r/h.
+function renderBounds(c) {
+  if (c.hullVerts && c.hullAabb && c.hullAabb.w > 0) return { w: c.hullAabb.w, h: c.hullAabb.h, d: c.hullAabb.d };
+  if (c.shape === 'box') return { w: c.w, h: c.h, d: c.d };
+  if (c.shape === 'cylinder' || c.shape === 'cone') return { w: 2 * c.r, h: c.h, d: 2 * c.r };
+  if (c.shape === 'sphere') return { w: 2 * c.r, h: 2 * c.r, d: 2 * c.r };
+  return null;
+}
+// A collider's LOCAL (unrotated) shape AABB, straight from the Rapier shape.
+function shapeAabb(s) {
+  if (!s) return null;
+  if (s.halfExtents) return { w: 2 * s.halfExtents.x, h: 2 * s.halfExtents.y, d: 2 * s.halfExtents.z };
+  if (s.vertices) {
+    const v = s.vertices; const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < v.length; i += 3) for (let a = 0; a < 3; a++) { const val = v[i + a]; if (val < mn[a]) mn[a] = val; if (val > mx[a]) mx[a] = val; }
+    return { w: mx[0] - mn[0], h: mx[1] - mn[1], d: mx[2] - mn[2] };
+  }
+  if (s.radius != null && s.halfHeight != null) return { w: 2 * s.radius, h: 2 * s.halfHeight, d: 2 * s.radius };
+  if (s.radius != null) return { w: 2 * s.radius, h: 2 * s.radius, d: 2 * s.radius };
+  return null;
+}
+
+// Build the world the exact way the referee does: static fixtures via _buildStatic, and every
+// non-static fixture + disguise prop as a prop body.
+const rProps = [];
+let rid = 1;
+for (const f of restaurant.fixtures || []) rProps.push({ id: rid++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 });
+for (const p of restaurant.props || []) rProps.push({ id: rid++, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0 });
+const rWorld = new PhysicsWorld(RAPIER, restaurant, rProps, rCatalog, { dynamicProps: true, rules, feel });
+
+// Walk every collider, key it back to its catalog type, and record shape + AABB (dedup by type).
+const byType = new Map(); // type -> { kind, colAabb, isStatic }
+rWorld.world.forEachCollider((col) => {
+  let type = rWorld._staticFixtureTypeByHandle && rWorld._staticFixtureTypeByHandle.get(col.handle);
+  let isStatic = !!type;
+  if (!type && rWorld._propHandleToId) {
+    const id = rWorld._propHandleToId.get(col.handle);
+    if (id != null) { const inst = rProps.find((p) => p.id === id); type = inst && inst.type; }
+  }
+  if (!type || byType.has(type)) return; // ground slab / boundary walls are untyped; one per type
+  byType.set(type, { kind: classifyShape(col.shape), colAabb: shapeAabb(col.shape), isStatic });
+});
+
+let hulledCount = 0, primitiveExceptions = 0, overCoverage = 0, uncovered = 0;
+const collidableTypes = [...byType.keys()].sort();
+for (const type of collidableTypes) {
+  const rec = byType.get(type);
+  const c = rCatalog[type];
+  const hulled = !!(c && c.hullVerts && c.hullAabb);
+  const rb = renderBounds(c);
+  if (rec.kind === 'mesh' && hulled) {
+    hulledCount++;
+    // Over-coverage: the live hull's AABB must not exceed the render bounds by more than EPS.
+    const over = rb ? Math.max(rec.colAabb.w - rb.w, rec.colAabb.h - rb.h, rec.colAabb.d - rb.d) : 0;
+    if (over > EPS) {
+      overCoverage++;
+      check(`${type} hull hugs render geometry (over ≤ ${EPS}m)`, false,
+        `OVER by ${over.toFixed(2)}m — collider ${rec.colAabb.w.toFixed(2)}×${rec.colAabb.h.toFixed(2)}×${rec.colAabb.d.toFixed(2)} vs render ${rb.w.toFixed(2)}×${rb.h.toFixed(2)}×${rb.d.toFixed(2)}`);
+    }
+  } else if (c && c.floor) {
+    primitiveExceptions++;
+    console.log(`  · ${type} — PRIMITIVE by design: floor piece uses a thick-DOWNWARD anti-tunnel slab (visible top flush); the extension is below the floor, not an over-coverage.`);
+  } else if (rec.kind === 'cylinder' || rec.kind === 'cone' || rec.kind === 'ball') {
+    primitiveExceptions++;
+    console.log(`  · ${type} — PRIMITIVE by design: round ${rec.kind} — a true ${rec.kind} collider hugs the drawn mesh tighter than a faceted hull (round rule).`);
+  } else {
+    // A box-shaped collidable that is NOT a hull is the exact regression this task forbids.
+    uncovered++;
+    check(`${type} is a convex-hull (mesh) collider, not an oversized primitive`, false,
+      `on a ${rec.kind} collider${hulled ? ' despite a baked hull (thickening/override?)' : ' with no baked hull'}`);
+  }
+}
+check('every collidable object is a hull OR a documented primitive exception (floor/round)', uncovered === 0,
+  `${hulledCount} hulled, ${primitiveExceptions} documented exception(s), ${uncovered} unexpected primitive(s)`);
+check('no hull over-covers its render geometry by more than a hair', overCoverage === 0,
+  overCoverage ? `${overCoverage} oversized` : `all ${hulledCount} hulls within ${EPS}m`);
+console.log(`  coverage: ${hulledCount}/${hulledCount + uncovered} box-collidable types on hulls; exceptions: ${primitiveExceptions} (floor + round primitives, by design).`);
+rWorld.destroy();
+
 if (failures) {
   console.error(`\ntrue-collider check FAILED (${failures} problem${failures > 1 ? 's' : ''})`);
   process.exit(1);

@@ -385,23 +385,33 @@ export class PhysicsWorld {
         continue;
       }
       // ANTI-TUNNEL for thin wall PANELS (Bug 2, solidity pass #3). A wide, thin static
-      // panel — the kitchen/dining divider headers (w3.7 d0.4) and the side walls
-      // (w6 d0.4) — is thinner front-to-back than the player capsule is wide. A fast jump
-      // INTO its broad face can, at the wrong angle, resolve the swept contact to the FAR
-      // side and pop the capsule through (then drop it through the floor beyond — the
-      // reported wall→floor fall-through). Grow ONLY the thin horizontal axis to a minimum
-      // half-thickness that clears the capsule radius, symmetric about the fixture centre,
-      // so the long axis (window/walkway spacing) and the visible mesh are untouched. This
-      // targets PANELS only (one horizontal axis ≥2× the other): narrow posts/pillars and
-      // bulky appliances are left exactly as authored (they can't tunnel a wider capsule,
-      // and thickening them would add annoying invisible collision). Guarded to box shapes.
-      const isBox = c.shape === 'box' || (c.measured && c.measured.w > 0 && c.measured.d > 0);
+      // panel — a primitive kitchen/dining divider header or side wall thinner front-to-back
+      // than the player capsule is wide — could let a fast jump into its broad face resolve
+      // the swept contact to the FAR side and pop the capsule through. Grow ONLY the thin
+      // horizontal axis to a minimum half-thickness clearing the capsule radius.
+      //
+      // CONVEX-HULL ROUND 3 (2026-07-13, VRmike — "hulls hug the render geometry, no oversized
+      // colliders"). This grow is a FALLBACK now, gated to entries that DON'T carry a true
+      // render-derived shape. A fixture with a baked HULL (or measured bounds) uses that shape
+      // as-is so the collider matches what the player sees — no more oversized box floating
+      // outside the archway/wall (the exact bug VRmike's debug screenshots show). Every code-
+      // built wall/column/archway piece and every thin model panel (kitchen_wall, wall_header,
+      // door, shelf) is now HULLED, so none of them thicken; each is backed by a boundary wall
+      // (x=±17.4 / z=±17.6 vs the inner face 17.5) or is a high lintel (y=2.1), and the swept
+      // KinematicCharacterController + CCD + static-only depenetration + the per-substep floor
+      // clamp remain, so the tunnel path stays closed without oversizing. The grow still fires
+      // for any FUTURE un-hulled primitive thin panel (defense-in-depth kept, just not applied
+      // where a hull already hugs). See notes/convex-hull-colliders.md (round 3).
+      const hasTrueShape =
+        (c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0) ||
+        (c.measured && c.measured.w > 0 && c.measured.h > 0 && c.measured.d > 0);
+      const isBox = !hasTrueShape && c.shape === 'box';
       const minHalf = this.rules.minWallHalfThickness != null ? this.rules.minWallHalfThickness : 0.6;
       const hx0 = halfExtentXZ(c, 'w');
       const hz0 = halfExtentXZ(c, 'd');
       // Shared grow rule (thickenWallHalfExtents) — the SAME decision the headless check
       // asserts, so live colliders and the regression guard can't disagree on which walls
-      // got thickened. Only box fixtures are eligible.
+      // got thickened. Only un-hulled, un-measured primitive box fixtures are eligible.
       const grown = isBox ? thickenWallHalfExtents(hx0, hz0, minHalf) : { hx: hx0, hz: hz0, grew: false };
       if (grown.grew) {
         const wc = R.ColliderDesc.cuboid(grown.hx, halfH, grown.hz)

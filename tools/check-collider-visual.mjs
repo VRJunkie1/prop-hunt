@@ -155,12 +155,22 @@ console.log(`  map.modelScale = ${mapScale}; tolerance = max(${ABS_TOL} m, ${REL
 function auditCatalog(label, catalog) {
   console.log(label + ':');
   for (const [type, c] of Object.entries(catalog)) {
-    if (type.startsWith('_') || !c || !c.model) continue; // skip comments + primitive-only entries
-    const native = nativeBbox(c.model);
-    // assetDims keyed by c.model (what meshSize looks up) — freshly measured from the GLB.
-    const assetDims = native ? { [c.model]: native } : {};
-    const vis = meshSize(c, mapScale, assetDims);
-    if (!vis) { console.log(`  ? ${type} — UNVERIFIABLE (could not measure ${c.model})`); unverifiable++; continue; }
+    if (type.startsWith('_') || !c) continue; // skip comment keys
+    let vis;
+    if (c.model) {
+      const native = nativeBbox(c.model);
+      // assetDims keyed by c.model (what meshSize looks up) — freshly measured from the GLB.
+      const assetDims = native ? { [c.model]: native } : {};
+      vis = meshSize(c, mapScale, assetDims);
+      if (!vis) { console.log(`  ? ${type} — UNVERIFIABLE (could not measure ${c.model})`); unverifiable++; continue; }
+    } else if (c.shape === 'box') {
+      // CODE-BUILT geometry (round 3): js/scene.js makePropMesh draws a raw BoxGeometry(w,h,d),
+      // so the RAW catalog dims ARE the rendered mesh (independent of the baked hull — this is
+      // what catches a hull that drifted from the drawn box).
+      vis = { w: c.w, h: c.h, d: c.d };
+    } else {
+      continue; // model-less round primitive (a cylinder/ball) — its true-shape collider hugs by construction
+    }
     const col = colliderSize(c);
     const arch = isArchEntry(c);
 
@@ -206,14 +216,20 @@ auditCatalog('FIXTURES (built-ins + knockable scenery)', fixtures);
 // or a STALE hull (GLB changed since the bake) — re-run tools/build-hulls.mjs. This is the "hull
 // vertices lie on/inside the mesh bounds and cover them" check the collider-overhaul plan called
 // for (a hull is not a box, so the box-dims comparison alone isn't enough).
-console.log('CONVEX HULLS (hullAABB vs fresh GLB mesh bounds):');
+console.log('CONVEX HULLS (hullAABB vs render bounds — GLB mesh, or raw w/h/d for code-built boxes):');
 let hullChecked = 0;
 for (const catalog of [props, fixtures]) {
   for (const [type, c] of Object.entries(catalog)) {
-    if (type.startsWith('_') || !c || !c.hullAabb || !c.model) continue;
-    const native = nativeBbox(c.model);
-    const vis = native ? meshSize(c, mapScale, { [c.model]: native }) : null;
-    if (!vis) { console.log(`  ? ${type} — UNVERIFIABLE (could not measure ${c.model})`); unverifiable++; continue; }
+    if (type.startsWith('_') || !c || !c.hullAabb) continue;
+    let vis;
+    if (c.model) {
+      const native = nativeBbox(c.model);
+      vis = native ? meshSize(c, mapScale, { [c.model]: native }) : null;
+      if (!vis) { console.log(`  ? ${type} — UNVERIFIABLE (could not measure ${c.model})`); unverifiable++; continue; }
+    } else {
+      // CODE-BUILT box: the drawn mesh is the raw BoxGeometry(w,h,d); the hull must equal it.
+      vis = { w: c.w, h: c.h, d: c.d };
+    }
     const a = c.hullAabb;
     const dw = Math.abs(a.w - vis.w), dh = Math.abs(a.h - vis.h), dd = Math.abs(a.d - vis.d);
     const tol = (v) => Math.max(ABS_TOL, v * REL_TOL);
