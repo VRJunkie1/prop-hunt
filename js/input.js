@@ -5,7 +5,9 @@
 //
 // Two schemes live here:
 //   - DESKTOP: keyboard + pointer-lock mouse look (unchanged — see the
-//     input-mouselook note). Only wired on non-touch devices.
+//     input-mouselook note). Wired whenever the device has a PRECISE pointer (a
+//     mouse/trackpad), EVEN if the screen is also touchable — see
+//     prefersTouchControls() below (the "touchscreen PC got phone controls" fix).
 //   - TOUCH (phones/tablets): a nipplejs virtual joystick for movement, a
 //     hand-rolled drag-to-look zone (pointer events; phones have no pointer lock,
 //     so this REPLACES mouse-look rather than imitating it), and on-screen tap
@@ -43,9 +45,47 @@ function unlockAudio() {
   }
 }
 
-const isTouchDevice = () =>
-  (typeof window !== 'undefined' && 'ontouchstart' in window) ||
-  (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+// PRIMARY-MODE CLASSIFICATION (2026-07, VRmike "touchscreen PC got phone controls" fix).
+// The OLD test asked "can this device be touched?" — ('ontouchstart' in window ||
+// maxTouchPoints > 0) — so a Windows PC with a touchscreen (or touch-capable drivers)
+// answered YES and got the phone scheme: no pointer lock, no Escape pause, no left-click
+// hold-fire. The RIGHT question is "does this device have a PRECISE pointer (a mouse /
+// trackpad)?" — decide the PRIMARY control mode by POINTER CAPABILITY:
+//   - a fine pointer ('(any-pointer: fine)') OR real hover ('(hover: hover)') => DESKTOP
+//     wiring (pointer lock + mouse-look + keyboard), EVEN when the screen is ALSO touchable
+//     (a hybrid laptop). Correctness over cleverness: we ship the desktop classification
+//     alone rather than ALSO dual-wiring the on-screen touch pads (which would race the
+//     mouse over primaryHeld and the canvas look zone — the plan explicitly OK'd this
+//     fallback).
+//   - no fine pointer at all (real phones / tablets) => TOUCH controls, unchanged.
+// Returns TRUE when the device should use the TOUCH scheme. Pure + fully INJECTABLE (pass an
+// `env` of {matchMedia, maxTouchPoints, hasOntouchstart}) so tools/check-input-mode.mjs can
+// unit-test every device combo with mocked signals. See memory/notes/input-mode.md.
+export function prefersTouchControls(env) {
+  const e = env || {};
+  const mm = e.matchMedia !== undefined
+    ? e.matchMedia
+    : (typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia.bind(window) : null);
+  const maxTouchPoints = e.maxTouchPoints !== undefined
+    ? e.maxTouchPoints
+    : (typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0);
+  const hasOntouchstart = e.hasOntouchstart !== undefined
+    ? e.hasOntouchstart
+    : (typeof window !== 'undefined' && 'ontouchstart' in window);
+  const q = (s) => {
+    try { const r = mm && mm(s); return !!(r && r.matches); } catch { return false; }
+  };
+  // PRIMARY SIGNAL: a precise pointer or real hover => DESKTOP wiring, regardless of touch.
+  if (mm) {
+    if (q('(any-pointer: fine)') || q('(hover: hover)')) return false;
+    // matchMedia present and it reports a coarse-only / no-hover device => TOUCH.
+    if (q('(any-pointer: coarse)') || q('(pointer: coarse)')) return true;
+    // else: media queries inconclusive — fall through to the raw touch signal.
+  }
+  // FALLBACK (old / matchMedia-less browsers): touch present => touch controls, else desktop
+  // (a keyboard+mouse box that fails feature detection must NOT lose pointer lock / Esc / fire).
+  return !!(hasOntouchstart || maxTouchPoints > 0);
+}
 
 export class Input {
   // lockTrigger is the element clicked to capture the mouse (desktop) OR tapped to
@@ -83,8 +123,11 @@ export class Input {
     this.onToggleEdit = () => {}; // () => void  Ctrl/Cmd+E: toggle the level editor (desktop)
     this.onSelectTool = () => {}; // (index:number)  number keys 1..9 select a hunter tool
 
-    // Touch state.
-    this.touch = isTouchDevice();
+    // Touch state. `this.touch` is the ONE classification the whole game keys off (the
+    // Escape handler, the click/tap overlay text, the controls-help list, the editor gate,
+    // …), so redefining it here re-routes EVERY downstream branch at once: a touchscreen PC
+    // now reports false => full desktop wiring (pointer lock, Esc pause, left-click fire).
+    this.touch = prefersTouchControls();
     this.touchMove = { mx: 0, mz: 0 }; // latest joystick vector (right+, forward+)
     this.touchLookSens = 0.005;
     this._joystick = null;

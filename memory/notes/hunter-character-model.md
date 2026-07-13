@@ -6,6 +6,22 @@ hunter stays first-person and never renders their own body. Props are
 untouched (still render as their disguise). NOT playtested live (headless sandbox
 can't open a GLB or run animations — see "Verification" below).
 
+## 2026-07-12 RIFLE 180° FLIP — barrel pointed BACKWARDS in remote view (VRmike)
+
+Symptom: in other players' view the hunter's rifle pointed BEHIND them (screenshot in the
+request). Root cause: the "SOLVED" rotation below ASSUMED the GLB barrel was the **-X** end and
+solved so that -X → world-forward. But live, the muzzle is actually the **+X** end — so the
+solve sent the real muzzle to world-BACKWARD. This is exactly the "last blind rotation got the
+sign wrong" the task warned about.
+
+Fix (verified against the actual bone transform, NOT eyeballed): re-ran `tools/_solve_rifle.mjs`
+and took its **`[muzzle+X, up+Y]`** variant — the SAME rig-derived solve, muzzle axis corrected.
+`weapon.rotationDeg {178.8, -10.1, 87.6} → {-1.2, 10.1, 92.4}`. The tool's numeric verify prints
+`barrel=(0,0,-1)` (forward −Z) and `up=(0,1,0)` across Idle_Gun_Pointing / Run_Shoot / Gun_Shoot /
+Idle_Gun_Shoot. This is precisely a 180° turn (barrel reversed, gun still upright) relative to the
+old value. Headless RENDER is impossible in the sandbox → confirm live; hot-tunable if still off.
+`tools/check-hunter-model.mjs` stays GREEN (clip/asset contract unchanged).
+
 ## 2026-07-12 RIFLE POSE/ANIM POLISH — rifle points at the ground + arm drops when idle (VRmike)
 
 Before (VRmike's live screenshots — the remote hunter holds the rifle pointing at the ground):

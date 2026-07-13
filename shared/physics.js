@@ -843,6 +843,45 @@ export class PhysicsWorld {
     return { kind: 'world' };
   }
 
+  // SHOT IMPULSE (2026-07, VRmike). When a shot lands on a DYNAMIC prop, give its rigid body
+  // a small physics KICK at the hit point along the shot direction, so shot items visibly
+  // react (a nudge + a little spin), not a rocket launch. HOST-ONLY by construction: it acts
+  // on the host's authoritative body, so the motion replicates to everyone through the normal
+  // prop snapshot stream — no new netcode. No-op on a guest predictor / a capped-static prop
+  // (no dynamic body for that id) and for a zero/degenerate magnitude or direction.
+  //   `speed` is interpreted as a TARGET linear speed kick in m/s and scaled by the body's
+  //   mass (impulse = mass * speed * dir), so the visible nudge is consistent across a heavy
+  //   table and a light burger instead of launching the tiny props. An ASLEEP body is woken
+  //   first (a sleeping body ignores impulses). Returns true if a kick was applied.
+  applyShotImpulse(propId, point, dir, speed) {
+    if (!this.dynamicProps) return false; // guests have no dynamic prop bodies
+    const s = Number.isFinite(speed) ? speed : 0;
+    if (!(s > 0)) return false;
+    const pb = this.propBodies.find((b) => b.id === propId);
+    if (!pb || !pb.body) return false;
+    const d = dir || {};
+    let dx = d.x || 0, dy = d.y || 0, dz = d.z || 0;
+    const len = Math.hypot(dx, dy, dz);
+    if (!(len > 1e-6)) return false;
+    dx /= len; dy /= len; dz /= len;
+    try {
+      const m = (typeof pb.body.mass === 'function' ? pb.body.mass() : 1) || 1; // guard 0/NaN
+      const j = s * m; // impulse magnitude so the velocity change ≈ `s` m/s along dir
+      const imp = { x: dx * j, y: dy * j, z: dz * j };
+      if (pb.body.wakeUp) pb.body.wakeUp(); // an asleep body ignores impulses until awake
+      if (point && typeof pb.body.applyImpulseAtPoint === 'function') {
+        pb.body.applyImpulseAtPoint(imp, { x: point.x, y: point.y, z: point.z }, true);
+      } else if (typeof pb.body.applyImpulse === 'function') {
+        pb.body.applyImpulse(imp, true);
+      } else {
+        return false; // API gap: no impulse method — leave the prop untouched
+      }
+      return true;
+    } catch {
+      return false; // never let a cosmetic kick throw into the shot resolver
+    }
+  }
+
   // ---- step ----------------------------------------------------------------
   // Advance the sim by dt (seconds) in FIXED _fixedDt substeps only — never a
   // variable partial step. Real elapsed time is banked in _acc and drained one

@@ -3,6 +3,22 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-12 SHOT IMPULSE — knockable props kick when shot (VRmike)
+`PhysicsWorld.applyShotImpulse(propId, point, dir, speed)`: a shot landing on a DYNAMIC prop
+gives its rigid body a small kick. HOST-ONLY by construction — `if (!this.dynamicProps) return
+false` (guests have no dynamic prop bodies), and it acts on the host's authoritative body so the
+motion replicates to everyone through the normal prop snapshot stream (NO new netcode). Details:
+- `speed` (`rules.shotImpulse`, default **1.5** m/s) is a TARGET linear-speed kick, **scaled by
+  the body mass** (`impulse = mass * speed * dir`) so a heavy table and a light burger get the
+  same visible nudge instead of launching the tiny props — "a nudge, not a rocket launcher".
+- WAKES the body first (`wakeUp()` — an asleep body ignores impulses), then `applyImpulseAtPoint`
+  at the hit point (adds a little spin), falling back to `applyImpulse` if the point API is absent.
+- Fully guarded: zero/degenerate dir, unknown prop id, zero speed, or any API gap ⇒ returns false,
+  no-op, never throws into the shot resolver. Called from `referee.applyShot` AFTER the damage
+  decision (`info.kind === 'prop'`, cosmetic only — damage is unchanged).
+- Verified headlessly: `tools/check-physics-live.mjs` §6 (a settled/asleep crate goes 0→1.5 m/s
+  along the shot dir + wakes; guest predictor + bad input are clean no-ops).
+
 ## 2026-07-11 CHECK-REPAIR — check-physics.mjs walkable-floor false positive (spawn-blocked-by-floor_kitchen)
 `node tools/check-physics.mjs` exited 1 with 2 violations: restaurant spawns `(-15,-2)` and
 `(15,-2)` "blocked by floor_kitchen". These are the SAME 2 pre-existing failures pass #5 flagged

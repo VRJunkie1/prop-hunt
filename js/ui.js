@@ -1,5 +1,7 @@
 // DOM glue: screen switching, lobby list, HUD, and the kill/event feed.
 // Holds no game logic — main.js drives it from server messages.
+import { prefersTouchControls } from './input.js';
+
 const $ = (id) => document.getElementById(id);
 
 export class UI {
@@ -326,8 +328,9 @@ export class UI {
   }
 
   _controlsHtml() {
-    const touch = (typeof window !== 'undefined' && 'ontouchstart' in window) ||
-      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0);
+    // SAME classification as input.js (pointer-capability, not "can be touched") so the
+    // controls-help list can never disagree with which scheme is actually wired.
+    const touch = prefersTouchControls();
     const rows = touch
       ? [
           ['Left joystick', 'Move'],

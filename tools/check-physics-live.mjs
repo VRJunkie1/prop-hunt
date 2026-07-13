@@ -165,6 +165,37 @@ for (const dyn of [true, false]) {
   w.destroy();
 }
 
+// ---- 6. Shot impulse (2026-07, VRmike): a shot on a DYNAMIC prop must KICK it along the
+//         shot direction (velocity changes from rest) and WAKE a sleeping body. On a guest
+//         predictor (fixed props, no dynamic body) it must be a clean no-op.
+{
+  const w = new PhysicsWorld(RAPIER, map, [{ id: 1, type: 'crate', x: 5, z: 0, y: 0, rot: 0 }], catalog, { dynamicProps: true, rules, feel });
+  const pb = w.propBodies[0].body;
+  for (let i = 0; i < 300; i++) w.step(H); // let the crate settle (and fall asleep)
+  const sleptBefore = pb.isSleeping ? pb.isSleeping() : 'n/a';
+  const vBefore = pb.linvel();
+  const speedBefore = Math.hypot(vBefore.x, vBefore.y, vBefore.z);
+  const kick = rules.shotImpulse != null ? rules.shotImpulse : 1.5;
+  const applied = w.applyShotImpulse(1, { x: 5, y: 0.5, z: 0 }, { x: 1, y: 0, z: 0 }, kick);
+  const vAfter = pb.linvel();
+  const speedAfter = Math.hypot(vAfter.x, vAfter.y, vAfter.z);
+  check('shot-impulse-applied', applied === true, `returned ${applied}`);
+  check('shot-impulse-changes-velocity', speedAfter > speedBefore + 0.2 && vAfter.x > 0.1,
+    `slept=${sleptBefore} v: ${speedBefore.toFixed(3)} -> (${vAfter.x.toFixed(2)},${vAfter.y.toFixed(2)},${vAfter.z.toFixed(2)})`);
+  check('shot-impulse-wakes-body', pb.isSleeping ? pb.isSleeping() === false : true, 'body is awake after the kick');
+
+  const w2 = new PhysicsWorld(RAPIER, map, [{ id: 1, type: 'crate', x: 5, z: 0, y: 0, rot: 0 }], catalog, { dynamicProps: false, rules, feel });
+  check('shot-impulse-noop-on-guest', w2.applyShotImpulse(1, { x: 5, y: 0.5, z: 0 }, { x: 1, y: 0, z: 0 }, kick) === false,
+    'guest predictor has no dynamic body — nothing to kick');
+  // Degenerate inputs on the host world are safe no-ops (never throw, never move the prop).
+  check('shot-impulse-guards-bad-input',
+    w.applyShotImpulse(1, { x: 5, y: 0.5, z: 0 }, { x: 0, y: 0, z: 0 }, kick) === false &&
+    w.applyShotImpulse(999, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, kick) === false &&
+    w.applyShotImpulse(1, { x: 5, y: 0.5, z: 0 }, { x: 1, y: 0, z: 0 }, 0) === false,
+    'zero dir / unknown prop id / zero speed => false (no-op)');
+  w.destroy(); w2.destroy();
+}
+
 if (failures) {
   console.error(`\nphysics live-sim check FAILED (${failures} problem${failures > 1 ? 's' : ''})`);
   process.exit(1);

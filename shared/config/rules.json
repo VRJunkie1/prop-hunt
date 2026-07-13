@@ -28,6 +28,8 @@
   "minPropsKept": 6,
   "startHealth": 100,
   "shootRange": 120,
+  "_shotImpulseComment": "SHOT IMPULSE (2026-07-12, VRmike): a shot that lands on a DYNAMIC (knockable) prop gives it a small host-authoritative physics kick at the hit point along the shot direction, so shot items visibly react. This is the TARGET linear speed kick in m/s — shared/physics.js scales it by the hit body's mass so a heavy table and a light burger both get the SAME visible nudge (not a mass-based launch of the tiny props). Keep it small (a nudge, not a rocket launcher); raise for a punchier feel. HOT-TUNABLE, no rebuild. Host-only; replicates through the normal prop snapshot stream.",
+  "shotImpulse": 1.5,
   "fireCooldownMs": 250,
   "_fireRateComment": "RAPID FIRE (2026-07-12, VRmike): the assault rifle is now HOLD-to-fire at a realistic assault-rifle/SMG cadence. fireRateRpm is the single tunable (rounds per minute; 600-800 is the real-world band). The HOST derives its authoritative fire-rate cap from this (60000/rpm ms between shots, minus a small jitter grace so a legit on-time client isn't throttled below the intended rate) so a modified client can't shoot faster; the CLIENT paces its held-fire auto-repeat off the same number. Damage per bullet is UNCHANGED (damage.base = 5%). fireCooldownMs above is the legacy fallback used only if fireRateRpm is absent.",
   "fireRateRpm": 700,

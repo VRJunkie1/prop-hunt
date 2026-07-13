@@ -6,8 +6,31 @@ values the desktop path emits — so net/referee/scene/desktop notice nothing. T
 is the deliberate seam: one input module, many control schemes, one output shape.
 
 ## Detection & lane separation
-`Input` picks a scheme once at construction: `isTouchDevice()` = `'ontouchstart'
-in window || navigator.maxTouchPoints > 0`.
+`Input` picks a scheme once at construction from **`prefersTouchControls(env?)`**
+(exported from `js/input.js`; `this.touch = prefersTouchControls()`).
+- **POINTER-CAPABILITY classification (2026-07-12, VRmike fix).** The OLD test asked
+  "can this device be touched?" (`'ontouchstart' in window || maxTouchPoints > 0`),
+  so a **Windows PC with a touchscreen** was misread as a phone and got the touch
+  scheme — **no pointer lock, no Esc pause, no left-click hold-fire**. The new test
+  asks "does it have a PRECISE pointer?": `matchMedia('(any-pointer: fine)')` OR
+  `'(hover: hover)'` ⇒ **DESKTOP** wiring even when touch is ALSO present; only a
+  device with no fine pointer (real phones/tablets, coarse-only) ⇒ **TOUCH**. Old
+  `ontouchstart`/`maxTouchPoints` is now just the **fallback** when `matchMedia` is
+  absent/inconclusive (old browsers): touch ⇒ touch, else desktop.
+- Function is **pure + injectable** (`env = {matchMedia, maxTouchPoints,
+  hasOntouchstart}`) → unit-tested in **`tools/check-input-mode.mjs`** (truth table:
+  touchscreen-PC⇒desktop, phone⇒touch, plain-desktop⇒desktop, hybrid⇒desktop,
+  fallbacks, matchMedia-throws⇒desktop).
+- Everything downstream keys off the SAME `input.touch`, so re-routing the one
+  classifier flips them all together: `_wireTouch()` vs `_wireDesktop()`, the Esc
+  handler + backtick guard, the click/tap overlay text, the editor gate, AND
+  `ui.js` `_controlsHtml()` (which now imports `prefersTouchControls` instead of
+  re-deriving its own touch flag — they can never disagree now).
+- **Hybrid support:** shipped DESKTOP-classification alone (the plan's OK'd
+  fallback). We did NOT also dual-wire the on-screen pads on a fine-pointer device —
+  that would race the mouse over `primaryHeld` and the canvas look-zone vs mouselook.
+  If someone wants the touch pads to ALSO pop in on a hybrid's first `touchstart`,
+  that's a separate, carefully-gated follow-up.
 - Touch → `_wireTouch()` only (drag-look + overlay tap). Pointer-lock/mouse
   listeners are NOT attached, so a phone never fires `pointerlockerror`.
 - Desktop → `_wireDesktop()` only (the unchanged keyboard + pointer-lock path).

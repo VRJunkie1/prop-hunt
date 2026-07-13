@@ -26,13 +26,13 @@
     },
     "weapon": {
       "_comment": "Assault rifle parented to the right-wrist bone. worldLength is the rifle's longest-axis size in METRES: scene.js measures the GLB's native size and the wrist bone's world scale (which carries the armature's baked 100x and the rig's fit scale) and sizes the weapon to this length — so the rifle stays correct whatever the body sizing does (the old bare `scale` blew up/shrank when the rig scale changed). position (bone-local units), rotationDeg (bone-local degrees, Euler XYZ) and scale (a MULTIPLIER on worldLength) are HOT-TUNABLE grip nudges — adjust here (no rebuild) if the grip looks off in a live browser. attachBone is matched TOLERANTLY (GLTFLoader loads the GLB's 'Wrist.R' as 'WristR'); Wrist.R / Wrist.L both exist.",
-      "_rotationComment": "SOLVED, not eyeballed: the rifle GLB's barrel is its -X end (thin barrel = fewer verts; body/stock at +X). tools/_solve_rifle.mjs loads the real rig, poses it in the aim/shoot clips, reads the Wrist.R world orientation, and computes the bone-local rotation that maps the muzzle(-X) to the character's forward and the gun-up(+Y) to world-up. Verified across Idle_Gun_Pointing / Run_Shoot / Gun_Shoot / Idle_Gun_Shoot — barrel lands within ~1° of level-forward and the gun stays upright in ALL of them (headless render isn't possible in the build sandbox, so this is confirmed live post-deploy; if a live browser shows the gun rolled or the muzzle reversed, nudge z by ±180 / flip the sign here — no rebuild).",
+      "_rotationComment": "180 FLIP (2026-07, VRmike): the rifle pointed BACKWARDS in remote/third-person view (screenshot in the request) — the previous solve ASSUMED the barrel was the GLB's -X end and pointed that forward, but VRmike's live view proved the muzzle is actually the +X end, so the gun fired behind the hunter. FIX: use tools/_solve_rifle.mjs's [muzzle+X, up+Y] variant — the SAME rig-derived solve, just with the muzzle axis corrected. It maps the barrel(+X) to the character's forward(-Z) and gun-up(+Y) to world-up, verified numerically against the ACTUAL Wrist.R pose across Idle_Gun_Pointing / Run_Shoot / Gun_Shoot / Idle_Gun_Shoot (barrel=(0,0,-1) forward, up=(0,1,0) in all four — re-run the tool to confirm). This is exactly the requested 180 turn (barrel reversed, gun still upright) relative to the old value. Headless RENDER isn't possible in the build sandbox, so eyeball it live post-deploy; if it still looks off, flip a sign / add 180 to a component here (HOT-TUNABLE, no rebuild).",
       "model": "9a0e478c-de82-4773-9b70-a0219bb0057c.glb",
       "attachBone": "Wrist.R",
       "visibleByDefault": true,
       "worldLength": 0.8,
       "position": { "x": 0, "y": 0, "z": 0 },
-      "rotationDeg": { "x": 178.8, "y": -10.1, "z": 87.6 },
+      "rotationDeg": { "x": -1.2, "y": 10.1, "z": 92.4 },
       "scale": 1.0
     }
   }

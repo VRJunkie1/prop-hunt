@@ -453,6 +453,16 @@ export class Referee {
     // Damage decision (pure w.r.t. physics — the info descriptor is all it needs).
     this._applyShotDamage(hunter, info);
 
+    // SHOT IMPULSE (2026-07, VRmike): a shot that lands on a DYNAMIC prop gives it a small
+    // host-authoritative kick at the hit point along the shot direction, so shot items get a
+    // visible nudge. Cosmetic/feel only — the damage decision above is untouched, and this is
+    // a no-op for player/fixture/world hits and on the 2D fallback (no physics). It rides the
+    // normal prop stream to every client (asleep bodies are woken inside applyShotImpulse).
+    if (hitSomething && info && info.kind === 'prop' && this.physics && this.physics.applyShotImpulse) {
+      const kick = this.rules.shotImpulse != null ? this.rules.shotImpulse : 1.5;
+      this.physics.applyShotImpulse(info.id, impact, { x: dx, y: dy, z: dz }, kick);
+    }
+
     // Muzzle a touch forward + down of the eye so the tracer reads as coming from the
     // held rifle (approximate; the exact bone muzzle isn't networked in v1).
     const muzzle = { x: eye.x + dx * 0.5, y: eye.y + dy * 0.5 - 0.15, z: eye.z + dz * 0.5 };

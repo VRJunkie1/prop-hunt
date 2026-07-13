@@ -1,5 +1,18 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-12 (VRmike) — LAYOUT: DEBUG button in the top row, panel below the HUD.** The DEBUG
+button used to sit at fixed `top:8/left:8` and COVER the top-left role pill, and the OPEN panel
+started at `top:58` and COVERED the health bar. Fixes (all in `js/debug.js` injected styles + one
+method): (1) `#dbgToggle` is now a PILL at `top:12/left:12` (matching `.hud-top`), and
+`document.body.classList.add('dbg-present')` + `body.dbg-present .hud-top{padding-left:104px}`
+reserve room so the role/timer/props/health pills flow to its RIGHT (no overlap — the button reads
+as the first pill in the row). (2) `_positionPanel()` (called on every open in `_toggleCollapse`)
+measures `.hud-top`'s live `getBoundingClientRect().bottom` and drops the OPEN panel just below it
+(default `top:96px` fallback clears two wrapped rows), so no HUD readout is covered. z-index 52/51
+are UNCHANGED (still above the pause menu — the `check-debug-menu` z-order regex expects
+`z-index:52`/`z-index:51` with no space). Style is still injected only by the module (style.css
+stays debug-free); the reserve padding applies whenever the default-on menu is present.
+
 **2026-07-12 (Jie) — REACHABLE MID-GAME ON PC.** Two fixes so the panel is actually usable during a
 desktop match: (1) the injected overlay z-index was raised above the pause menu — `#dbgToggle` 46→52,
 `#dbgPanel` 45→51, both now over `.pause-menu` (z 50) — so the DEBUG button + open panel are clickable

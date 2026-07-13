@@ -45,14 +45,21 @@ export class DebugMenu {
     const s = el('style');
     s.id = 'dbgStyle';
     s.textContent = `
-      /* z-index 52/51 sit ABOVE the pause menu overlay (.pause-menu z-index:50) so the DEBUG
+      /* LAYOUT (2026-07-12, VRmike): the DEBUG button sits as a PILL in the top-left HUD row
+         (top/left match .hud-top's 14px/12px), and body.dbg-present reserves room so the
+         role/timer/props/health pills flow to its RIGHT instead of hiding UNDER it. The OPEN
+         panel starts BELOW the HUD rows (default top:96px clears two wrapped rows; _positionPanel
+         refines it live from .hud-top's measured bottom) so no HUD readout is ever covered.
+         z-index 52/51 still sit ABOVE the pause menu overlay (.pause-menu z-index:50) so the
          button + open panel stay reachable from BOTH paths: backtick UI mode AND Esc→pause. */
-      #dbgToggle{position:fixed;top:8px;left:8px;z-index:52;min-width:44px;min-height:44px;
-        padding:8px 12px;border:0;border-radius:10px;background:#12081fdd;color:#ff5af0;
-        font:bold 13px/1 monospace;letter-spacing:1px;box-shadow:0 2px 8px #0008;cursor:pointer;}
+      body.dbg-present .hud-top{padding-left:104px;}
+      #dbgToggle{position:fixed;top:12px;left:12px;z-index:52;width:92px;min-height:30px;
+        padding:7px 10px;border:0;border-radius:20px;background:#12081fdd;color:#ff5af0;
+        font:bold 13px/1 monospace;letter-spacing:1px;box-shadow:0 2px 8px #0008;cursor:pointer;
+        text-align:center;pointer-events:auto;}
       #dbgToggle:active{transform:scale(.96);}
-      #dbgPanel{position:fixed;top:58px;left:8px;z-index:51;width:min(80vw,270px);
-        max-height:76dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
+      #dbgPanel{position:fixed;top:96px;left:8px;z-index:51;width:min(80vw,270px);
+        max-height:calc(94dvh - 96px);overflow-y:auto;-webkit-overflow-scrolling:touch;
         background:#12081fee;color:#f0e6ff;border:1px solid #ff2fd066;border-radius:12px;
         padding:8px 10px 12px;font:12px/1.4 monospace;box-shadow:0 4px 16px #000a;}
       #dbgPanel.hidden{display:none;}
@@ -170,11 +177,33 @@ export class DebugMenu {
     panel.appendChild(this._inspectBody);
 
     document.body.append(toggle, panel);
+    // Mark the body so the HUD reserves left-room for the DEBUG pill (see the injected
+    // `body.dbg-present .hud-top` rule) — the button now flows WITH the top-row pills.
+    document.body.classList.add('dbg-present');
     // Start COLLAPSED (2026-07-12, VRmike): only the small DEBUG button shows top-left; the
     // full panel opens on click. (Nothing else changes — the menu is still on by default.)
     this._collapsed = true;
     this._panel.classList.add('hidden');
     this._toggle.textContent = 'DEBUG ▸';
+  }
+
+  // Position the OPEN panel just BELOW the HUD top rows so it never covers a HUD readout.
+  // The top row wraps (health bar drops to its own line on narrow/portrait screens), so we
+  // measure .hud-top's rendered bottom live rather than hard-coding a row count; fall back to
+  // the DEBUG button's bottom, then to the CSS default (96px). Called every time it opens.
+  _positionPanel() {
+    const panel = this._panel;
+    if (!panel) return;
+    let top = 96;
+    const hudTop = typeof document !== 'undefined' ? document.querySelector('.hud-top') : null;
+    const rect = hudTop && hudTop.getBoundingClientRect ? hudTop.getBoundingClientRect() : null;
+    if (rect && rect.height > 0) top = Math.round(rect.bottom + 8);
+    else if (this._toggle && this._toggle.getBoundingClientRect) {
+      const r = this._toggle.getBoundingClientRect();
+      if (r && r.height > 0) top = Math.round(r.bottom + 8);
+    }
+    panel.style.top = top + 'px';
+    panel.style.maxHeight = `calc(94dvh - ${top}px)`;
   }
 
   _kv(parent, label) {
@@ -202,6 +231,7 @@ export class DebugMenu {
 
   _toggleCollapse() {
     this._collapsed = !this._collapsed;
+    if (!this._collapsed) this._positionPanel(); // opening: drop the panel below the HUD rows
     this._panel.classList.toggle('hidden', this._collapsed);
     this._toggle.textContent = this._collapsed ? 'DEBUG ▸' : 'DEBUG ▾';
   }

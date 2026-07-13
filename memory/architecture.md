@@ -119,7 +119,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   give-up timer preserved.
 - `js/input.js` — **owns EVERY control scheme** and funnels them all into one
   output shape (movement `mx,mz` + look `yaw,pitch` + action callbacks), so the
-  rest of the game is input-agnostic. Two schemes, chosen once by `isTouchDevice()`:
+  rest of the game is input-agnostic. Two schemes, chosen once by
+  `prefersTouchControls()` (2026-07-12: decides by POINTER CAPABILITY —
+  `matchMedia('(any-pointer: fine)')`/`'(hover: hover)'` ⇒ desktop even with a
+  touchscreen; only a no-fine-pointer device ⇒ touch. Fixes "touchscreen PC got
+  phone controls". Pure+injectable, unit-tested in `tools/check-input-mode.mjs`):
   - **Desktop** — WASD + pointer-lock mouse look. **Owns the whole pointer-lock
     handshake**: requests capture on click of the `lockTrigger` (the "Click to
     play" overlay, which covers the canvas and swallows its clicks) and drives the
