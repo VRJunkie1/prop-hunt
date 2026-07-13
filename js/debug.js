@@ -132,10 +132,18 @@ export class DebugMenu {
     this._bColliders = el('button', 'dbg-btn', 'Colliders');
     this._collidersOn = !!(this.ctx && this.ctx.debugFlag); // ?debug=1 builds the overlay at load
     this._bColliders.classList.toggle('on', this._collidersOn);
+    // TRUE COLLIDERS (Rapier): a SEPARATE toggle from the box/capsule "Colliders" view above,
+    // so both can be on at once for side-by-side comparison. This one draws the ACTUAL shapes
+    // Rapier is simulating (cuboid/ball/capsule/cylinder/cone/convex/trimesh) read straight from
+    // the live physics world — the point of this diagnostic build (SEE the polygon/mesh colliders
+    // instead of guessing at box sizes). Distinct magenta wires; see scene.updateTrueColliders.
+    this._bTrue = el('button', 'dbg-btn', 'True Colliders');
+    this._trueOn = false; // no load-time build — starts off, toggled live
     this._bFreeCam.addEventListener('click', () => this._toggleFreeCam());
     this._bFocus.addEventListener('click', () => this._toggleFocus());
     this._bColliders.addEventListener('click', () => this._toggleColliders());
-    viewBtns.append(this._bFreeCam, this._bFocus, this._bColliders);
+    this._bTrue.addEventListener('click', () => this._toggleTrueColliders());
+    viewBtns.append(this._bFreeCam, this._bFocus, this._bColliders, this._bTrue);
     panel.appendChild(viewBtns);
 
     const morphRow = el('div', 'dbg-btns');
@@ -270,12 +278,43 @@ export class DebugMenu {
     this._bColliders.classList.toggle('on', !!this._collidersOn);
   }
 
+  // Toggle the TRUE Rapier collider overlay (real shapes from the live physics world). Separate
+  // from _toggleColliders so both views can be on together. updateTrueColliders() (per-frame,
+  // below) does the drawing once this flag is on.
+  _toggleTrueColliders() {
+    const scene = this.ctx.getScene();
+    if (!scene || !scene.setTrueColliderView) { if (this.ctx.ui) this.ctx.ui.feed('True Colliders: start a match first.'); return; }
+    this._trueOn = !this._trueOn;
+    scene.setTrueColliderView(this._trueOn);
+    this._bTrue.classList.toggle('on', !!this._trueOn);
+  }
+
+  // The physics world the true-collider overlay reads. On the HOST that's the authoritative
+  // world (referee.physics) — it holds EVERY player's capsule (local AND remote) plus all props.
+  // On a guest there is no remote-player physics locally, so fall back to our own LOCAL
+  // prediction world (state.predict): static geometry + props + our OWN capsule. This is the
+  // collider set that actually exists in-browser for each client.
+  _trueWorld() {
+    const sess = this.ctx.getSession && this.ctx.getSession();
+    if (sess && sess.isHost && sess.referee && sess.referee.physics) return sess.referee.physics;
+    return this.ctx.state.predict;
+  }
+
   // Reset the local view toggles' button state (main.js already turned the scene flags
   // off) so the panel doesn't show "on" for a free cam / focus box that no longer runs.
   resetView() {
     this._focusOn = false;
     if (this._bFreeCam) this._bFreeCam.classList.remove('on');
     if (this._bFocus) this._bFocus.classList.remove('on');
+    // Tear down the true-collider overlay on the way back to the menu / lobby so no stale
+    // magenta wires linger (same discipline as free cam / focus box). The box "Colliders"
+    // view is left as-is (main.js doesn't reset it here either).
+    if (this._trueOn) {
+      const scene = this.ctx.getScene && this.ctx.getScene();
+      if (scene && scene.setTrueColliderView) scene.setTrueColliderView(false);
+      this._trueOn = false;
+      if (this._bTrue) this._bTrue.classList.remove('on');
+    }
   }
 
   _doInspect() {
@@ -344,6 +383,11 @@ export class DebugMenu {
 
     // FOCUS BOX: keep the box (and live inspector) tracking the entity under the crosshair.
     if (this._focusOn && scene) this._renderInspector(scene.debugPick());
+
+    // TRUE COLLIDERS: refresh the real-shape wires from the live physics world every frame so
+    // they track moving props / players. Reads the authoritative world on the host, else our
+    // local prediction world (see _trueWorld). No-op cost when the toggle is off.
+    if (this._trueOn && scene && scene.updateTrueColliders) scene.updateTrueColliders(this._trueWorld());
 
     // Heavier list rebuilds ~4 Hz.
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());

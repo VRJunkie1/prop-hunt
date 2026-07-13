@@ -184,6 +184,12 @@ export class Scene3D {
     this.selfMesh = null; // the local player's own avatar (only in third-person)
     this.selfKind = null; // appearance signature, so we rebuild on disguise/role change
     this.selfAlive = true;
+    this.selfDisguiseType = null; // local player's disguise type (for the OWN collider wire)
+    // Local-player collider wires (movement capsule + shot sensor) for the EXISTING collider
+    // view. VRmike's bug: that view only drew OTHER players; the local player uses selfMesh
+    // (not this.players), so his own capsule never showed. This lightweight entry wraps
+    // selfMesh so the SAME _addPlayerColliderWire/_addPlayerShotWire builders draw it too.
+    this._selfWireEntry = null;
     this.colliders = []; // walls + static props the camera ray tests against
     this._raycaster = new THREE.Raycaster();
     // Tunables.
@@ -235,6 +241,19 @@ export class Scene3D {
     this._lastCatalog = null;
     this.rules = null; // set by main.js (ensureScene) so the debug view can mirror thin-wall thickening
 
+    // ---- TRUE Rapier collider overlay (debug menu "True Colliders") ----------
+    // DISTINCT from the box/capsule view above. This reads collider shapes STRAIGHT from the
+    // live Rapier world (updateTrueColliders is handed a PhysicsWorld each frame) and draws
+    // each collider in its REAL form — cuboid / ball / capsule / cylinder / cone / convex hull
+    // / trimesh — never re-derived from the visible mesh. The whole point: SEE the actual
+    // physics geometry (polygon/mesh colliders) so a hitbox mismatch (VRmike's counter bug) is
+    // visible instead of guessed. Drawn in a distinct MAGENTA so where it disagrees with the
+    // old AABB-box overlay is obvious. See memory/notes/collider-debug.md.
+    this._trueColliderOn = false;
+    this._trueColliderGroup = null; // THREE.Group holding all true-shape wires
+    this._trueColliderWires = new Map(); // collider.handle -> { obj, key } (geometry built once)
+    this._trueSeen = new Set(); // scratch reused each frame to prune vanished colliders
+
     // ---- debug menu seams (?debug=1, driven by js/debug.js) ------------------
     // FREE CAM: detach the render camera and fly it (setFreeCam/updateFreeCam). Purely
     // rendering-side — the physics player never moves; nothing crosses the network.
@@ -285,6 +304,12 @@ export class Scene3D {
     // a rebuilt overlay doesn't try to remove objects that no longer exist.
     this._colliderWires = [];
     this._colliderStaticGroup = null;
+    this._selfWireEntry = null; // self collider wires were children of the cleared self mesh
+    // The true-collider group was added straight to the scene, so scene.clear() below drops it;
+    // forget the stale handle + per-handle map so updateTrueColliders rebuilds against the new
+    // world (the toggle flag persists so it keeps drawing across a round rebuild).
+    this._trueColliderGroup = null;
+    this._trueColliderWires.clear();
     // Animated character-model registry (the SWAT hunter). Config doesn't change
     // between matches, so keep any already-set registry when a new build omits it.
     if (characterModels) this.characterModels = characterModels;
@@ -308,6 +333,7 @@ export class Scene3D {
     // collision set / smoothed distance so a fresh match starts fully zoomed out.
     this.selfMesh = null;
     this.selfKind = null;
+    this._selfWireEntry = null;
     this.colliders = [];
     this._camDist = this._camDesiredDist;
     // scene.clear() also dropped the disguise-highlight outline; forget the stale
@@ -670,8 +696,10 @@ export class Scene3D {
   // frame from the PREDICTED local position in setCamera (not the lagging snapshot).
   _syncSelf(p) {
     this.selfAlive = p.alive;
+    this.selfDisguiseType = p.disguise || null; // for the OWN movement-capsule / shot-sensor wire
     if (!this._wantSelfMesh()) {
-      // First-person (e.g. a HUNTER): the camera is the eyes; draw no own body.
+      // First-person (e.g. a HUNTER): the camera is the eyes; draw no own body. The TRUE
+      // collider view still shows the local capsule (it reads the physics world, not the mesh).
       this._removeSelfMesh();
       return;
     }
@@ -684,12 +712,33 @@ export class Scene3D {
       this.selfMesh.position.set(p.x, this.selfMesh.userData.baseY, p.z);
       this.scene.add(this.selfMesh);
     }
+    // EXISTING collider view (box/capsule): attach the LOCAL player's own collider wires so
+    // VRmike sees his own hitbox, not only other players'. A disguise change rebuilds selfMesh
+    // above, which drops the old wires (children) → _addSelfColliderWires rebuilds them.
+    if (this._colliderViewOn) this._addSelfColliderWires();
+  }
+
+  // Attach the local player's movement-capsule (green) + shot-sensor (orange) wires to the
+  // self mesh, reusing the SAME builders remote players use via a lightweight entry wrapper.
+  // Idempotent: skips if the wires already exist on the current self mesh.
+  _addSelfColliderWires() {
+    if (!this.selfMesh) return;
+    if (!this._selfWireEntry || this._selfWireEntry.mesh !== this.selfMesh) {
+      // New/rebuilt self mesh → fresh entry (old wires went away with the old mesh).
+      this._selfWireEntry = { mesh: this.selfMesh, disguiseType: this.selfDisguiseType, colliderWire: null, shotWire: null };
+    } else {
+      this._selfWireEntry.disguiseType = this.selfDisguiseType;
+    }
+    const e = this._selfWireEntry;
+    this._addPlayerColliderWire(e);
+    this._addPlayerShotWire(e);
   }
 
   _removeSelfMesh() {
     if (this.selfMesh) this.scene.remove(this.selfMesh);
     this.selfMesh = null;
     this.selfKind = null;
+    this._selfWireEntry = null; // the collider wires were children of the removed mesh
   }
 
   // Draw the local player's OWN avatar when in third-person (props: you see your
@@ -1419,6 +1468,9 @@ export class Scene3D {
       this._addPlayerColliderWire(entry);
       this._addPlayerShotWire(entry);
     }
+    // The LOCAL player too (bug fix: only remote players used to show). selfMesh may not exist
+    // yet on the first build — the next _syncSelf re-adds it while _colliderViewOn is true.
+    if (this.selfMesh) this._addSelfColliderWires();
   }
 
   _clearColliderView() {
@@ -1429,6 +1481,13 @@ export class Scene3D {
       if (entry.colliderWire && entry.mesh) entry.mesh.remove(entry.colliderWire);
       if (entry.shotWire && entry.mesh) entry.mesh.remove(entry.shotWire);
       if (entry) { entry.colliderWire = null; entry.shotWire = null; }
+    }
+    // Local player's own wires (children of selfMesh).
+    if (this._selfWireEntry) {
+      const e = this._selfWireEntry;
+      if (e.colliderWire && e.mesh) e.mesh.remove(e.colliderWire);
+      if (e.shotWire && e.mesh) e.mesh.remove(e.shotWire);
+      e.colliderWire = null; e.shotWire = null;
     }
   }
 
@@ -1486,6 +1545,138 @@ export class Scene3D {
     wire.position.y = centerAboveFoot - baseY;
     entry.mesh.add(wire);
     entry.shotWire = wire;
+  }
+
+  // ---- TRUE Rapier collider overlay (debug menu "True Colliders") -----------
+  // Unlike setColliderView (box/capsule approximations), this draws the ACTUAL shapes Rapier
+  // is simulating — read straight from the live physics world, in their real form (cuboid /
+  // ball / capsule / cylinder / cone / convex hull / trimesh). A "compound" collider is just
+  // several colliders on one body, so it appears naturally as several wires. Whole point: SEE
+  // the polygon/mesh colliders so a hitbox mismatch (the counter bug) is visible, not guessed.
+  setTrueColliderView(on) {
+    this._trueColliderOn = !!on;
+    if (!this._trueColliderOn) this._clearTrueColliderView();
+    // When turned ON, the next updateTrueColliders(world) frame builds the wires (it needs the
+    // live physics world, which only main.js/debug.js holds).
+  }
+
+  _clearTrueColliderView() {
+    if (this._trueColliderGroup) {
+      this.scene.remove(this._trueColliderGroup);
+      this._trueColliderGroup.traverse((o) => {
+        if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+        if (o.material && o.material.dispose) o.material.dispose();
+      });
+    }
+    this._trueColliderGroup = null;
+    this._trueColliderWires.clear();
+  }
+
+  // Refresh the true-collider wires from a live PhysicsWorld. Called every frame (from the
+  // debug menu) while the toggle is on. `physicsWorld` is a PhysicsWorld whose `.world` is the
+  // Rapier World: on a guest that's the LOCAL prediction world (static geometry + props + the
+  // local player's own capsule — the collider set that exists in-browser); on the host it's the
+  // authoritative world (which ALSO holds remote players' capsules). Geometry is built ONCE per
+  // collider handle (a trimesh read is expensive) and only the transform is tracked each frame;
+  // a handle whose shape changed (disguise resize) rebuilds; a vanished handle is pruned.
+  updateTrueColliders(physicsWorld) {
+    if (!this._trueColliderOn) return;
+    const rWorld = physicsWorld && physicsWorld.world;
+    if (!rWorld || typeof rWorld.forEachCollider !== 'function') { this._clearTrueColliderView(); return; }
+    if (!this._trueColliderGroup) {
+      this._trueColliderGroup = new THREE.Group();
+      this._trueColliderGroup.renderOrder = 999;
+      this.scene.add(this._trueColliderGroup);
+    }
+    const seen = this._trueSeen;
+    seen.clear();
+    rWorld.forEachCollider((col) => {
+      const h = col.handle;
+      seen.add(h);
+      let rec = this._trueColliderWires.get(h);
+      const key = this._trueShapeKey(col);
+      if (!rec || rec.key !== key) {
+        if (rec && rec.obj) {
+          this._trueColliderGroup.remove(rec.obj);
+          if (rec.obj.geometry && rec.obj.geometry.dispose) rec.obj.geometry.dispose();
+        }
+        const obj = this._buildTrueColliderWire(col);
+        if (!obj) { this._trueColliderWires.delete(h); return; }
+        rec = { obj, key };
+        this._trueColliderGroup.add(obj);
+        this._trueColliderWires.set(h, rec);
+      }
+      const t = col.translation();
+      const q = col.rotation();
+      rec.obj.position.set(t.x, t.y, t.z);
+      rec.obj.quaternion.set(q.x, q.y, q.z, q.w);
+    });
+    for (const [h, rec] of this._trueColliderWires) {
+      if (!seen.has(h)) {
+        this._trueColliderGroup.remove(rec.obj);
+        if (rec.obj.geometry && rec.obj.geometry.dispose) rec.obj.geometry.dispose();
+        this._trueColliderWires.delete(h);
+      }
+    }
+  }
+
+  // A cache key that changes only when a collider's SHAPE (not its transform) changes, so a
+  // disguise-resize or prop swap rebuilds the wire while a moving prop just re-tracks.
+  _trueShapeKey(col) {
+    const s = col.shape;
+    if (!s) return 'none';
+    const t = s.type;
+    if (s.halfExtents) return `c${t}:${s.halfExtents.x},${s.halfExtents.y},${s.halfExtents.z}`;
+    if (s.vertices) return `v${t}:${s.vertices.length}`;
+    if (s.radius != null && s.halfHeight != null) return `r${t}:${s.radius},${s.halfHeight}`;
+    if (s.radius != null) return `b${t}:${s.radius}`;
+    return `t${t}`;
+  }
+
+  // Build a wireframe LineSegments for ONE collider from its real Rapier shape. Colour is a
+  // distinct bright MAGENTA so, drawn over the old yellow/green box overlay, any disagreement
+  // (the counter bug) reads at a glance. Local geometry only — the caller places it each frame
+  // from the collider's live world transform. Returns null for unsupported shapes (none used
+  // by this game today: segment / heightfield / half-space).
+  _buildTrueColliderWire(col) {
+    const s = col.shape;
+    if (!s) return null;
+    const COLOR = 0xff37e6; // magenta — distinct from the AABB overlay (grey/red/cyan/yellow/green/orange)
+    const t = s.type;
+    let solid = null; // a solid geometry we derive the wireframe/edges from
+    let allEdges = false; // true = show every triangle edge (mesh/round shapes); false = hard edges (box)
+    if (s.halfExtents) {
+      // Cuboid / RoundCuboid — clean box edges.
+      const he = s.halfExtents;
+      solid = new THREE.BoxGeometry(Math.max(he.x * 2, 1e-3), Math.max(he.y * 2, 1e-3), Math.max(he.z * 2, 1e-3));
+    } else if (s.vertices && (t === 6 || t === 9 || t === 16)) {
+      // TriMesh (6) / ConvexPolyhedron (9) / RoundConvexPolyhedron (16) — the REAL polygon mesh.
+      solid = new THREE.BufferGeometry();
+      solid.setAttribute('position', new THREE.BufferAttribute(new Float32Array(s.vertices), 3));
+      if (s.indices && s.indices.length) solid.setIndex(new THREE.BufferAttribute(new Uint32Array(s.indices), 1));
+      allEdges = true;
+    } else if (s.radius != null && s.halfHeight != null) {
+      // Capsule (2) / Cylinder (10) / Cone (11) + rounded variants. Rapier halfHeight is half the
+      // straight (cylinder) section, so the Three primitive's length/height = 2*halfHeight.
+      const r = Math.max(s.radius, 1e-3);
+      const len = Math.max(s.halfHeight * 2, 1e-3);
+      if (t === 10 || t === 14) { solid = new THREE.CylinderGeometry(r, r, len, 16); }
+      else if (t === 11 || t === 15) { solid = new THREE.ConeGeometry(r, len, 16); }
+      else { solid = new THREE.CapsuleGeometry(r, len, 6, 12); allEdges = true; }
+    } else if (s.radius != null) {
+      // Ball — sphere.
+      solid = new THREE.SphereGeometry(Math.max(s.radius, 1e-3), 14, 10);
+      allEdges = true;
+    } else {
+      return null; // segment / heightfield / half-space — not used in this game
+    }
+    const wireGeo = allEdges ? new THREE.WireframeGeometry(solid) : new THREE.EdgesGeometry(solid);
+    solid.dispose();
+    const mat = new THREE.LineBasicMaterial({ color: COLOR, transparent: true, opacity: 0.9 });
+    const seg = new THREE.LineSegments(wireGeo, mat);
+    seg.renderOrder = 999;
+    seg.frustumCulled = false;
+    return seg;
   }
 
   // ---- debug menu: free cam (?debug=1) --------------------------------------

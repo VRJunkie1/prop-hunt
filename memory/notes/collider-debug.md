@@ -42,6 +42,52 @@ SAME collider-size helpers `shared/physics.js` builds real colliders from. So "w
 ever diverge, that's the bug — fix `shared/bounds.js` and `physics.js _buildStatic` together
 (the constants and placement math are mirrored there with a "MUST match" comment).
 
+## TRUE Rapier collider overlay — "True Colliders" toggle (2026-07-13, VRmike)
+The overlay above (and the box/capsule "Colliders" toggle) draws **box/capsule approximations**
+built from `shared/bounds.js` — AABBs and capsules sized from the collider source. That is NOT
+necessarily the shape Rapier actually simulates. VRmike couldn't stand on some counters as a tiny
+prop even though the box helpers showed nothing in the way → the real physics geometry differs
+from the boxes. So this build added a SEPARATE **"True Colliders"** debug-menu toggle that reads
+the shapes STRAIGHT from the live Rapier world and draws each in its REAL form.
+
+- **Where:** `js/scene.js` `setTrueColliderView(on)` + `updateTrueColliders(physicsWorld)` +
+  `_buildTrueColliderWire(col)` + `_trueShapeKey(col)`. Driven by `js/debug.js`
+  `_toggleTrueColliders()` (button "True Colliders", separate from "Colliders" so BOTH can be on
+  for side-by-side comparison) and refreshed every frame from `debug.frame()`.
+- **Reads the engine, not the mesh.** `updateTrueColliders` walks `physicsWorld.world.forEachCollider`
+  and, per collider, reads `col.shape` (Rapier `Shape` — `halfExtents` for cuboid, `radius`/
+  `halfHeight` for capsule/cylinder/cone, `radius` for ball, `vertices`/`indices` for trimesh/convex)
+  and `col.translation()`/`col.rotation()`. Cuboid → box edges; ball/capsule → wireframe; cylinder/
+  cone → edges; trimesh/convex hull → the REAL triangle mesh (WireframeGeometry over the vertex/index
+  buffers). A "compound" collider is just several colliders on one body, so it appears as several
+  wires naturally (no special case). Colour is a distinct **MAGENTA (0xff37e6)** so where the true
+  shape and the old box overlay disagree is obvious — exactly VRmike's counter symptom.
+- **Which world.** `debug._trueWorld()`: on the **HOST** it uses the authoritative world
+  `session.referee.physics` (holds EVERY player capsule — local + remote — plus all props + shot
+  sensors); on a **GUEST** it falls back to the LOCAL prediction world `state.predict` (static
+  geometry + props + our OWN capsule). Remote players are not simulated in-browser on a guest
+  (they're interpolated visual meshes), so their true colliders only appear on the host — an
+  inherent limit of the client-prediction model, documented, not a bug.
+- **Cost control.** Wire geometry is built ONCE per collider `handle` (a trimesh vertex read is
+  expensive) and cached by a shape-key; each frame only the transform is updated. A shape change
+  (disguise resize → new capsule radius) rebuilds that one wire; a vanished handle (prop removed,
+  match end) is pruned. Torn down on toggle-off and on return-to-menu/lobby (`debug.resetView`),
+  and dropped by `buildWorld`'s `scene.clear()` (trackers reset there too).
+- **Verified against the real engine:** `tools/check-true-colliders.mjs` stands up the shared
+  `PhysicsWorld` and asserts every simulated collider maps to a known shape branch (no
+  "unsupported"), transforms are readable, and directly-built TriMesh/ConvexPolyhedron classify as
+  mesh wires. `tools/check-debug-menu.mjs` §7 locks the toggle + both wiring paths.
+
+## LOCAL player's own collider now shows in the EXISTING display (2026-07-13, VRmike)
+The box/capsule collider view used to draw only OTHER players' capsules — the local player's own
+capsule never appeared. Cause: `_buildColliderView`/`syncPlayers` iterate `scene.players` (REMOTE
+only); the local player is `scene.selfMesh` (not in that map). Fix: `scene._addSelfColliderWires()`
+attaches the SAME green movement-capsule + orange shot-sensor wires to `selfMesh`, called from
+`_syncSelf` (live, when the view is on) and `_buildColliderView` (toggle-on rebuild). Only shows
+when a self body exists (`_wantSelfMesh()` = third-person OR free cam), so a first-person hunter
+still shows none in this view (use the true-collider view or free cam) — but a third-person PROP
+(VRmike's case) now sees his own capsule against the counter.
+
 ## What it does NOT show
 It draws collider GEOMETRY. It cannot show a BEHAVIOURAL bug (e.g. the depenetration failsafe
 snapping a player back) — for those, watch how the player/props move against the boxes. The

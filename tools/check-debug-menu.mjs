@@ -190,6 +190,48 @@ const uiSrc = read('js', 'ui.js');
 ok(/\['`',/.test(uiSrc), "pause-menu controls list documents the ` key (free the mouse for debug/UI)");
 
 // ---------------------------------------------------------------------------
+// 7) TRUE-COLLIDER DIAGNOSTIC (2026-07-13, VRmike) — the build that lets us SEE the real
+//    Rapier collider shapes, plus the fix for the local player's own collider never showing.
+//    Two independent paths get checked so a builder can't satisfy the new renderer while
+//    leaving VRmike's own-capsule bug in the EXISTING display:
+//    (a) a new "True Colliders" toggle exists (separate from the box "Colliders" view);
+//    (b) LOCAL and REMOTE colliders are wired into the EXISTING (box/capsule) collider display;
+//    (c) LOCAL and REMOTE colliders are wired into the NEW true-Rapier renderer.
+// ---------------------------------------------------------------------------
+const sceneSrc7 = read('js', 'scene.js');
+
+// (a) the new toggle — a SEPARATE button/handler from _toggleColliders, driving a new
+//     scene.setTrueColliderView seam. Distinct so both overlays can be on at once.
+ok(/_toggleTrueColliders\s*\(\)\s*\{/.test(debugSrc) && /setTrueColliderView\(/.test(debugSrc),
+  '(a) debug menu has a "True Colliders" toggle (_toggleTrueColliders → scene.setTrueColliderView)');
+ok(/'True Colliders'/.test(debugSrc),
+  '(a) the True Colliders button is labelled + separate from the box "Colliders" view (side-by-side)');
+ok(/setTrueColliderView\s*\([^)]*\)\s*\{/.test(sceneSrc7) && /updateTrueColliders\s*\([^)]*\)\s*\{/.test(sceneSrc7),
+  '(a) scene.js defines setTrueColliderView() + updateTrueColliders() (the true-shape overlay seams)');
+
+// (b) EXISTING display renders BOTH local + remote. Remote: the players-map loop attaches the
+//     capsule wire. Local (the reported bug): selfMesh gets its own wires via _addSelfColliderWires,
+//     called from BOTH _syncSelf (live) and _buildColliderView (toggle-on rebuild).
+ok(/for \(const entry of this\.players\.values\(\)\)\s*\{[\s\S]*?_addPlayerColliderWire\(entry\)/.test(sceneSrc7),
+  '(b) EXISTING display wires REMOTE players (players-map loop → _addPlayerColliderWire)');
+ok(/_addSelfColliderWires\s*\(\)\s*\{[\s\S]*?_addPlayerColliderWire\(e\)[\s\S]*?_addPlayerShotWire\(e\)/.test(sceneSrc7),
+  '(b) scene defines _addSelfColliderWires (reuses the SAME builders for the LOCAL player)');
+ok(/if \(this\._colliderViewOn\) this\._addSelfColliderWires\(\)/.test(sceneSrc7),
+  '(b) _syncSelf attaches the LOCAL player collider wire when the view is on (fixes own-capsule never showing)');
+ok(/if \(this\.selfMesh\) this\._addSelfColliderWires\(\)/.test(sceneSrc7),
+  '(b) _buildColliderView also includes the LOCAL player (toggle-on rebuild path)');
+
+// (c) NEW true renderer covers BOTH. It iterates the live Rapier world's colliders; the world
+//     SOURCE is host-authoritative (holds local + remote capsules) or, on a guest, the local
+//     prediction world (holds our OWN capsule — the collider set that exists in-browser).
+ok(/updateTrueColliders[\s\S]*?forEachCollider\(/.test(sceneSrc7),
+  '(c) scene.updateTrueColliders iterates the live Rapier world (world.forEachCollider) — TRUE shapes, not mesh-derived');
+ok(/_trueWorld\s*\(\)\s*\{[\s\S]*?isHost[\s\S]*?referee\.physics[\s\S]*?state\.predict/.test(debugSrc),
+  '(c) debug _trueWorld() reads the HOST authoritative world (local+remote) else the LOCAL prediction world');
+ok(/scene\.updateTrueColliders\(this\._trueWorld\(\)\)/.test(debugSrc),
+  '(c) debug frame() feeds the chosen physics world into the true-collider renderer each frame');
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\ndebug-menu check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

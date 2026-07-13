@@ -1,5 +1,15 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-13 (VRmike) — NEW "True Colliders" toggle (diagnostic).** A SECOND collider toggle in
+the view-buttons row, separate from "Colliders" so both can be on at once. "Colliders" draws
+box/capsule approximations from `shared/bounds.js`; **"True Colliders"** draws the ACTUAL Rapier
+shapes read straight from the live physics world (`scene.setTrueColliderView`/`updateTrueColliders`,
+`debug._toggleTrueColliders`/`_trueWorld`), in a distinct magenta, so a mesh/convex collider that
+disagrees with the box helper (VRmike's counter bug) is visible. Also this build: the EXISTING
+"Colliders" view now includes the LOCAL player's own capsule (was remote-only). Detail:
+`memory/notes/collider-debug.md`. Guards: `check-debug-menu.mjs` §7 + `check-true-colliders.mjs`
+(new, live-Rapier) + `check-blindfold.mjs` (the two new `scene.*` seams).
+
 **2026-07-12 (VRmike) — LAYOUT: DEBUG button in the top row, panel below the HUD.** The DEBUG
 button used to sit at fixed `top:8/left:8` and COVER the top-left role pill, and the OPEN panel
 started at `top:58` and COVERED the health bar. Fixes (all in `js/debug.js` injected styles + one
