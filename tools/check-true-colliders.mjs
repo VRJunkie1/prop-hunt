@@ -142,6 +142,63 @@ if (convex) {
   console.log('  (RAPIER.ConvexPolyhedron unavailable in this build — trimesh branch already covers the mesh path)');
 }
 
+// ---- CONVEX-HULL COLLIDERS (2026-07-13, VRmike — collider overhaul option 1) ----------------
+// Prove that EVERY baked hull in shared/config/hulls.json actually builds a convex-hull collider
+// in the live engine (classifies as a mesh wire — the true-collider overlay will draw the real
+// polyhedron), and that a hull prop's collider is centred so its base rests on the floor. A hull
+// that came out degenerate would silently fall through shapeFor to a cuboid — this catches that
+// so a "hulled" prop can't quietly ship as a box. Also confirms the disguised-player movement +
+// shot colliders become hulls (the coordination point with the disguise-collider build).
+let hullDoc = { hulls: {} };
+try { hullDoc = JSON.parse(fs.readFileSync(new URL('../shared/config/hulls.json', import.meta.url), 'utf8')); } catch {}
+const hullTypes = Object.keys(hullDoc.hulls || {});
+console.log(`\nconvex-hull colliders (${hullTypes.length} baked type(s)):`);
+check(`safety scan verdict recorded`, !!(hullDoc.scan && hullDoc.scan.verdict), hullDoc.scan ? hullDoc.scan.verdict : 'missing');
+check(`safety scan excluded no room shells (or listed them)`, Array.isArray(hullDoc.scan && hullDoc.scan.excluded),
+  hullDoc.scan && hullDoc.scan.excluded ? `${hullDoc.scan.excluded.length} exclusion(s)` : 'n/a');
+
+let hullBuilt = 0, hullFellBack = 0, hullBadBase = 0;
+for (const type of hullTypes) {
+  const h = hullDoc.hulls[type];
+  const cat = { [type]: { shape: 'box', w: 1, h: 1, d: 1, hullVerts: h.v, hullAabb: h.aabb } };
+  const hw = new PhysicsWorld(RAPIER, { size: 40, fixtures: [] }, [{ id: 1, type, x: 0, z: 0, y: 0, rot: 0 }], cat, { dynamicProps: true, rules, feel });
+  let kind = null, base = null;
+  hw.world.forEachCollider((col) => {
+    // the single prop body's collider (ground/walls are cuboids at the edges; the prop is at x=0)
+    const t = col.translation();
+    if (Math.abs(t.x) < 0.01 && Math.abs(t.z) < 0.01 && col.shape && !col.shape.halfExtents) {
+      kind = classifyShape(col.shape); base = t.y - h.aabb.h / 2;
+    }
+  });
+  if (kind === 'mesh') hullBuilt++; else hullFellBack++;
+  if (base != null && Math.abs(base) > 0.03) hullBadBase++;
+  hw.destroy();
+}
+check('every baked hull builds a convex-hull (mesh) collider', hullFellBack === 0, `${hullBuilt} hull / ${hullFellBack} fell back to a box`);
+check('hull prop bases rest on the floor (y=0)', hullBadBase === 0, `${hullBadBase} misplaced`);
+
+// The disguised-player path: a hull-typed disguise gives a MESH movement collider (not a capsule)
+// AND a MESH shot sensor — the coordination the disguise-collider build asked the second builder for.
+if (hullTypes.length) {
+  const t0 = hullTypes[0];
+  const h0 = hullDoc.hulls[t0];
+  const cat = { [t0]: { shape: 'box', w: 1, h: 1, d: 1, hullVerts: h0.v, hullAabb: h0.aabb } };
+  const dw = new PhysicsWorld(RAPIER, { size: 40, fixtures: [] }, [], cat, { dynamicProps: true, rules, feel });
+  dw.addPlayer('p', { x: 0, y: 0, z: 0 });
+  if (dw.setPlayerCollider) dw.setPlayerCollider('p', t0);
+  if (dw.setShotCollider) dw.setShotCollider('p', t0);
+  const body = dw.players.get('p').body;
+  let move = null, sensor = null;
+  for (let i = 0; i < body.numColliders(); i++) {
+    const col = body.collider(i);
+    const isSensor = col.isSensor ? col.isSensor() : false;
+    (isSensor ? (sensor = classifyShape(col.shape)) : (move = classifyShape(col.shape)));
+  }
+  check(`disguised-as-hull player movement collider is a hull (${t0})`, move === 'mesh', `movement = ${move}`);
+  check(`disguised-as-hull player shot sensor is a hull (${t0})`, sensor === 'mesh', `sensor = ${sensor}`);
+  dw.destroy();
+}
+
 if (failures) {
   console.error(`\ntrue-collider check FAILED (${failures} problem${failures > 1 ? 's' : ''})`);
   process.exit(1);

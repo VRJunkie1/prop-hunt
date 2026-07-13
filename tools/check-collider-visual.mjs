@@ -112,6 +112,16 @@ function nativeBbox(modelPath) {
 const maps = readJSON('shared', 'config', 'maps.json');
 const props = readJSON('shared', 'config', 'props.json');
 const fixtures = readJSON('shared', 'config', 'fixtures.json');
+// CONVEX-HULL SEAM: attach the baked hull verts/AABB onto each catalog entry exactly as
+// js/config.js does at runtime, so halfExtentsFor() returns the HULL footprint (its world AABB)
+// for hulled entries — this audit then checks the shipping collider, not the dormant primitive.
+let hullDefs = {};
+try { hullDefs = (readJSON('shared', 'config', 'hulls.json').hulls) || {}; } catch { hullDefs = {}; }
+for (const [type, h] of Object.entries(hullDefs)) {
+  if (!h || !Array.isArray(h.v) || h.v.length < 12 || !h.aabb) continue;
+  if (props[type]) { props[type].hullVerts = h.v; props[type].hullAabb = h.aabb; }
+  if (fixtures[type]) { fixtures[type].hullVerts = h.v; fixtures[type].hullAabb = h.aabb; }
+}
 // Every model-bearing catalog entry is referenced by the restaurant map (the only map with
 // GLBs). Its modelScale (0.75) is the uniform factor scene.js applies to a scaled GLB.
 const mapScale = (maps.restaurant && maps.restaurant.modelScale) || 0.75;
@@ -187,6 +197,33 @@ function auditCatalog(label, catalog) {
 
 auditCatalog('PROPS (disguise pool)', props);
 auditCatalog('FIXTURES (built-ins + knockable scenery)', fixtures);
+
+// ---- CONVEX-HULL audit (2026-07-13) --------------------------------------------------------
+// For every baked hull, assert its world-space AABB matches the FRESH GLB mesh bbox on all three
+// axes — BOTH directions (covers the model AND doesn't bulge past it). A convex hull of the mesh
+// verts can only lie ON/INSIDE the mesh bounds; the bake includes the 6 axis support points so the
+// AABB should equal the mesh AABB. A mismatch means a SCALE-TRAP (hull baked at the wrong factor)
+// or a STALE hull (GLB changed since the bake) — re-run tools/build-hulls.mjs. This is the "hull
+// vertices lie on/inside the mesh bounds and cover them" check the collider-overhaul plan called
+// for (a hull is not a box, so the box-dims comparison alone isn't enough).
+console.log('CONVEX HULLS (hullAABB vs fresh GLB mesh bounds):');
+let hullChecked = 0;
+for (const catalog of [props, fixtures]) {
+  for (const [type, c] of Object.entries(catalog)) {
+    if (type.startsWith('_') || !c || !c.hullAabb || !c.model) continue;
+    const native = nativeBbox(c.model);
+    const vis = native ? meshSize(c, mapScale, { [c.model]: native }) : null;
+    if (!vis) { console.log(`  ? ${type} — UNVERIFIABLE (could not measure ${c.model})`); unverifiable++; continue; }
+    const a = c.hullAabb;
+    const dw = Math.abs(a.w - vis.w), dh = Math.abs(a.h - vis.h), dd = Math.abs(a.d - vis.d);
+    const tol = (v) => Math.max(ABS_TOL, v * REL_TOL);
+    const good = dw <= tol(vis.w) && dh <= tol(vis.h) && dd <= tol(vis.d);
+    hullChecked++;
+    ok(good, `${type} hull AABB ${a.w.toFixed(2)}×${a.h.toFixed(2)}×${a.d.toFixed(2)} == mesh ${vis.w.toFixed(2)}×${vis.h.toFixed(2)}×${vis.d.toFixed(2)}` +
+      (good ? '' : ` — DRIFT w:${dw.toFixed(2)} h:${dh.toFixed(2)} d:${dd.toFixed(2)} (re-run tools/build-hulls.mjs)`));
+  }
+}
+console.log(`  (${hullChecked} hull entr${hullChecked === 1 ? 'y' : 'ies'} checked)\n`);
 
 console.log(`summary: ${fails} under-coverage failure(s), ${roundReports} round-horizontal report(s), ${unverifiable} unverifiable.\n`);
 if (fails) {

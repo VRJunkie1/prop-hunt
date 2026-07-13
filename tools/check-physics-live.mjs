@@ -271,6 +271,40 @@ for (const dyn of [true, false]) {
   w.destroy();
 }
 
+// CONVEX-HULL DISGUISE MOVEMENT (2026-07-13, VRmike — collider overhaul option 1). A player
+// disguised as a HULLED prop gets a convex-HULL movement collider (through the same
+// _buildMoveColliderDesc/shapeFor path). Prove the KinematicCharacterController drives a hull
+// body correctly: it grounds stably, its foot rests on the floor, and it can walk — the movement
+// catch for a degenerate/inside-out hull (which would make the player fall through or wedge).
+{
+  const isHull = (col) => { const s = col && col.shape; return !!(s && s.vertices && !s.halfExtents && s.radius == null); };
+  let hullDoc = { hulls: {} };
+  try { hullDoc = JSON.parse(fs.readFileSync(new URL('../shared/config/hulls.json', import.meta.url), 'utf8')); } catch {}
+  const type = 'diner_chair';
+  const h = hullDoc.hulls && hullDoc.hulls[type];
+  if (!h) {
+    console.log(`  (skip hull-disguise movement — ${type} not in hulls.json)`);
+  } else {
+    const hcat = { [type]: { shape: 'box', w: 1, h: 1, d: 1, hullVerts: h.v, hullAabb: h.aabb } };
+    const w = new PhysicsWorld(RAPIER, { size: 40, fixtures: [] }, [], hcat, { dynamicProps: true, rules, feel });
+    w.addPlayer('p', { x: 0, y: 0, z: 0 });
+    w.setPlayerCollider('p', type);
+    check('hull-disguise-move-collider-is-hull', isHull(w.players.get('p').collider), `movement collider hull=${isHull(w.players.get('p').collider)}`);
+    w.setPlayerPosition('p', { x: 0, y: 0.5, z: 0 });
+    let gsum = 0, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < 300; i++) {
+      w.setPlayerInput('p', { mx: 1, mz: 0, yaw: 0, jump: false });
+      w.step(H);
+      const pp = w.players.get('p');
+      if (i > 120) { if (pp.grounded) gsum++; const y = w.getPlayer('p').y; minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+    }
+    check('hull-disguise-grounds-stably', gsum > 150, `grounded ${gsum}/180 substeps after settle`);
+    check('hull-disguise-foot-on-floor', Math.abs(minY) < 0.08 && Math.abs(maxY) < 0.08, `foot y range [${minY.toFixed(3)},${maxY.toFixed(3)}] (want ≈0)`);
+    check('hull-disguise-can-walk', w.getPlayer('p').x > 3, `walked to x=${w.getPlayer('p').x.toFixed(2)}`);
+    w.destroy();
+  }
+}
+
 if (failures) {
   console.error(`\nphysics live-sim check FAILED (${failures} problem${failures > 1 ? 's' : ''})`);
   process.exit(1);

@@ -5,7 +5,7 @@ let cache = null;
 
 export async function loadConfig() {
   if (cache) return cache;
-  const [maps, props, fixtures, rules, assetDims, feel, characterModels] = await Promise.all([
+  const [maps, props, fixtures, rules, assetDims, hulls, feel, characterModels] = await Promise.all([
     fetch('/shared/config/maps.json').then((r) => r.json()),
     fetch('/shared/config/props.json').then((r) => r.json()),
     fetch('/shared/config/fixtures.json').then((r) => r.json()),
@@ -14,6 +14,10 @@ export async function loadConfig() {
     // bounding-box normalization build). Tolerate absence — if the file is
     // missing/malformed, colliders simply fall back to the primitive footprints.
     fetch('/shared/config/asset-dims.json').then((r) => r.json()).catch(() => ({ dims: {} })),
+    // CONVEX-HULL collider point clouds baked from each model's real mesh vertices at
+    // final world scale (output of tools/build-hulls.mjs). Tolerate absence — if it's
+    // missing/malformed, colliders fall back to measured/primitive. See notes/physics.md.
+    fetch('/shared/config/hulls.json').then((r) => r.json()).catch(() => ({ hulls: {} })),
     // Physics FEEL tuning (restitution / solver iterations / prop damping). Tolerate
     // absence — physics.js applies safe defaults if it's missing/malformed. This ONE
     // object flows to BOTH the host's authoritative world and every client's
@@ -43,6 +47,20 @@ export async function loadConfig() {
     const measured = { w: box.w, h: box.h, d: box.d };
     if (props[type]) props[type].measured = measured;
     if (fixtures[type]) fixtures[type].measured = measured;
+  }
+  // CONVEX-HULL SEAM (same one-mutation-three-consumers pattern as `measured` above). Attach
+  // each baked hull's flat vertex array + world-space AABB onto its catalog entry. Because the
+  // SAME cfg object flows to the host referee's PhysicsWorld, every client's prediction world,
+  // and the renderer, this one attach reaches all three — so shapeFor()/halfExtentsFor() bake a
+  // convex hull (its FIRST branch, ahead of measured/primitive) identically everywhere. A hull
+  // supersedes the measured cuboid and the primitive; a missing/degenerate hull falls through.
+  const hullDefs = (hulls && hulls.hulls) || {};
+  for (const [type, h] of Object.entries(hullDefs)) {
+    if (!h || !Array.isArray(h.v) || h.v.length < 12) continue; // need >=4 points (x,y,z each)
+    const aabb = h.aabb && h.aabb.w > 0 && h.aabb.h > 0 && h.aabb.d > 0 ? { w: h.aabb.w, h: h.aabb.h, d: h.aabb.d } : null;
+    if (!aabb) continue;
+    if (props[type]) { props[type].hullVerts = h.v; props[type].hullAabb = aabb; }
+    if (fixtures[type]) { fixtures[type].hullVerts = h.v; fixtures[type].hullAabb = aabb; }
   }
   cache = { maps, props, fixtures, rules, feel, characterModels };
   return cache;

@@ -3,6 +3,20 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-13 CONVEX-HULL COLLIDERS for props & fixtures (VRmike — collider overhaul option 1)
+Model-bearing, non-`arch`, BOX-shaped props/fixtures now use a **convex hull baked from the
+model's real mesh vertices** (at final world scale) instead of a hand-guessed cuboid. It is the
+new FIRST branch in the ONE collider-shape selector `shapeFor()` (hull → measured cuboid →
+primitive), so world props, static fixtures, AND a disguised player's movement + shot colliders
+all inherit hulls with no parallel path. Round items keep their primitive. Hull point clouds are
+**baked offline** into `shared/config/hulls.json` (`tools/build-hulls.mjs`, same pattern as
+asset-dims.json) — deterministic across peers, synchronous at match start, no runtime
+collider-swap. A safety scan excludes any room-scale / multi-object mesh (verdict this build:
+"all pieces, no room shells", 0 exclusions). Hulls fill concavities (chair/table/shelf/dishrack
+seal — accepted option-1 cost; option 2 = V-HACD decomposition is the future fix). Degenerate
+hull → falls through to the primitive. **FULL DETAIL: `notes/convex-hull-colliders.md`.** This
+supersedes the "NOT convex hulls — deliberate" note in the Bodies & colliders section below.
+
 ## 2026-07-12 SHOT IMPULSE — knockable props kick when shot (VRmike)
 `PhysicsWorld.applyShotImpulse(propId, point, dir, speed)`: a shot landing on a DYNAMIC prop
 gives its rigid body a small kick. HOST-ONLY by construction — `if (!this.dynamicProps) return
@@ -581,10 +595,13 @@ readers (`js/scene.js`, `js/main.js`) + catalog flags (`shared/config/*`).
   2. Else fall back to the **catalog primitive** cuboid/cylinder/cone/ball
      (hand-authored `w/h/d/r`). This is what ships until the bounding-box build
      populates `asset-dims.json` (currently EMPTY → fallback path everywhere).
-  NOT convex hulls baked from the GLBs — deliberate: GLBs load async and can fail,
-  so hull-from-mesh would make the collision shape non-deterministic and race the
-  sim. Upgrading dynamic props to convex hulls (once their GLB is cached) is a
-  future refinement, not v1.
+  UPDATE 2026-07-13 — the "NOT convex hulls" note below is SUPERSEDED. Convex hulls ARE
+  now the FIRST branch of `shapeFor` (hull → measured → primitive), fed by hull point
+  clouds BAKED offline into `shared/config/hulls.json` (not generated from async GLB
+  loads), so the shape stays deterministic and doesn't race the sim — the exact concern
+  the old note raised. See `notes/convex-hull-colliders.md`.
+  (Historical note, now moot:) hulls were originally deferred because generating them from
+  async GLB loads would be non-deterministic — baking sidesteps that entirely.
 
 ## Movement / jump
 - Same forward/right formula as the referee + client (`architecture.md` Movement

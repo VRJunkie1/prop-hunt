@@ -8,6 +8,52 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: CONVEX-HULL COLLIDERS for props & fixtures (2026-07-13, VRmike, branch build/83-convex-hull-colliders-for). Collider-overhaul option 1. ALL headless guards GREEN incl. new hull assertions + page boots clean (0 console errors). Owes a live pass (True-collider eyeball + phone-host FPS). FULL DETAIL: `notes/convex-hull-colliders.md`.
+
+Replaced hand-guessed BOX colliders on model-bearing, non-architecture props/fixtures with
+**convex hulls baked from each model's REAL mesh vertices** at final world scale. 49 types
+hulled; round items (barrels/balls/plates/pots/…) keep their primitive; floors/walls stay
+cuboids. Now bullets + players collide with something that hugs the real furniture.
+
+- **SAFETY SCAN FIRST (VRmike's entombment concern):** `tools/build-hulls.mjs` scans every
+  candidate for room-scale bounds or a multi-object (disjoint-island) mesh — either would
+  become one solid block that seals players in. **Verdict: "all pieces, no room shells" — 0
+  exclusions** (every candidate is a single-island, sub-room-scale PIECE; the known multi-panel
+  KIT GLBs aren't referenced by any catalog entry).
+- **ONE decision point:** hulls are the new FIRST branch in `shared/physics.js shapeFor()`
+  (hull → measured cuboid → primitive). World props, static fixtures, AND — coordinating with
+  the disguise-collider build (`54fb2bf`, landed first) — a disguised player's MOVEMENT collider
+  and SHOT sensor all inherit hulls through that one selector. Constraint 4 satisfied: the
+  second-landing build (this one) gives disguised players hull colliders at their rescaled size.
+- **BAKED, not load-time (deliberate deviation from plan step 3):** hull point clouds are baked
+  offline into committed `shared/config/hulls.json` (like asset-dims.json), attached by
+  `config.js` as `hullVerts`/`hullAabb`. Deterministic across peers, synchronous at match start,
+  NO new runtime collider-swap machinery in the physics/netcode layer, NO async spawn-swap
+  window. Re-run `node tools/build-hulls.mjs` after changing any GLB. Degenerate hull → falls
+  through to primitive (guard).
+- **Scale trap handled:** the bake scales verts by the SAME `native × map.modelScale (0.75)` and
+  recenter the renderer uses; verified hull AABB == fresh GLB mesh bbox for all 49
+  (`check-collider-visual.mjs` hull section).
+- **Accepted "filled-in" cost:** hulls seal concavities — worst offenders `shelf`/`dishrack`
+  (open racks solid), tables (can't hide under), `diner_chair` (seals under seat). Can't shoot
+  through a shelf's gaps / hide under a table anymore. Option 2 (V-HACD decomposition) is the
+  future fix if it hurts gameplay.
+- **Verify:** `check-true-colliders.mjs` (all 49 build as convex-hull colliders, 0 fall back to
+  a box; bases on floor; disguised-as-hull move+shot = hulls); `check-collider-visual.mjs` (hull
+  AABB == mesh); `check-physics-live.mjs` §hull-disguise (hull movement body grounds/walks).
+  Full harness GREEN: combat, physics, physics-solidity, physics-feel, blindfold,
+  disguise-eligibility, flicker. Page boots clean normal + ?debug=1.
+- **Files:** `tools/build-hulls.mjs` (new), `shared/config/hulls.json` (new/generated),
+  `js/config.js`, `shared/physics.js` (shapeFor + halfExtentsFor hull-first branch),
+  `tools/check-{collider-visual,true-colliders,physics-live}.mjs`,
+  `memory/notes/convex-hull-colliders.md` (new) + physics.md/asset-dims.md/architecture.md, this
+  file. NO change to netcode/protocol/referee/scene render.
+- **OWED — live pass:** True-collider (magenta) overlay shows hulls hugging chairs/crates/
+  appliances/tables; shoot a chair/table at its real silhouette (no more whiff on the loose box
+  around legs); confirm the filled-in tradeoff is OK; disguise as a chair/crate and check
+  fit+collision; watch phone-host FPS with ~49 hull colliders (lower `maxDynamicProps` if it
+  hitches).
+
 ## Latest: LOBBY NAME CHANGES (2026-07-13, VRmike, branch build/78-lobby-name-changes-requested). All headless guards GREEN incl. a NEW `check-lobby-rename.mjs` + page boots clean (zero console errors). Simple additive feature — rides the existing host-authoritative roster rebroadcast. Owes only a live 2-player eyeball (headless can't reach the lobby — it needs PeerJS).
 
 Let ANY player (host OR an invite-link guest) change their display name from the lobby at any

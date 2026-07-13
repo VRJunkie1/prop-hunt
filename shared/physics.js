@@ -138,10 +138,27 @@ export async function loadRapier() {
 //      from the catalog w/h/d/r). Robust and synchronous, but eyeballed. This is
 //      what ships until the measured file is populated.
 //
-// Convex hulls baked from the GLB meshes were considered but rejected for a blind
-// one-pass build: the GLBs load async and can fail, so coupling collision to them
-// would make the world non-deterministic in shape. Documented in notes/physics.md.
+// CONVEX-HULL FIRST (2026-07-13, VRmike — collider overhaul option 1). If config.js attached
+// `c.hullVerts` (a flat [x,y,z,...] point cloud baked from the model's ACTUAL mesh vertices at
+// final world scale by tools/build-hulls.mjs, AABB centred on the origin), bake a
+// ColliderDesc.convexHull from it so the collider hugs the real shape instead of a hand-guessed
+// box. Deterministic: identical committed verts -> identical hull on host + every client (Rapier's
+// hull is computed from the same Float32Array), so prediction/reconciliation never fight. Rapier
+// returns null for a degenerate (flat/inside-out) point set — that DEGENERATE GUARD falls through
+// to the measured cuboid / primitive, so a bad hull is never a broken in-game collider. This is
+// the ONE new branch in the ONE collider-shape selector; props, fixtures, and (via
+// _buildMoveColliderDesc / _buildShotColliderDesc) a disguised player's movement + shot colliders
+// all inherit hulls through it. NOTE hulls fill concavities (a chair seals under its seat) — the
+// accepted cost of option 1; see notes/physics.md. Baking (vs load-time generation) chosen for
+// determinism + zero runtime collider-swap machinery — see notes/convex-hull-colliders.md.
 function shapeFor(RAPIER, c) {
+  if (c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0) {
+    const desc = RAPIER.ColliderDesc.convexHull(
+      c.hullVerts instanceof Float32Array ? c.hullVerts : Float32Array.from(c.hullVerts)
+    );
+    if (desc) return { desc, halfH: c.hullAabb.h / 2 };
+    // else: degenerate hull — fall through to measured/primitive below.
+  }
   const m = c.measured;
   if (m && m.w > 0 && m.h > 0 && m.d > 0) {
     return { desc: RAPIER.ColliderDesc.cuboid(m.w / 2, m.h / 2, m.d / 2), halfH: m.h / 2 };
@@ -167,6 +184,13 @@ function shapeFor(RAPIER, c) {
 // on what a collider's size is. `box` marks whether a cuboid collider is used (a
 // measured entry always forces a cuboid — see shapeFor / notes/asset-dims.md).
 export function halfExtentsFor(c) {
+  // Convex hull first (matches shapeFor's branch order): its footprint is the baked world-space
+  // AABB. Treated as `box:true` for coverage/solidity purposes — the hull's AABB equals the mesh
+  // AABB by construction (the bake includes the 6 axis support points), so it covers the visual.
+  const hb = c && c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb;
+  if (hb && c.hullAabb.w > 0 && c.hullAabb.h > 0 && c.hullAabb.d > 0) {
+    return { hx: c.hullAabb.w / 2, hy: c.hullAabb.h / 2, hz: c.hullAabb.d / 2, box: true };
+  }
   const m = c && c.measured;
   if (m && m.w > 0 && m.h > 0 && m.d > 0) return { hx: m.w / 2, hy: m.h / 2, hz: m.d / 2, box: true };
   switch (c && c.shape) {
