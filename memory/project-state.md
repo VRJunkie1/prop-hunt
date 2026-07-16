@@ -8,6 +8,8 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Check-repair (2026-07-16, branch build/96-map-density-hide-spot): `check-hunter-model.mjs` was failing on its "main.js passes the character-model registry into buildWorld" assertion. NOT a code bug — the MAP DENSITY commit (013d9d0) correctly appended a new `state.removedFixtures` arg AFTER `characterModels` in the `buildWorld(...)` call, but the check's regex `buildWorld\([^)]*characterModels\)` assumed `characterModels` was the LAST arg (immediately before `)`). Fixed the stale regex to `buildWorld\([^)]*characterModels\b` (still asserts the registry is passed, now tolerant of trailing args). check-hunter-model now GREEN; page boots clean (0 console errors). Check-only change; no runtime code touched.
+
 ## Latest: MAP DENSITY + HIDE-SPOT EXPANSION (2026-07-16, VRmike, branch build/96-map-density-hide-spot). ALL headless guards GREEN incl. a NEW `check-hide-spot-density.mjs` + page boots clean (0 console errors, ?debug=1). Owes a live pass (walk the new dining clusters + a round where a built-in was removed). Three parts:
 
 1. **DINING DENSITY (data-only, maps.json → restaurant).** +4 `round_table` fixtures at (±6,3)

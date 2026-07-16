@@ -142,7 +142,7 @@ ok(/animated:\s*true/.test(sceneSrc), 'js/scene.js builds the animated model onl
 
 const mainSrc = read('js', 'main.js');
 ok(/scene\.updateAnimations\(/.test(mainSrc), 'js/main.js drives scene.updateAnimations(dt) each frame');
-ok(/buildWorld\([^)]*characterModels\)/.test(mainSrc), 'js/main.js passes the character-model registry into buildWorld');
+ok(/buildWorld\([^)]*characterModels\b/.test(mainSrc), 'js/main.js passes the character-model registry into buildWorld');
 
 // ---------------------------------------------------------------------------
 if (fails) {
