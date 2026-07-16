@@ -30,6 +30,25 @@
 - Rule of thumb for future map edits: a spawn needs real clearance from EVERY collider, props
   included. `tools/_spawn_diag.mjs` prints per-spawn nearest-collider clearance for quick checks.
 
+## Wedged auto-respawn DISABLED for diagnosis (2026-07-16, VRmike)
+- STATUS: the WEDGED path of the failsafe (`stuck` → teleport-to-spawn) is turned OFF in
+  `shared/referee.js` `integrate()` as a diagnostic experiment. Fell-through-floor and
+  out-of-arena recoveries are UNCHANGED and stay live. This is a reversible switch-flip.
+- WHY: VRmike still hit the "locked at spawn, move a little, snap back" loop even after the
+  spawn-clearance data/guard fix above (6d459fe). New hypothesis: the wedged flag is a FALSE
+  POSITIVE for DISGUISED players. `_isPenetrating` in `shared/physics.js` runs its penetration
+  test against a bounding-capsule PROXY that can be FATTER than the real disguise collider, so
+  a disguised player with nothing actually colliding gets flagged wedged → the ~0.5 s failsafe
+  teleports them to spawn → they nudge → flagged again → infinite lock. Disabling the teleport
+  should stop the loop and confirm the theory.
+- STILL LIVE while disabled: the escape-hatch flagging itself is untouched; `consumeStuckPlayers()`
+  is still drained each sweep (so the set can't accumulate), and a `console.warn` names the
+  flagged id(s) as SUPPRESSED so the host console keeps collecting evidence.
+- LIKELY REAL FIX (follow-up, once confirmed): make the penetration test accurate — test against
+  the player's REAL disguise collider shape instead of the fat capsule proxy — AND strip a player
+  back to their normal capsule on an emergency respawn so a re-spawned player can't immediately
+  re-wedge. Only then re-enable the wedged respawn.
+
 ## Related
 - Failsafe / clamp: `shared/referee.js` `integrate` (~L953 arena-edge clamp, ~L985 failsafe).
 - `check-hide-spot-density.mjs` §5 also checks spawn clearance but only vs STATIC fixtures on

@@ -1062,29 +1062,46 @@ export class Referee {
         const innerFace = map.size / 2 - WALL_INSET;
         // Players the depenetration escape hatch flagged as wedged beyond recovery
         // (snap-to-anchor failing for ~0.33 s straight — a poisoned anchor).
-        const stuckIds = new Set(this.physics.consumeStuckPlayers ? this.physics.consumeStuckPlayers() : []);
-        let fellPlayers = 0, escapedPlayers = 0, stuckPlayers = 0;
+        //
+        // WEDGED-RESPAWN DISABLED 2026-07-16 (requested by VRmike) — DIAGNOSTIC EXPERIMENT.
+        // VRmike still hits the "locked at spawn, move a little, snap back" loop. Hypothesis:
+        // the wedged flag is a FALSE POSITIVE for disguised players — _isPenetrating (shared/
+        // physics.js) tests a bounding-capsule PROXY that can be fatter than the real disguise
+        // collider, so a player with nothing actually colliding gets flagged wedged and then
+        // teleported to spawn every ~0.5 s → infinite lock loop. We are turning the wedged
+        // TELEPORT off to confirm the theory. We STILL drain the flag (consumeStuckPlayers,
+        // below) so the set can't accumulate, and we STILL console.warn the flagged id(s) so
+        // the evidence keeps arriving in the host console while the teleport is suppressed.
+        // The fell-through-floor and out-of-arena recoveries below are UNCHANGED and remain
+        // fully live — only the `stuck` respawn path is disabled.
+        const stuckIds = this.physics.consumeStuckPlayers ? this.physics.consumeStuckPlayers() : [];
+        let fellPlayers = 0, escapedPlayers = 0;
         for (const p of this.players.values()) {
           if (!p.alive || !p.spawn) continue;
           const t = this.physics.getPlayer(p.id); // TRUE body pose (p.pos is clamped)
           const fell = (p.pos.y || 0) + capsuleH < floorTop - 2;
           const escaped = t && (Math.abs(t.x) > innerFace || Math.abs(t.z) > innerFace);
-          const stuck = stuckIds.has(p.id);
-          if (!fell && !escaped && !stuck) continue;
+          if (!fell && !escaped) continue; // wedged (`stuck`) intentionally NOT recovered — see note above
           p.pos = { x: p.spawn.x, y: 0, z: p.spawn.z };
           this.physics.setPlayerPosition(p.id, p.pos);
           if (fell) fellPlayers++;
-          else if (escaped) escapedPlayers++;
-          else stuckPlayers++;
+          else escapedPlayers++;
+        }
+        // Wedged respawn is suppressed (2026-07-16, VRmike diagnostic): report the flagged
+        // id(s) so the host console still sees the evidence, but do NOT teleport them.
+        if (stuckIds.length > 0) {
+          console.warn(
+            `[physics] WEDGED respawn SUPPRESSED (disabled 2026-07-16 for diagnosis, suspected disguise-proxy false positive): player(s) [${stuckIds.join(', ')}] were flagged wedged on map "${this.mapId}" but were NOT teleported to spawn.`
+          );
         }
         const fellProps = this.physics.respawnEscaped(floorTop - 2);
         // LOG when the last-resort net fires (solidity pass #3): after this pass it should
         // basically never trigger, so a line here means we hear about a tunnelling/fall-
         // through regression from the console before players report it. Kept as the net —
         // logging it doesn't weaken the recovery, it just makes a silent failure loud.
-        if (fellPlayers > 0 || escapedPlayers > 0 || stuckPlayers > 0 || fellProps > 0) {
+        if (fellPlayers > 0 || escapedPlayers > 0 || fellProps > 0) {
           console.warn(
-            `[physics] failsafe recovered ${fellPlayers} fallen, ${escapedPlayers} out-of-arena, ${stuckPlayers} wedged player(s) + ${fellProps} prop(s) on map "${this.mapId}". This should be rare — a repeat means a real collision regression.`
+            `[physics] failsafe recovered ${fellPlayers} fallen, ${escapedPlayers} out-of-arena player(s) + ${fellProps} prop(s) on map "${this.mapId}". This should be rare — a repeat means a real collision regression.`
           );
         }
       }
