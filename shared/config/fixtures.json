@@ -13,7 +13,7 @@
   "kitchen_wall": { "shape": "box", "w": 6.0, "h": 3.0, "d": 0.4, "color": "#e8ddc7", "static": true, "arch": true },
   "pillar": { "shape": "box", "w": 0.45, "h": 3.08, "d": 0.45, "color": "#d8cdb4", "model": "restaurant/pillar.glb", "static": true },
   "pillar_b": { "shape": "box", "w": 0.75, "h": 3.08, "d": 0.75, "color": "#cabfa6", "model": "restaurant/pillar_b.glb", "static": true },
-  "door": { "shape": "box", "w": 1.2, "h": 2.1, "d": 0.58, "color": "#7c5230", "model": "restaurant/door.glb", "static": true },
+  "door": { "shape": "box", "w": 1.2, "h": 2.1, "d": 0.58, "color": "#7c5230", "model": "restaurant/door.glb", "static": true, "noGround": true, "_noGround": "mounted architecture-adjacent piece — never re-grounded (a door is set in its frame, not resting on a surface)." },
 
   "_comment_divider": "Interior kitchen/dining DIVIDER WALL with pass-through SERVICE WINDOWS (fix #7). No single wall-with-window GLB exists in the pack (modular_walls is an unusable multi-panel kit — see asset-dims.json _kits), so per the approved plan the wall is built from plain static box fixtures at true wall height (~2.8u): the existing divider COUNTERS act as the waist-high window sills (service ledges facing the dining room), `wall_post` verticals frame the window bays floor-to-header, and `wall_header` lintels close the top of each bay — leaving open service windows between sill and header, plus clear walkway gaps. Hand-set sizes, eyeball-checked against door (2.1u) + player (1.8u) height; NOT routed through the empty measured-dims path. Windows face +z (the dining room).",
   "wall_post": { "shape": "box", "w": 0.36, "h": 2.8, "d": 0.4, "color": "#e2d7bf", "static": true, "arch": true },
@@ -27,7 +27,7 @@
   "fridge": { "shape": "box", "w": 1.5, "h": 1.88, "d": 1.68, "color": "#cdd3da", "model": "restaurant/fridge.glb", "static": true },
   "cabinet": { "shape": "box", "w": 1.5, "h": 0.75, "d": 0.78, "color": "#9c6b3f", "model": "restaurant/kitchen_cabinet.glb", "static": true },
   "cabinet_corner": { "shape": "box", "w": 1.5, "h": 1.5, "d": 1.5, "color": "#8c5f38", "model": "restaurant/kitchen_cabinet_corner.glb", "static": true },
-  "extractor": { "shape": "box", "w": 1.5, "h": 1.5, "d": 1.2, "color": "#7a7a82", "model": "restaurant/extractorhood.glb", "static": true },
+  "extractor": { "shape": "box", "w": 1.5, "h": 1.5, "d": 1.2, "color": "#7a7a82", "model": "restaurant/extractorhood.glb", "static": true, "noGround": true, "_noGround": "the VENT/extractor hood — wall-mounted high above the stove (y=1.9). Exempt from ground-snapping (plan: vents stay put), so removing the stove below it never drops it to the floor." },
 
   "_comment_counters": "--- Counters, sinks, shelves (static built-ins). 'counter' now uses kitchen_cabinet.glb (a single base cabinet at hip height): modular_kitchen_parts.glb is a 12-module KIT that shrank to an ankle-height blob when placed as one fixture (see asset-dims.json _kits). Sinks keep their taller (~1.35) bound because the native model includes the faucet; the working surface sits ~0.7. NOTE: the dishrack and TABLES are NOT here-static — a dishrack and the round/kitchen/bar tables are all knockable (see fix #1); only counters/cabinets/sinks/shelf are bolted-in.",
   "counter": { "shape": "box", "w": 1.5, "h": 0.75, "d": 0.78, "color": "#b8c0c8", "model": "restaurant/kitchen_cabinet.glb", "static": true },

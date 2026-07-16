@@ -303,6 +303,18 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   `config.js` loads it into `cfg.feel` and both the host world and every client
   prediction world derive feel from that ONE object via `physics.js resolveFeel()`,
   so tuning can never desync a match.
+- `grounding.js` (2026-07-16) — **object grounding pass (PURE, physics-free).** `config.js`
+  `loadConfig` runs `groundMapData(map, catalog)` on every map AFTER the measured+hull seams
+  attach and BEFORE anything consumes the maps, mutating each fixture/prop `y` IN PLACE. So the
+  host referee, every client prediction world, the renderer, the bounds/debug overlay and the
+  disguise system all read the ONE grounded height — deterministic over the JSON, identical on
+  every client (no per-machine physics settle → no desync). DELIBERATELY conservative: it only
+  corrects orphan floaters (nothing beneath → drop to floor/kitchen-tile) and below-floor sinkers;
+  a piece resting on any support is left byte-identical (several restaurant GLB hulls do NOT equal
+  their flat working surface — `table_food` 1.39 m, `stove_plain` 0.20 m — so hull-top grounding
+  would break correct placements). Exempt: architecture + `noGround` (the `extractor` vent, `door`).
+  A NO-OP on the current maps; a safety-net + regression gate for future edits. Guard:
+  `tools/check-grounding.mjs`. Detail: `notes/grounding.md`.
 - **`character-models.json`** (2026-07-11) — the **character-model registry** for
   animated third-person PLAYER models (the SWAT hunter). DELIBERATELY separate from
   `props.json`/`fixtures.json`: those feed the collider-baking + measured-bounds physics

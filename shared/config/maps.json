@@ -384,8 +384,8 @@
       { "type": "chair", "x": 11, "z": 2 },
       { "type": "ball", "x": -10, "z": -9 },
       { "type": "ball", "x": 5, "z": -10 },
-      { "type": "crystal", "x": -12, "z": 11 },
-      { "type": "crystal", "x": 12, "z": -12 },
+      { "type": "crystal", "x": -9, "z": 9 },
+      { "type": "crystal", "x": 9, "z": -9 },
       { "type": "cactus", "x": 0, "z": 8 }
     ]
   }

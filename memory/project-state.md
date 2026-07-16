@@ -8,6 +8,55 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: TWO BUG FIXES — spawn-trap lock + grounding (2026-07-16, VRmike, branch build/98-two-bug-fixes-requested). All headless guards GREEN; page boots clean (0 console errors). Owes one live confirm (walk toy_workshop far corners; disguise as a counter next to a real one).
+
+**PART 1 — far-side "locked, snapped back" lock. DIAGNOSED root cause with evidence, not a guess.**
+- Mechanism: a spawn placed INSIDE a solid → host depenetration escape-hatch flags the wedged
+  player → the `referee.integrate` failsafe teleports them back to `p.spawn` (the SAME trapped
+  spot) → repeat. That's the exact "move a little, snapped back to that spot" loop. It requires the
+  SPAWN ITSELF to be the trap (else a teleport-to-spawn would free them).
+- Ruled the three suspects in/out with a diagnostic that tests every spawn against ALL colliders:
+  - (a) spawn-in-object: **CONFIRMED** on `toy_workshop` — `crystal` props sat exactly on spawn
+    (12,-12) and 1 m from (-12,12) [both far corners = "far side"]. Overlap −1.15 m / −0.15 m.
+  - restaurant (VRmike's dense map): every spawn CLEAR (min 0.35 m) — the density edit (013d9d0)
+    did NOT introduce a spawn trap; its added items are all properly grounded.
+  - (b) reconciliation-to-stale-pos and (c) bounds-clamp shrink: **REFUTED** — the 013d9d0 bounds
+    diff only added the removed-fixtures skip; `wallBound` is derived from wall geometry (unchanged).
+- FIX: relocated toy_workshop's two crystals off the spawns (→(9,-9),(-9,9); 2.78 m clearance).
+- GUARD: `tools/check-physics.mjs` open-middle guard now tests spawns against **prop/knockable
+  colliders** (was static-only, which passed the crystal trap) AND asserts each spawn is inside the
+  **walkable area**. Verified it FAILS on the pre-fix data (caught both crystals) then passes.
+
+**PART 2 — floating props / sunken objects + disguise alignment. DELIBERATELY CONSERVATIVE after the data disproved blind grounding.**
+- New `shared/grounding.js` `groundMapData(map,catalog)` — ONE pure, physics-free, deterministic
+  pass, wired into `js/config.js` loadConfig (the SINGLE shared load point: host referee + every
+  client read the same grounded `y`; no per-machine settle → no desync). Guard: `tools/check-grounding.mjs`.
+- WHY CONSERVATIVE (proven by dry-run, not assumed): several restaurant GLBs carry a convex hull
+  whose TOP is NOT their flat surface — `table_food` hull 1.39 m (a table WITH food modelled),
+  `stove_plain` hull 0.20 m though a pot rests on its ~0.9 m cooktop. A blind "rest on the hull-top
+  beneath you" relocated ~36 correctly-authored items (sank pots into stoves, flung plates onto
+  tabletops) and wasn't idempotent. So the pass ONLY corrects the two UNAMBIGUOUS, support-
+  independent failures: **orphan floaters** (piece hanging with nothing under it → drop to the
+  floor/kitchen-tile) and **below-floor sinkers** (→ rise to the floor). A piece resting on ANY
+  support is left byte-identical. Exempt: architecture + new `noGround` flag on the vent
+  (`extractor`) and `door`. On the CURRENT maps the pass is a clean, idempotent NO-OP (no gross
+  floaters/sinkers exist today) — it is a deterministic safety-net + regression gate for future edits.
+- `check-grounding.mjs` also (A) fails the build if authored maps.json floats/sinks a non-exempt
+  piece, and (B) self-tests a synthetic map to prove the pass drops floaters / raises sinkers /
+  leaves supported+exempt pieces / is idempotent — so it can't "pass by checking nothing".
+- HONEST LIMITS (see notes/grounding.md): the subtler visual mismatches VRmike may have seen
+  (authored-`y` vs a GLB's real working-surface, e.g. combined tables/cooktops; a ~6 cm kitchen-
+  floor-tile step) are per-ASSET data issues the collider hulls can't adjudicate — NOT auto-
+  "fixed" here because doing so demonstrably breaks correct placements. Recommended follow-up:
+  bake accurate surface heights / asset-dims for the combined GLBs, or a visual editor pass.
+- **Files:** `shared/grounding.js` (new), `js/config.js` (import + load-time pass), `shared/config/fixtures.json`
+  (noGround on extractor+door), `shared/config/maps.json` (2 crystal relocations), `tools/check-physics.mjs`
+  (spawn guard: props + bounds), `tools/check-grounding.mjs` (new), `memory/notes/spawn-system.md` +
+  `grounding.md` (new), this file. Diagnostics left in tools/: `_spawn_diag.mjs`, `_ground_diag.mjs`,
+  `_ground_dryrun.mjs` (throwaway, _-prefixed like the existing probes).
+- **Guards GREEN:** check-physics (extended spawn guard), check-grounding (new), check-hide-spot-density,
+  check-combat, check-disguise-eligibility. Page boots clean (0 console errors).
+
 ## Check-repair (2026-07-16, branch build/96-map-density-hide-spot): `check-hunter-model.mjs` was failing on its "main.js passes the character-model registry into buildWorld" assertion. NOT a code bug — the MAP DENSITY commit (013d9d0) correctly appended a new `state.removedFixtures` arg AFTER `characterModels` in the `buildWorld(...)` call, but the check's regex `buildWorld\([^)]*characterModels\)` assumed `characterModels` was the LAST arg (immediately before `)`). Fixed the stale regex to `buildWorld\([^)]*characterModels\b` (still asserts the registry is passed, now tolerant of trailing args). check-hunter-model now GREEN; page boots clean (0 console errors). Check-only change; no runtime code touched.
 
 ## Latest: MAP DENSITY + HIDE-SPOT EXPANSION (2026-07-16, VRmike, branch build/96-map-density-hide-spot). ALL headless guards GREEN incl. a NEW `check-hide-spot-density.mjs` + page boots clean (0 console errors, ?debug=1). Owes a live pass (walk the new dining clusters + a round where a built-in was removed). Three parts:

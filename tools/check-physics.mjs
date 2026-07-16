@@ -184,21 +184,33 @@ for (const [mapId, map] of Object.entries(maps)) {
   // #5"), so a player STANDS ON it — like the ground slab — rather than being blocked by
   // it. Without this, the capsule-radius vertical padding makes a spawn standing on a floor
   // read as "trapped" (the kitchen floor tiles under the z=-2 restaurant spawns).
-  const worldSolids = worldBoxes.filter((b) => b.kind !== 'ground' && !b.floor);
+  // SPAWN TRAP GUARD (VRmike, 2026-07-16). A spawn must be clear of EVERY solid, not just the
+  // static world: the far-side "locked, snapped-back-to-that-spot" bug was a spawn placed
+  // INSIDE a knockable PROP (a crystal) — the host's depenetration escape hatch flagged the
+  // wedged player, the failsafe teleported them to spawn (the same trapped spot), and the loop
+  // repeated. The static-only check passed it right through. So test against static fixtures +
+  // walls AND every prop/knockable-fixture collider at its rest pose (propColliderBoxes). Also
+  // assert the spawn sits INSIDE the walkable area (VRmike's "outside walkable bounds" theory):
+  // past the legal standing range a player can't stand, and the arena-edge clamp/failsafe fight
+  // them. `propBoxes` is the same list built above for the prop misalignment pass.
+  const worldSolids = [...worldBoxes.filter((b) => b.kind !== 'ground' && !b.floor), ...propBoxes];
+  const walkBound = half - WALL_INSET - playerRadius; // furthest a capsule centre can legally stand
   const standPoints = [...(map.spawns || [])];
   if (map.hunterSpawn) standPoints.push({ ...map.hunterSpawn, _hunter: true });
   for (const s of standPoints) {
-    // Sample the capsule across its height; block if any world collider contains it
-    // (padded by the capsule radius so we require real clearance, not a tangent).
+    // Sample the capsule across its height; block if any collider contains it (padded by the
+    // capsule radius so we require real clearance, not a tangent).
     const label = s._hunter ? 'hunter spawn' : `spawn (${s.x},${s.z})`;
     let blockedBy = null;
     for (const b of worldSolids) {
       for (const sy of [FLOOR_Y + 0.1, capsuleMidY, capsuleMidY + playerHalfHeight]) {
-        if (pointInBox(b, s.x, sy, s.z, playerRadius)) { blockedBy = b.type; break; }
+        if (pointInBox(b, s.x, sy, s.z, playerRadius)) { blockedBy = `${b.kind}:${b.type}`; break; }
       }
       if (blockedBy) break;
     }
     ok(!blockedBy, `${label} is collider-free (player can stand)${blockedBy ? ` — blocked by ${blockedBy}` : ''}`);
+    const inBounds = Math.abs(s.x) <= walkBound + TOL && Math.abs(s.z) <= walkBound + TOL;
+    ok(inBounds, `${label} is inside the walkable area (|x|,|z| <= ${walkBound.toFixed(1)})${inBounds ? '' : ` — (${s.x},${s.z}) is out of bounds`}`);
   }
 
   // ---- OPEN MIDDLE: no absurdly oversized fixture collider ----------------------------

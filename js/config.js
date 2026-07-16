@@ -1,6 +1,8 @@
 // Fetches the same content-as-data config the referee uses, so the client
 // renders exactly the world the referee simulates. Loaded once at startup.
 // These are plain static JSON files served alongside the app (no backend).
+import { groundMapData } from '/shared/grounding.js';
+
 let cache = null;
 
 export async function loadConfig() {
@@ -62,6 +64,17 @@ export async function loadConfig() {
     if (props[type]) { props[type].hullVerts = h.v; props[type].hullAabb = aabb; }
     if (fixtures[type]) { fixtures[type].hullVerts = h.v; fixtures[type].hullAabb = aabb; }
   }
+  // GROUNDING PASS (VRmike, 2026-07-16). Rewrite each map's object heights so nothing hovers
+  // above a deleted support or sinks below the floor. Runs HERE, at the ONE shared load point,
+  // AFTER the measured+hull seams are attached (so it reads the final collider footprints) and
+  // BEFORE anything consumes the maps — so the host referee's PhysicsWorld, every client's
+  // prediction world, the renderer, the bounds/debug overlay and the disguise system all read
+  // the SAME grounded `y`. Pure + deterministic over the JSON => identical on every client and
+  // late joiner (no per-machine physics settle, no desync). See shared/grounding.js. A clean
+  // map (every piece already resting on a support) is left byte-identical — this only moves the
+  // few pieces that genuinely float or sink. tools/check-grounding.mjs guards the invariant.
+  const catalog = { ...props, ...fixtures };
+  for (const map of Object.values(maps)) groundMapData(map, catalog);
   cache = { maps, props, fixtures, rules, feel, characterModels };
   return cache;
 }
