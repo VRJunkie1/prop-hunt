@@ -442,6 +442,11 @@ function handleGameMessage(msg) {
       state.mapId = msg.mapId;
       state.map = state.cfg.maps[msg.mapId];
       state.props = msg.props;
+      // HIDE-SPOT REMOVAL: indices into map.fixtures the host deleted this match. The client
+      // renders fixtures + builds their static colliders from its LOCAL map data, so it must
+      // drop exactly these indices from BOTH (scene scenery mesh AND predict-physics collider)
+      // or a removed built-in would linger as scenery / an invisible wall. Older hosts omit it.
+      state.removedFixtures = msg.removedFixtures || [];
       // Client-side merge of any authored per-object prop `scale` onto the referee's
       // prop instances. Each prop instance carries `mi` = its source index in
       // state.map.props (the referee stamps it), so we zip the authored scale back on by
@@ -466,14 +471,14 @@ function handleGameMessage(msg) {
       // referenced by map.fixtures, so this merge never widens the disguise pool.
       const catalog = { ...state.cfg.props, ...state.cfg.fixtures };
       ensureScene().then((s) => {
-        s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels);
+        s.buildWorld(state.map, state.props, catalog, state.cfg.characterModels, state.removedFixtures);
         applyRoleView(); // HUNTER => first-person; PROP => third-person (role may already be known)
         applyToolView(); // re-establish the hunter viewmodel/tool bar after the scene rebuild
       });
       // Stand up the local prediction world (real wall/prop collision for our own
       // movement). Fire-and-forget: until it resolves — or forever, if Rapier can't
       // load — the frame loop uses the flat 2D prediction. See buildPredict().
-      buildPredict(state.map, state.props, catalog);
+      buildPredict(state.map, state.props, catalog, state.removedFixtures);
       ui.show('game');
       // Entering the game uncaptured. Desktop waits for the pointer-lock click;
       // touch shows a "Tap to play" prompt (dismissed by input.onTouchPlay) and
@@ -740,7 +745,7 @@ function onEvent(msg) {
 // Async (Rapier WASM loads on demand). Guarded by a token so a match that ends
 // mid-load is discarded. Any failure leaves state.predict null → 2D fallback.
 let _predictToken = 0;
-async function buildPredict(map, props, catalog) {
+async function buildPredict(map, props, catalog, removedFixtures = null) {
   destroyPredict(); // tears down any prior world and bumps _predictToken
   const token = _predictToken; // capture the post-teardown token to detect supersession
   let RAPIER;
@@ -751,7 +756,7 @@ async function buildPredict(map, props, catalog) {
   }
   if (token !== _predictToken) return; // superseded (match ended / new match)
   try {
-    const world = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: false, rules: state.cfg.rules, feel: state.cfg.feel });
+    const world = new PhysicsWorld(RAPIER, map, props, catalog, { dynamicProps: false, rules: state.cfg.rules, feel: state.cfg.feel, removedFixtures });
     world.addPlayer(state.SELF_ID, { x: state.self.x, y: state.self.y, z: state.self.z });
     state.predict = world;
   } catch {

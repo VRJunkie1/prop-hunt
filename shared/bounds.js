@@ -46,10 +46,15 @@ function targetSizeForEntry(c) {
 // world-space box: { kind, type, cx,cy,cz, hx,hy,hz, rot, floor?, thickened? }. A faithful
 // mirror of shared/physics.js _buildStatic — same sizes, same placements, same thin-wall
 // thickening. Boxes are yaw-rotated about +Y by `rot` (like the real colliders).
-export function worldColliderBoxes(map, catalog, rules) {
+export function worldColliderBoxes(map, catalog, rules, removedFixtures = null) {
   const half = map.size / 2;
   const minHalf = rules && rules.minWallHalfThickness != null ? rules.minWallHalfThickness : 0.6;
   const boxes = [];
+  // HIDE-SPOT REMOVAL: indices into map.fixtures deleted this match. Skipping them here keeps the
+  // ?debug=1 / debug-menu collider overlay a faithful mirror of physics._buildStatic (which skips
+  // the same set) — a removed built-in shows NO collider box, matching its dropped scenery mesh.
+  // Optional/nullable: omitted (checks, older callers) => nothing skipped, byte-identical output.
+  const removed = removedFixtures instanceof Set ? removedFixtures : new Set(removedFixtures || []);
 
   // Ground slab: cuboid(half+2, 1.5, half+2) at y=-1.5 → top at FLOOR_Y.
   boxes.push({ kind: 'ground', type: '(ground)', cx: 0, cy: FLOOR_Y - GROUND_SLAB_HALF_Y, cz: 0, hx: half + 2, hy: GROUND_SLAB_HALF_Y, hz: half + 2, rot: 0 });
@@ -64,7 +69,10 @@ export function worldColliderBoxes(map, catalog, rules) {
 
   // Static fixtures (ONLY c.static — knockable fixtures are promoted to props by the
   // referee and built by _buildProps, so they are prop colliders, below).
-  for (const f of map.fixtures || []) {
+  const fixtures = map.fixtures || [];
+  for (let fi = 0; fi < fixtures.length; fi++) {
+    if (removed.has(fi)) continue; // hide-spot-removed built-in: no collider box (matches physics)
+    const f = fixtures[fi];
     const c = catalog[f.type];
     if (!c || !c.static) continue;
     const he = halfExtentsFor(c); // hull AABB first, else measured, else primitive — matches shapeFor

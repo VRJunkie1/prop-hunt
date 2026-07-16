@@ -6,6 +6,7 @@
     "ground": "#d8cdb4",
     "sky": "#f3ead9",
     "_modelScale": "MEASURED uniform world scale for every restaurant GLB (see shared/config/asset-dims.json + tools/measure-glbs.mjs). The KayKit pack is internally consistent, so one factor normalises all of it to the 1.8-unit player: door->2.1, fridge->1.88, chair->0.9, counters/tables->0.75, stove->0.9. Applied in scene.js (native bbox * 0.75, base rested flush at y=0). Surface y-offsets below were re-derived from the resulting surface heights so food sits ON tops, not floating.",
+    "_density": "MAP DENSITY + GROUPED IDENTICAL PROPS (2026-07-16, VRmike). Dining: +4 round_tables (x=+-6, z=3 and z=10) pairing with the x=+-11 columns so the room reads as clusters of 2 per side rather than sparse singles, each ringed with 4 inward-facing diner_chairs. Grouped-identical clusters map-wide for visual repetition AND disguise cover (a bottle/stool/canister-disguised player blends into a cluster instead of standing alone): a 4-canister row on the (4.5,-16.5) cabinet, bunches of 4 kitchen_stools at (-15,5)/(15,5)/(0,-8), and disguisable ketchup/mustard bottle clusters on the (0,6) bar top, both back-corner floors, and the (11,3) table. All of these are knockable/disguisable, so the load-time hide-spot removal pass (rules.mapRandomizeSkip=0.25) thins ~25% each round — clusters keep enough members that a disguise still has cover after the trim.",
     "_layout": "Same footprint (size 36). Two zones: KITCHEN across the back (z<=-6) and DINING across the front (z>=0), split by a counter/cabinet DIVIDER line at z=-4.5 with two clear walkways (x=-7.5, x=+7.5). Food sits ON surfaces via a y offset = that surface's scaled top (counters/dining tables 0.75, stoves 0.9, sinks ~0.7, the two TALL bar tables large_table/small_table 1.45/1.35). Chairs ring each table facing INWARD: the placement rot points each chair's front at its table centre (the chair GLB's front is +z at rot 0, so an inward chair uses rot = atan2(-dx,-dz) of its offset from centre — the earlier data had these flipped 180deg, seating everyone with their back to the table; corrected here).",
     "hunterSpawn": { "x": 0, "z": 0 },
     "spawns": [
@@ -136,6 +137,16 @@
       { "type": "large_table", "x": 0, "z": 6 },
       { "type": "small_table", "x": 0, "z": 12 },
 
+      { "type": "round_table", "x": -6, "z": 3 },
+      { "type": "round_table", "x": 6, "z": 3 },
+      { "type": "round_table", "x": -6, "z": 10 },
+      { "type": "round_table", "x": 6, "z": 10 },
+
+      { "type": "canister", "x": 3.87, "z": -16.7, "y": 0.75 },
+      { "type": "canister", "x": 4.21, "z": -16.7, "y": 0.75 },
+      { "type": "canister", "x": 4.55, "z": -16.7, "y": 0.75 },
+      { "type": "canister", "x": 4.89, "z": -16.7, "y": 0.75 },
+
       { "type": "dinner", "x": -11, "z": 3, "y": 0.75 },
       { "type": "bowl_small", "x": -11.4, "z": 3.3, "y": 0.75 },
       { "type": "dinner", "x": 11, "z": 3, "y": 0.75 },
@@ -262,7 +273,56 @@
       { "type": "tomato", "x": -10.6, "z": 10.4, "y": 0.75 },
       { "type": "cheese", "x": 10.6, "z": 9.7, "y": 0.75 },
       { "type": "burger", "x": 0, "z": 5.5, "y": 1.45 },
-      { "type": "bowl", "x": -6.5, "z": 14, "y": 0.75 }
+      { "type": "bowl", "x": -6.5, "z": 14, "y": 0.75 },
+
+      { "type": "diner_chair", "x": -6, "z": 4.7, "rot": 3.1416 },
+      { "type": "diner_chair", "x": -6, "z": 1.3, "rot": 0 },
+      { "type": "diner_chair", "x": -4.3, "z": 3, "rot": -1.5708 },
+      { "type": "diner_chair", "x": -7.7, "z": 3, "rot": 1.5708 },
+      { "type": "diner_chair", "x": 6, "z": 4.7, "rot": 3.1416 },
+      { "type": "diner_chair", "x": 6, "z": 1.3, "rot": 0 },
+      { "type": "diner_chair", "x": 4.3, "z": 3, "rot": -1.5708 },
+      { "type": "diner_chair", "x": 7.7, "z": 3, "rot": 1.5708 },
+      { "type": "diner_chair", "x": -6, "z": 11.7, "rot": 3.1416 },
+      { "type": "diner_chair", "x": -6, "z": 8.3, "rot": 0 },
+      { "type": "diner_chair", "x": -4.3, "z": 10, "rot": -1.5708 },
+      { "type": "diner_chair", "x": -7.7, "z": 10, "rot": 1.5708 },
+      { "type": "diner_chair", "x": 6, "z": 11.7, "rot": 3.1416 },
+      { "type": "diner_chair", "x": 6, "z": 8.3, "rot": 0 },
+      { "type": "diner_chair", "x": 4.3, "z": 10, "rot": -1.5708 },
+      { "type": "diner_chair", "x": 7.7, "z": 10, "rot": 1.5708 },
+
+      { "type": "kitchen_stool", "x": -15, "z": 5, "rot": 0 },
+      { "type": "kitchen_stool", "x": -14.35, "z": 5, "rot": 0 },
+      { "type": "kitchen_stool", "x": -15, "z": 5.65, "rot": 0 },
+      { "type": "kitchen_stool", "x": -14.35, "z": 5.65, "rot": 0 },
+      { "type": "kitchen_stool", "x": 15, "z": 5, "rot": 0 },
+      { "type": "kitchen_stool", "x": 14.35, "z": 5, "rot": 0 },
+      { "type": "kitchen_stool", "x": 15, "z": 5.65, "rot": 0 },
+      { "type": "kitchen_stool", "x": 14.35, "z": 5.65, "rot": 0 },
+      { "type": "kitchen_stool", "x": -0.3, "z": -8.2, "rot": 0 },
+      { "type": "kitchen_stool", "x": 0.35, "z": -8.2, "rot": 0 },
+      { "type": "kitchen_stool", "x": -0.3, "z": -7.55, "rot": 0 },
+      { "type": "kitchen_stool", "x": 0.35, "z": -7.55, "rot": 0 },
+
+      { "type": "ketchup", "x": -0.8, "z": 6.7, "y": 1.45 },
+      { "type": "mustard", "x": -0.4, "z": 6.7, "y": 1.45 },
+      { "type": "ketchup", "x": 0.0, "z": 6.7, "y": 1.45 },
+      { "type": "mustard", "x": 0.4, "z": 6.7, "y": 1.45 },
+      { "type": "ketchup", "x": 0.8, "z": 6.7, "y": 1.45 },
+
+      { "type": "ketchup", "x": -16.7, "z": -5.0 },
+      { "type": "mustard", "x": -16.3, "z": -5.0 },
+      { "type": "ketchup", "x": -16.7, "z": -5.4 },
+      { "type": "mustard", "x": -16.3, "z": -5.4 },
+      { "type": "mustard", "x": 16.7, "z": -5.0 },
+      { "type": "ketchup", "x": 16.3, "z": -5.0 },
+      { "type": "mustard", "x": 16.7, "z": -5.4 },
+      { "type": "ketchup", "x": 16.3, "z": -5.4 },
+
+      { "type": "ketchup", "x": 11.5, "z": 3.4, "y": 0.75 },
+      { "type": "mustard", "x": 11.2, "z": 3.4, "y": 0.75 },
+      { "type": "ketchup", "x": 11.5, "z": 3.0, "y": 0.75 }
     ]
   },
   "circus_lot": {

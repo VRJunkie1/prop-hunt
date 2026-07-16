@@ -8,6 +8,47 @@ Skeleton multiplayer Prop Hunt: basic but extendable. It's a **static site**
 Browsers are introduced by **PeerJS's free public broker** (no matchmaker of
 ours). Strict NATs relay through a free public TURN.
 
+## Latest: MAP DENSITY + HIDE-SPOT EXPANSION (2026-07-16, VRmike, branch build/96-map-density-hide-spot). ALL headless guards GREEN incl. a NEW `check-hide-spot-density.mjs` + page boots clean (0 console errors, ?debug=1). Owes a live pass (walk the new dining clusters + a round where a built-in was removed). Three parts:
+
+1. **DINING DENSITY (data-only, maps.json → restaurant).** +4 `round_table` fixtures at (±6,3)
+   and (±6,10) pairing with the x=±11 columns (clusters of 2 per side, not sparse singles), each
+   ringed with 4 inward-facing `diner_chair` props. round_table 6→10, diner_chair 28→44.
+2. **GROUPED IDENTICAL PROPS MAP-WIDE (data-only).** Disguisable `ketchup`/`mustard` **bottle
+   props** in tight groups on the (0,6) bar top, both back-corner floors, and the (11,3) table
+   (16 bottle props, was 0 — a bottle-disguised player blends into a cluster now). `kitchen_stool`
+   bunches of 4 at (-15,5)/(15,5)/(0,-8) (8→20). 4-`canister` row on the (4.5,-16.5) cabinet
+   (9→13). All knockable/disguisable → subject to the removal pass. Documented in the map's
+   `_density` key + `notes/restaurant-map.md`.
+3. **HIDE-SPOT REMOVAL 20%→25% + WIDENED TO EVERYTHING DISGUISABLE.** `rules.mapRandomizeSkip`
+   0.20→0.25. The load-time removal pass (`referee.startMatch`) now deletes ~25% of DISGUISABLE
+   **fixtures** too (knockable + bolted-in built-ins), not just `map.props` — same shared
+   `isDisguisableEntry` rule; architecture (floors/walls/ceilings) never removed. **Single upstream
+   trim, one place:** the host decides `removedFixtures` (indices into map.fixtures) once and
+   broadcasts it in `STARTED` (and the mid-join `admitMidGame` catch-up); every downstream consumer
+   keys off it so a removed built-in loses BOTH its LOCAL mesh (`scene.buildWorld` static loop) AND
+   its collider (`physics._buildStatic`, mirrored in `bounds.worldColliderBoxes` for the debug
+   overlay) — no invisible wall, no ghost-walkable mesh (the stuck-spot failure mode). `main.js`
+   threads `state.removedFixtures` into `buildWorld` + `buildPredict`. Overflow past the
+   `maxDynamicProps` cap still degrades to a solid static collider (existing machinery, no hand-
+   marking). Intended quirk (VRmike): some rounds a pillar/fridge/door is simply absent.
+- **Files:** `shared/config/rules.json` (0.25), `shared/config/maps.json` (density + `_density`),
+  `shared/referee.js` (removal widening + `this.removedFixtures` + both STARTED sends + `_buildPhysics`
+  opts), `shared/physics.js` (`_removedFixtures` + `_buildStatic` skip), `shared/bounds.js`
+  (`worldColliderBoxes` optional `removedFixtures`), `js/main.js` (STARTED store + thread), `js/scene.js`
+  (`buildWorld` param + static-loop skip + debug overlay), `tools/check-hide-spot-density.mjs` (new),
+  `tools/_density_sanity.mjs` (diagnostic), `memory/notes/map-randomization.md` (new) +
+  `restaurant-map.md` + `architecture.md`, this file. NO protocol constant / snapshot-format / physics-
+  feel / disguise-rule change.
+- **Guards GREEN:** check-hide-spot-density (new: ratio 0.25, removal reaches fixtures, arch never
+  removed, render==collider==overlay set across 200 seeds, determinism + min-keep, spawn/doorway
+  clearance under worst-case density), check-physics, check-physics-solidity, check-physics-live,
+  check-combat, check-disguise-eligibility, check-collider-visual, check-true-colliders, check-blindfold,
+  check-debug-menu, check-flicker. Page boots clean (?debug=1, 0 console errors).
+- **OWED — live pass:** walk the new dining clusters as hunter + prop; wedge into the tightest new
+  gaps (chair rows, stool bunches); play a round where a pillar/fridge/door got removed and confirm
+  the space is open (no invisible wall) and you can walk a removed spot; disguise as a bottle in a
+  cluster and check the blend; eyeball that clusters actually cluster.
+
 ## Latest: CONVEX HULLS FOR EVERYTHING — round 3 (2026-07-13, VRmike, branch build/94-convex-hulls-for-everything). Hull the CODE-BUILT architecture (white walls, columns, archway) that round 2 skipped. ALL headless guards GREEN + page boots clean (0 console errors, ?debug=1). Owes a live True-collider eyeball. FULL DETAIL: `notes/convex-hull-colliders.md` (ROUND 3 section).
 
 Round 2 (`600ddcf`) hulled every MODEL-bearing prop but skipped `arch` + code-built (model-less)

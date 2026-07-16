@@ -332,6 +332,16 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   exact but its Rapier collider stays base-size (documented gap; per the approved
   "client-side fix" scope). Every field is inert/absent on the existing maps. Detail:
   `notes/level-editor.md`.
+- **Load-time hide-spot removal (2026-07-16, VRmike — widened).** At match start the host
+  deterministically deletes `rules.mapRandomizeSkip` (now **0.25**) of everything DISGUISABLE
+  — `map.props` AND non-architecture `map.fixtures` (knockable + bolted-in built-ins), same
+  `isDisguisableEntry` rule as the disguise pool; architecture is never removed. Props are
+  trimmed via the concrete `STARTED{props}` list as before; fixtures via a new
+  `STARTED{removedFixtures}` index set (also in the mid-join catch-up). Because built-ins
+  render their mesh + static collider from LOCAL `map.fixtures`, every consumer keys off that
+  one set — `scene.buildWorld` (skip mesh), `physics._buildStatic` (skip collider),
+  `bounds.worldColliderBoxes` (skip debug wire) — so a removed built-in loses BOTH mesh and
+  collider (no invisible wall / no ghost mesh). Detail: `notes/map-randomization.md`.
 
 ## Physics + netcode (Rapier, host-authoritative prediction) — 2026-07 `physics-net`
 

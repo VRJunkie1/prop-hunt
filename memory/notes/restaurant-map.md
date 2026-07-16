@@ -1,5 +1,23 @@
 # Restaurant map + the static/dynamic (fixtures vs props) split
 
+## 2026-07-16 DENSITY + GROUPED-IDENTICAL PROPS (VRmike)
+Data-only additions to `maps.json` → restaurant (documented in the map's `_density` key):
+- **Dining density:** +4 `round_table` fixtures at (±6, 3) and (±6, 10), pairing with the
+  x=±11 columns so the room reads as clusters of 2 per side instead of sparse singles; each
+  ringed with 4 inward-facing `diner_chair` props (rot convention matches the originals).
+  round_table count 6→10, diner_chair 28→44.
+- **Grouped identical clusters (visual repetition + disguise cover):** disguisable
+  `ketchup`/`mustard` **bottle props** added in tight groups on the (0,6) bar top, both
+  back-corner floors, and the (11,3) table (16 bottle props, was 0 — a bottle-disguised player
+  now blends into a cluster instead of standing alone). `kitchen_stool` bunches of 4 at
+  (-15,5)/(15,5)/(0,-8) (8→20). A 4-`canister` row on the (4.5,-16.5) cabinet (9→13).
+- All added items are knockable/disguisable, so the widened hide-spot removal pass thins ~25%
+  each round (`notes/map-randomization.md`); clusters keep enough members to still give cover.
+- Walk lanes + spawns verified clear by `tools/check-hide-spot-density.mjs` (no static blocker
+  on a spawn/hunter-spawn or the divider walkways/door under worst-case density). No engine
+  change — pure map data.
+
+
 ## 2026-07-10 PLAYTEST FIX PASS (on `main`) — jars, divider wall, static flags
 - **Static flags:** `fixtures.json` on `main` had lost all `static`/`decor` flags
   (merge regression), so everything was dynamic. Re-added `"static": true` to the

@@ -301,6 +301,13 @@ export class PhysicsWorld {
     this._stuckPlayerIds = new Set(); // ids the escape hatch couldn't free → referee respawns
     this._propObstacles = []; // per-prop {body|cx,cy,cz, hx,hy,hz} for character-vs-prop push-out
 
+    // HIDE-SPOT REMOVAL: indices into map.fixtures the referee deleted this match. _buildStatic
+    // skips them so a removed built-in leaves NO collider — matching the client scenery render,
+    // which drops the same indices, so a removed pillar never becomes an invisible wall. Built
+    // identically on the host (from referee.removedFixtures) and every guest predictor (from the
+    // STARTED broadcast), so both agree. Empty set => nothing removed (default / older maps).
+    this._removedFixtures = new Set(opts.removedFixtures || []);
+
     this._buildStatic(map, catalog);
     this._buildProps(propInstances, catalog);
     this._buildController();
@@ -363,7 +370,10 @@ export class PhysicsWorld {
     // Static fixtures — ONLY the genuinely bolted-in pieces (`static`). Knockable
     // fixtures are promoted into the dynamic prop stream by the referee (fix #2), so
     // they're not built here. Cheap: fixed colliders don't simulate.
-    for (const f of map.fixtures || []) {
+    const fixtures = map.fixtures || [];
+    for (let fi = 0; fi < fixtures.length; fi++) {
+      if (this._removedFixtures.has(fi)) continue; // hide-spot-removed built-in: no collider
+      const f = fixtures[fi];
       const c = catalog[f.type];
       if (!c || !c.static) continue;
       const { desc, halfH } = shapeFor(R, c);

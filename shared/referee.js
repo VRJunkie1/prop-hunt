@@ -73,6 +73,11 @@ export class Referee {
 
     this.phase = PHASE.LOBBY;
     this.props = []; // authoritative prop instances for the active map
+    // Indices into the active map's `fixtures[]` that the load-time hide-spot removal pass
+    // deleted this match (host-authoritative). Broadcast in STARTED so every client drops the
+    // same fixtures' LOCAL scenery mesh AND static collider, and passed to the physics world so
+    // its `_buildStatic` skips them. Empty until startMatch runs. See startMatch.
+    this.removedFixtures = [];
     // ---- physics (Rapier) ----------------------------------------------------
     // The authoritative simulation. Built LAZILY at match start (loadRapier pulls
     // the WASM from a CDN on demand — never at boot, so the headless load check
@@ -164,7 +169,7 @@ export class Referee {
     // position of every prop that has moved (resting or not), or they'd see kicked
     // chairs/tables back at their spawn — an instant desync (fix #8). Props that
     // never moved (or are capped-static) fall back to their spawn entry.
-    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup() });
+    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup(), removedFixtures: this.removedFixtures });
     send(player, { t: S2C.ROLE, role: player.role });
     const seconds = Math.max(0, (this.phaseEndsAt - Date.now()) / 1000);
     send(player, { t: S2C.EVENT, kind: 'phase', phase: this.phase, seconds });
@@ -623,36 +628,60 @@ export class Referee {
     // disguise/tag gates read the `disguisable` flag, so a table can be shoved but
     // never worn. y = rest offset above a surface; rot = spawn yaw.
     const catalog = { ...this.propCatalog, ...this.fixtureCatalog };
-    // MAP RANDOMIZATION (host-authoritative, no seed on the wire). The host picks a
-    // per-match seed and deterministically SKIPS ~mapRandomizeSkip (default 20%) of the
-    // DISGUISABLE decorative props, so hiding spots differ each round and the scene has
-    // gaps. ONLY map.props (the disguise pool) are eligible — fixtures/built-ins
-    // (walls/floor/counters) are never touched. A minimum-keep clamp stops a sparse map
-    // from emptying out. The seed lives ONLY here on the host: clients don't receive it,
-    // they render/predict from the concrete reduced `props` list broadcast in STARTED
-    // (and a late joiner gets the SAME reduced list via _propsCatchup), so every client
-    // and every late joiner agree with zero desync risk. See notes/map-randomization.md.
+    // HIDE-SPOT REMOVAL (host-authoritative, no seed on the wire). The load-time pass that
+    // deletes ~mapRandomizeSkip of the scene to open hiding gaps now covers EVERYTHING a prop
+    // player can disguise as (VRmike 2026-07-16): both the disguise-pool props (map.props) AND
+    // every NON-ARCHITECTURE fixture — knockable tables/cookware AND bolted-in built-ins
+    // (counters, pillars, fridge, doors…). It draws from the SAME "can this be disguised as?"
+    // rule the disguise pool uses (isDisguisableEntry), so the removal set and the pool can never
+    // drift. ARCHITECTURE (floors/walls/ceilings, isArchEntry) is the one thing never eligible.
+    //
+    // The decision is made ONCE here (host-side) and every downstream consumer builds from it:
+    //   - the trimmed `this.props` (aim proxies + dynamic bodies) below,
+    //   - `this.removedFixtures` (indices into map.fixtures) broadcast in STARTED — so each
+    //     client drops the removed BUILT-IN's LOCAL scenery mesh AND its `_buildStatic` collider
+    //     (both, so a removed pillar can never leave an invisible wall — the stuck-spot failure),
+    //   - `_buildPhysics`, which passes the same set to the authoritative collider world.
+    // The seed lives ONLY on the host; clients get the concrete reduced props list + the removed
+    // index set, never the seed, so every client and late joiner agree with zero desync risk.
+    // See notes/map-randomization.md.
     this.matchSeed = (Math.random() * 0x100000000) >>> 0;
-    const mapProps = map.props || [];
-    const skip = seededSkipSet(
-      mapProps.length,
-      this.matchSeed,
-      this.rules.mapRandomizeSkip != null ? this.rules.mapRandomizeSkip : 0.2,
-      this.rules.minPropsKept != null ? this.rules.minPropsKept : 6,
-    );
+    const skipRatio = this.rules.mapRandomizeSkip != null ? this.rules.mapRandomizeSkip : 0.25;
+    const minKept = this.rules.minPropsKept != null ? this.rules.minPropsKept : 6;
+
+    // (1) Disguise-pool props (map.props) — all disguisable; existing behaviour, ratio bumped.
     // `mi` = the source index in map.props, carried so the client can still zip authored
-    // per-object `scale` back on by original index even though randomization removed some
-    // props (a plain positional zip would misalign after a skip). Inert on every current
-    // map (none author a scale). disguisable: true — all disguise-pool props.
+    // per-object `scale` back on by original index even though removal skipped some props (a
+    // plain positional zip would misalign after a skip). Inert on every current map (no scales).
+    const mapProps = map.props || [];
+    const propSkip = seededSkipSet(mapProps.length, this.matchSeed, skipRatio, minKept);
     const disguiseProps = mapProps
       .map((p, i) => ({ p, i }))
-      .filter(({ i }) => !skip.has(i))
+      .filter(({ i }) => !propSkip.has(i))
       .map(({ p, i }) => ({
         id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0,
         disguisable: isDisguisableEntry(catalog[p.type]),
       }));
-    // DISGUISE-ANYTHING (Part B). Every NON-ARCHITECTURE fixture is promoted into the prop
-    // stream and flagged disguisable, so a player can aim at + become it. Two kinds:
+
+    // (2) Fixtures — remove the SAME ratio of the DISGUISABLE (non-architecture) ones. Eligible =
+    // their ORIGINAL map.fixtures indices; the skip runs over just those slots (a decorrelated
+    // seed so props and fixtures don't thin the same relative positions), then maps back to real
+    // indices. `removedFixtures` (real indices) is the single set every downstream consumer keys
+    // off — architecture indices are never in `eligible`, so floors/walls/ceilings are untouched.
+    const mapFixtures = map.fixtures || [];
+    const eligibleFixtureIdx = [];
+    mapFixtures.forEach((f, i) => {
+      const c = catalog[f.type];
+      if (c && isDisguisableEntry(c)) eligibleFixtureIdx.push(i);
+    });
+    const fxSkipLocal = seededSkipSet(
+      eligibleFixtureIdx.length, (this.matchSeed ^ 0x9e3779b9) >>> 0, skipRatio, minKept,
+    );
+    const removedFixtures = new Set([...fxSkipLocal].map((k) => eligibleFixtureIdx[k]));
+    this.removedFixtures = [...removedFixtures];
+
+    // DISGUISE-ANYTHING (Part B). Every NON-ARCHITECTURE fixture that SURVIVED removal is promoted
+    // into the prop stream and flagged disguisable, so a player can aim at + become it. Two kinds:
     //   - dynFixtures: knockable fixtures (tables, cookware, dishes, food) — real dynamic
     //     bodies AND disguise targets now. Bigger pieces first so the dynamic-body cap
     //     (rules.maxDynamicProps) spends its budget on furniture/large cookware; overflow
@@ -662,21 +691,22 @@ export class Referee {
     //     builds their collider in _buildStatic and _buildProps skips them — but they ride
     //     the prop stream so scene.js can raycast + highlight them and applyDisguise accepts
     //     them (as an invisible aim proxy; the visible mesh is the local scenery).
-    // ARCHITECTURE (floors/walls, isArchEntry) is the ONE thing excluded from both lists —
-    // it never becomes a disguise target. Appending statics last keeps them out of the
-    // dynamic-cap accounting (they never simulate).
-    const nonArchFixtures = (map.fixtures || []).filter((f) => {
-      const c = catalog[f.type];
-      return c && !isArchEntry(c);
-    });
+    // The removed fixtures are excluded HERE exactly as the client scenery loop + _buildStatic
+    // exclude them, carrying each survivor's original index through the dyn/static split.
+    const nonArchFixtures = mapFixtures
+      .map((f, i) => ({ f, i }))
+      .filter(({ f, i }) => {
+        const c = catalog[f.type];
+        return c && !isArchEntry(c) && !removedFixtures.has(i);
+      });
     const dynFixtures = nonArchFixtures
-      .filter((f) => !isStaticEntry(catalog[f.type]))
-      .map((f) => ({ type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 }))
+      .filter(({ f }) => !isStaticEntry(catalog[f.type]))
+      .map(({ f }) => ({ type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 }))
       .sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]))
       .map((f) => ({ id: nextPropId++, ...f, disguisable: isDisguisableEntry(catalog[f.type]) }));
     const staticFixtures = nonArchFixtures
-      .filter((f) => isStaticEntry(catalog[f.type]))
-      .map((f) => ({
+      .filter(({ f }) => isStaticEntry(catalog[f.type]))
+      .map(({ f }) => ({
         id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
         disguisable: isDisguisableEntry(catalog[f.type]),
       }));
@@ -719,7 +749,7 @@ export class Referee {
       send(player, { t: S2C.ROLE, role: player.role });
     });
 
-    this.broadcast({ t: S2C.STARTED, mapId: this.mapId, props: this.props });
+    this.broadcast({ t: S2C.STARTED, mapId: this.mapId, props: this.props, removedFixtures: this.removedFixtures });
     this.setPhase(PHASE.HIDING, this.rules.hidingSeconds);
 
     // Spin up the authoritative Rapier world for this match (async: WASM loads from
@@ -750,6 +780,7 @@ export class Referee {
         dynamicProps: true,
         rules: this.rules,
         feel: this.feel,
+        removedFixtures: this.removedFixtures, // skip the hide-spot-removed built-ins' colliders
       });
       for (const p of this.players.values()) {
         if (p.alive && (p.role === ROLE.HUNTER || p.role === ROLE.PROP)) {

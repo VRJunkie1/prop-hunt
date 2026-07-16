@@ -1,0 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, '..');
+const cfg = (n) => JSON.parse(readFileSync(join(root, 'shared', 'config', n), 'utf8'));
+const maps = cfg('maps.json');
+const m = maps.restaurant;
+const tables = (m.fixtures || []).filter((f) => f.type === 'round_table').length;
+const chairs = (m.props || []).filter((f) => f.type === 'diner_chair').length;
+const stools = (m.props || []).filter((f) => f.type === 'kitchen_stool').length;
+const bottles = (m.props || []).filter((f) => f.type === 'ketchup' || f.type === 'mustard').length;
+const canisters = (m.fixtures || []).filter((f) => f.type === 'canister').length;
+console.log('JSON parsed OK. props/rules/fixtures also:');
+cfg('props.json'); cfg('fixtures.json'); cfg('rules.json');
+console.log({ tables, chairs, stools, bottleProps: bottles, canisters, totalProps: m.props.length, totalFixtures: m.fixtures.length });

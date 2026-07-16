@@ -267,6 +267,7 @@ export class Scene3D {
     this._colliderStaticGroup = null; // the static-world wire group (ground/walls/fixtures)
     this._lastMap = null; // remembered from buildWorld so the toggle can rebuild the overlay
     this._lastCatalog = null;
+    this._removedFixtures = new Set(); // hide-spot-removed fixture indices for the active match
     this.rules = null; // set by main.js (ensureScene) so the debug view can mirror thin-wall thickening
 
     // ---- TRUE Rapier collider overlay (debug menu "True Colliders") ----------
@@ -323,8 +324,13 @@ export class Scene3D {
   }
 
   // Rebuild the world for a new match.
-  buildWorld(map, propInstances, catalog, characterModels = null) {
+  buildWorld(map, propInstances, catalog, characterModels = null, removedFixtures = null) {
     this.catalog = catalog;
+    // HIDE-SPOT REMOVAL: indices into map.fixtures the host deleted this match. Skip them in the
+    // LOCAL static-scenery loop (no visible mesh, no camera collider) so a removed built-in is
+    // truly gone — matching physics._buildStatic, which skips the same set (no invisible wall).
+    // Remembered so the live debug collider-view toggle mirrors the removal too.
+    this._removedFixtures = removedFixtures instanceof Set ? removedFixtures : new Set(removedFixtures || []);
     // Remember the world so the debug collider-view toggle can (re)build the overlay live.
     this._lastMap = map;
     this._lastCatalog = catalog;
@@ -413,7 +419,10 @@ export class Scene3D {
     // world collision. Every client has maps.json, so they render identically on
     // host and guests with no protocol change. Older maps have no `fixtures` key
     // and are unaffected. See memory/notes/restaurant-map.md.
-    for (const f of map.fixtures || []) {
+    const fixtures = map.fixtures || [];
+    for (let fi = 0; fi < fixtures.length; fi++) {
+      if (this._removedFixtures.has(fi)) continue; // hide-spot-removed built-in: no mesh, no collider
+      const f = fixtures[fi];
       const c = catalog[f.type];
       if (!c || !isStaticEntry(c)) continue; // knockable fixtures render via propInstances (below)
       const built = makePropMesh(f.type, catalog);
@@ -1463,7 +1472,7 @@ export class Scene3D {
   // Stored on this._colliderStaticGroup so the live toggle can remove it cleanly.
   _buildStaticColliderDebug(map, catalog) {
     const group = new THREE.Group();
-    const boxes = worldColliderBoxes(map, catalog, this.rules || {});
+    const boxes = worldColliderBoxes(map, catalog, this.rules || {}, this._removedFixtures);
     for (const b of boxes) {
       const color = b.kind === 'ground' ? 0x555555 : b.kind === 'wall' ? 0xff5a5a : 0x4ad9ff;
       const w = this._wireBox(b.hx * 2, b.hy * 2, b.hz * 2, color);
