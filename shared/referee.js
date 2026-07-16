@@ -52,6 +52,13 @@ export class Referee {
     // separate merged lookups; the physics world also reads them for collider dimensions.
     this.propCatalog = config.props || {};
     this.fixtureCatalog = config.fixtures || {};
+    // AUDIO TAUNT library (data-driven). The SAME manifest the client loads
+    // (assets/taunts/manifest.json → cfg.taunts), so the host validates a taunt id against the
+    // exact same list the menu shows — adding ~50 real clips later is a data-only change (drop
+    // files + manifest lines, ZERO code). An absent/empty manifest is fine (no taunts available;
+    // applyTaunt just rejects every id). `_tauntIds` is the O(1) existence check for relays.
+    this.taunts = (config.taunts && Array.isArray(config.taunts.taunts)) ? config.taunts.taunts : [];
+    this._tauntIds = new Set(this.taunts.map((t) => t && t.id).filter(Boolean));
     // DEFAULT_MAP_ID: the first map in maps.json until the host picks another via
     // setMapId(). This is the ONLY place the map choice lives; startMatch/integrate
     // read it without re-validating (see setMapId for why the id is trusted).
@@ -115,6 +122,10 @@ export class Referee {
     player.rotUnlock = false; // right-click held: a disguise may rotate on yaw
     player.lastInputSeq = 0; // echoed as `ack` for client reconciliation
     player.input = { mx: 0, mz: 0, jump: false };
+    // AUDIO TAUNTS: true while this player's CURRENT taunt was forced uncancellable by the
+    // (future) prop-finder tool (referee.forceTaunt) — their stop button is then ignored. A
+    // normal self-chosen taunt clears it (see applyTaunt). Reset each match in startMatch.
+    player.tauntUncancellable = false;
 
     this.players.set(player.id, player);
     if (!this.hostId) this.hostId = player.id; // host adds itself first
@@ -267,6 +278,12 @@ export class Referee {
         break;
       case C2S.DISGUISE:
         this.applyDisguise(player, msg.propId);
+        break;
+      case C2S.TAUNT:
+        this.applyTaunt(player, msg.id);
+        break;
+      case C2S.STOP_TAUNT:
+        this.applyStopTaunt(player);
         break;
       // C2S.TAG (legacy instant-kill melee) is intentionally NOT handled: HUNTER-TOOLS v1
       // replaces it with the rifle + health system, and honouring it would let a tag bypass
@@ -587,6 +604,48 @@ export class Referee {
     }
   }
 
+  // ---- audio taunts (props only, host-authoritative relay) ----------------
+  // A prop asks to play a taunt clip. The host is the authority: it validates the sender is a
+  // LIVING PROP in an active phase and the taunt id exists in the manifest, then relays the
+  // request to EVERYONE tagged with who taunted (S2C.EVENT kind:'taunt'). Each client plays the
+  // clip as 3D positional audio at that prop's LIVE position — so hunters can locate props by
+  // ear (taunting is a self-snitch by design). The cut-off rule (a new taunt from the same
+  // player replaces their previous one) is handled per-emitter on each client, so the referee
+  // only relays. A self-chosen taunt is always cancellable, and clears any forced-uncancellable
+  // flag left by the prop-finder tool (the player chose to taunt again).
+  applyTaunt(player, id) {
+    if (!player || player.role !== ROLE.PROP || !player.alive) return;
+    if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
+    if (typeof id !== 'string' || !this._tauntIds.has(id)) return; // unknown taunt → ignore
+    player.tauntUncancellable = false;
+    this.broadcast({ t: S2C.EVENT, kind: 'taunt', by: player.id, id, uncancellable: false });
+  }
+
+  // Stop the sender's OWN currently-playing taunt for everyone. Ignored when their current taunt
+  // was forced uncancellable by the prop-finder tool (forceTaunt) — that's the whole point of the
+  // uncancellable flag: the prop's stop button can't kill a finder-triggered taunt.
+  applyStopTaunt(player) {
+    if (!player) return;
+    if (player.tauntUncancellable) return; // finder-forced taunt: the stop button does nothing
+    this.broadcast({ t: S2C.EVENT, kind: 'tauntStop', by: player.id });
+  }
+
+  // FINDER-TOOL HOOK (design-only — NOT wired to gameplay yet). Force a RANDOM taunt from a given
+  // prop player, marked UNCANCELLABLE so that prop's stop button won't silence it. The future
+  // prop-finder tool hooks this up with one line: `referee.forceTaunt(propId)`. Returns true if a
+  // taunt was fired. Deterministic PRNG is not needed — this is a host-authoritative broadcast
+  // and different clients must all play the SAME chosen clip, so the host picks once and relays.
+  forceTaunt(propId) {
+    const player = this.players.get(propId);
+    if (!player || player.role !== ROLE.PROP || !player.alive) return false;
+    if (!this.taunts.length) return false; // empty library → nothing to force
+    const pick = this.taunts[Math.floor(Math.random() * this.taunts.length)];
+    if (!pick || !pick.id) return false;
+    player.tauntUncancellable = true;
+    this.broadcast({ t: S2C.EVENT, kind: 'taunt', by: propId, id: pick.id, uncancellable: true });
+    return true;
+  }
+
   // ---- lobby settings -----------------------------------------------------
   // The ONE gate for the lobby map choice. All guard rails live here so nothing
   // downstream re-checks: only the host may pick, only during LOBBY, and only a
@@ -735,6 +794,7 @@ export class Referee {
       player.disguise = null;
       player.input = { mx: 0, mz: 0, jump: false };
       player.dispYaw = player.yaw;
+      player.tauntUncancellable = false; // fresh round: no forced taunt in flight
       if (i < hunterCount) {
         player.role = ROLE.HUNTER;
         player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };

@@ -981,6 +981,9 @@ function frameBody(now) {
     scene.updateAnimations(dt);
     // HUNTER-TOOLS v1: fade + retire active tracers / muzzle flashes.
     scene.updateEffects(dt);
+    // AUDIO TAUNTS: keep each active 3D taunt emitter glued to its (possibly moving) prop and
+    // retire finished ones. After interpolate/setCamera so mesh positions are current this frame.
+    scene.updateTauntEmitters();
     // Debug menu (?debug=1 only): updates its live displays and, when active, drives the
     // free cam + focus-box raycast. Runs BEFORE render so the camera/box reflect this frame.
     if (debugMenu) debugMenu.frame(dt);

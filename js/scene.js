@@ -165,6 +165,17 @@ export class Scene3D {
     this._viewModelTool = null; // tool id the current viewmodel represents (rifle/finder/null)
     this._effects = []; // active shot effects: { tracer, flash, life, max }
 
+    // ---- audio taunts (3D positional) ---------------------------------------
+    // A THREE.AudioListener parented to the camera (so the Web Audio listener tracks the
+    // player's eye/orientation → real stereo direction) plus one PositionalAudio emitter per
+    // taunting player, keyed by player id. Each emitter is a bare Object3D added to the scene and
+    // repositioned every frame (updateTauntEmitters) to that player's live world position, so the
+    // taunt follows a moving prop. Created LAZILY on the first taunt (never at boot — no audio
+    // graph on the headless load check). The listener + emitters use THREE's shared AudioContext,
+    // which is unlocked on the first user gesture (unlockAudio) for iOS. See notes/audio-taunts.md.
+    this._audioListener = null;
+    this._tauntEmitters = new Map(); // playerId -> { obj, sound, endsAt }
+
     this.selfId = null;
     this.catalog = null;
     // Uniform world scale applied to every GLB this map references (map.modelScale).
@@ -362,6 +373,10 @@ export class Scene3D {
     if (this._viewModel) { this.camera.remove(this._viewModel); this._viewModel = null; }
     this._viewModelTool = null;
     this._effects = [];
+    // scene.clear() dropped every taunt emitter (they were children of the scene); forget the
+    // stale records so a lingering one can't try to reposition against a removed object. The
+    // AudioListener lives on the camera (re-added above), so it survives the rebuild.
+    this._tauntEmitters.clear();
     this.players.clear();
     // scene.clear() also drops the self avatar; reset its trackers and the camera's
     // collision set / smoothed distance so a fresh match starts fully zoomed out.
@@ -1441,6 +1456,107 @@ export class Scene3D {
       }
     }
     this._effects = keep;
+  }
+
+  // ---- audio taunts (3D positional) -----------------------------------------
+  // Lazily create the AudioListener on the camera (the Web Audio listener that gives taunts
+  // their stereo direction). Returns null if THREE's audio classes are unavailable. Re-parents
+  // after a scene.clear() (which detaches then re-adds the camera in buildWorld).
+  _ensureAudioListener() {
+    if (!THREE.AudioListener) return null;
+    if (!this._audioListener) this._audioListener = new THREE.AudioListener();
+    if (this._audioListener.parent !== this.camera) this.camera.add(this._audioListener);
+    return this._audioListener;
+  }
+
+  // THREE's shared Web Audio context (for decoding clips + the iOS unlock). null if unavailable.
+  audioContext() {
+    try { return THREE.AudioContext ? THREE.AudioContext.getContext() : null; } catch { return null; }
+  }
+
+  // Resume the audio context inside a user gesture (iOS keeps audio suspended until then). Called
+  // from the input layer's first-tap / pointer-lock-click path, same as the legacy unlock.
+  unlockAudio() {
+    const ctx = this.audioContext();
+    try { if (ctx && ctx.state === 'suspended') ctx.resume(); } catch { /* best-effort */ }
+  }
+
+  // Play taunt `buffer` as 3D positional audio at player `playerId`'s live position. CUT-OFF
+  // RULE: a taunt already playing for this SAME player is stopped first (one voice per prop);
+  // different players' taunts keep their own emitters and overlap freely. The emitter follows the
+  // player each frame (updateTauntEmitters). `opts.mapSize` tunes distance falloff to the map.
+  // No-op (silent, never throws) if audio is unavailable — audio must never break the game.
+  playTaunt(playerId, buffer, opts = {}) {
+    if (!buffer) return;
+    const listener = this._ensureAudioListener();
+    if (!listener || !THREE.PositionalAudio) return;
+    this.stopTaunt(playerId); // cut off this player's previous taunt (one voice per prop)
+    let sound;
+    try {
+      sound = new THREE.PositionalAudio(listener);
+      sound.setBuffer(buffer);
+      // Falloff tuned to the map (restaurant ≈ 36 units): audible across the room but clearly
+      // quieter with distance so a hunter can home in by ear. Linear model → gain reaches ~0 at
+      // maxDistance, giving a firm distance cue instead of an endless inverse tail.
+      const size = opts.mapSize || (this._lastMap && this._lastMap.size) || 36;
+      sound.setDistanceModel('linear');
+      sound.setRefDistance(Math.max(2, size * 0.08)); // full volume out to ~3 units
+      sound.setMaxDistance(Math.max(12, size * 1.3)); // inaudible past ~map diagonal
+      sound.setRolloffFactor(1);
+      sound.setLoop(false);
+    } catch { return; }
+    const obj = new THREE.Object3D();
+    obj.add(sound);
+    this.scene.add(obj);
+    // Seed the emitter at the player's current position so the very first audio frame pans right.
+    const p = this._playerWorldPos(playerId);
+    if (p) obj.position.set(p.x, (p.y || 0) + 1.0, p.z);
+    const durMs = (buffer.duration || 1) * 1000;
+    const nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    this._tauntEmitters.set(playerId, { obj, sound, endsAt: nowT + durMs + 250 });
+    try { sound.play(); } catch { /* autoplay blocked until unlock — emitter still cleans up */ }
+  }
+
+  // Stop + dispose the taunt emitter for one player (immediate kill for the STOP button, and the
+  // cut-off path). Safe to call when nothing is playing.
+  stopTaunt(playerId) {
+    const rec = this._tauntEmitters.get(playerId);
+    if (!rec) return;
+    this._tauntEmitters.delete(playerId);
+    this._disposeTauntEmitter(rec);
+  }
+
+  _disposeTauntEmitter(rec) {
+    try { if (rec.sound && rec.sound.isPlaying) rec.sound.stop(); } catch { /* ignore */ }
+    try { if (rec.sound && rec.sound.disconnect) rec.sound.disconnect(); } catch { /* ignore */ }
+    if (rec.obj && rec.obj.parent) rec.obj.parent.remove(rec.obj);
+  }
+
+  _stopAllTaunts() {
+    for (const rec of this._tauntEmitters.values()) this._disposeTauntEmitter(rec);
+    this._tauntEmitters.clear();
+  }
+
+  // Live world position of a player (self or remote) from their rendered mesh, or null if not
+  // yet built. The taunt emitter tracks this so the sound follows a moving prop.
+  _playerWorldPos(playerId) {
+    if (playerId === this.selfId && this.selfMesh) return this.selfMesh.position;
+    const entry = this.players.get(playerId);
+    if (entry && entry.mesh) return entry.mesh.position;
+    return null;
+  }
+
+  // Per-frame: keep each active taunt emitter glued to its player's current position and retire
+  // finished ones. Called from the render loop (after mesh positions update, before render).
+  updateTauntEmitters() {
+    if (!this._tauntEmitters.size) return;
+    const nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    for (const [id, rec] of this._tauntEmitters) {
+      const finished = (!rec.sound || !rec.sound.isPlaying) && nowT > rec.endsAt;
+      if (finished) { this._disposeTauntEmitter(rec); this._tauntEmitters.delete(id); continue; }
+      const p = this._playerWorldPos(id);
+      if (p) rec.obj.position.set(p.x, (p.y || 0) + 1.0, p.z);
+    }
   }
 
   // ---- collider debug overlay (?debug=1) ------------------------------------

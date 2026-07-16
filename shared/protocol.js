@@ -27,6 +27,18 @@ export const C2S = {
   //   rotUnlock: right-click held — a disguised prop may rotate on yaw (never tips);
   //              otherwise a disguise keeps its locked orientation while moving.
   DISGUISE: 'disguise', // { propId }                    -> prop takes an object's shape
+  // AUDIO TAUNTS (props only). A prop asks the host to play a taunt clip as DIRECTIONAL 3D
+  // audio at its own position for EVERYONE (hunters locate props by ear — taunting is a
+  // self-snitch by design). The host validates (sender is a LIVING PROP in an active phase,
+  // the taunt id exists in the manifest) then relays S2C.EVENT kind:'taunt' tagged with who
+  // taunted; each client plays the clip positionally at that prop's live position. Same
+  // host-authoritative relay pattern as SHOOT. The cut-off rule (a new taunt from the same
+  // player replaces their previous one) is per-emitter on each client — the referee just relays.
+  TAUNT: 'taunt', // { id }
+  // Stop your OWN currently-playing taunt for everyone. The host relays S2C.EVENT
+  // kind:'tauntStop' tagged with the sender — UNLESS that taunt was forced uncancellable by
+  // the (future) prop-finder tool (referee.forceTaunt), in which case the stop is ignored.
+  STOP_TAUNT: 'stopTaunt', // {}
   TAG: 'tag', // {}                            -> hunter attempts a tag (legacy melee; the rifle replaces it)
   // HUNTER-TOOLS v1 — fire the assault rifle. { dx, dy, dz } = the shooter's camera-forward
   // aim direction (the SAME screen-centre ray the disguise pick uses). The host is the
@@ -68,6 +80,12 @@ export const S2C = {
   //   kind:'hurt'       { victim, by, self, dmg, health } -> a player took damage.
   //   kind:'eliminated' { by, victim, name, hunter } -> a player died (hunter=true if a hunter).
   //   kind:'roundOver'  { winner } -> ROLE.HUNTER or ROLE.PROP (props win if all hunters die).
+  //   kind:'taunt'      { by, id, uncancellable } -> play taunt clip `id` as 3D positional
+  //                     audio at player `by`'s live position for everyone. A new taunt from the
+  //                     same `by` cuts off their previous one (one voice per prop; different
+  //                     props overlap). `uncancellable`=true marks a prop-finder-forced taunt
+  //                     the taunter's stop button can't kill.
+  //   kind:'tauntStop'  { by } -> stop player `by`'s currently-playing taunt for everyone.
   ERROR: 'error', // { msg }
 };
 

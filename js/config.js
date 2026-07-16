@@ -7,7 +7,7 @@ let cache = null;
 
 export async function loadConfig() {
   if (cache) return cache;
-  const [maps, props, fixtures, rules, assetDims, hulls, feel, characterModels] = await Promise.all([
+  const [maps, props, fixtures, rules, assetDims, hulls, feel, characterModels, taunts] = await Promise.all([
     fetch('/shared/config/maps.json').then((r) => r.json()),
     fetch('/shared/config/props.json').then((r) => r.json()),
     fetch('/shared/config/fixtures.json').then((r) => r.json()),
@@ -32,6 +32,12 @@ export async function loadConfig() {
     // falls back to the neutral capsule avatar if it's missing/malformed. See
     // shared/config/character-models.json + notes/hunter-character-model.md.
     fetch('/shared/config/character-models.json').then((r) => r.json()).catch(() => ({})),
+    // AUDIO TAUNT manifest (data-driven library — id/label/file per clip). The SAME list the
+    // referee validates against and the taunt menu renders from, so adding ~50 real clips later
+    // is a data-only change (drop files into assets/taunts/ + add manifest lines, ZERO code).
+    // Tolerate absence/empty — no manifest just means no taunts available (menu shows nothing,
+    // the host rejects every taunt id). Clips themselves are LAZY-loaded on first play, never here.
+    fetch('/assets/taunts/manifest.json').then((r) => r.json()).catch(() => ({ taunts: [] })),
   ]);
   // props = the disguise catalog (movable items only, per referee's disguise pool);
   // fixtures = the static building-piece catalog. Kept as separate files so a
@@ -75,6 +81,9 @@ export async function loadConfig() {
   // few pieces that genuinely float or sink. tools/check-grounding.mjs guards the invariant.
   const catalog = { ...props, ...fixtures };
   for (const map of Object.values(maps)) groundMapData(map, catalog);
-  cache = { maps, props, fixtures, rules, feel, characterModels };
+  // Normalize the taunt manifest to a stable shape so downstream code can always read
+  // cfg.taunts.taunts as an array (an empty library is valid — see loader above).
+  const tauntList = (taunts && Array.isArray(taunts.taunts)) ? taunts.taunts : [];
+  cache = { maps, props, fixtures, rules, feel, characterModels, taunts: { taunts: tauntList } };
   return cache;
 }
