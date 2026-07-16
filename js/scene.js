@@ -373,10 +373,12 @@ export class Scene3D {
     if (this._viewModel) { this.camera.remove(this._viewModel); this._viewModel = null; }
     this._viewModelTool = null;
     this._effects = [];
-    // scene.clear() dropped every taunt emitter (they were children of the scene); forget the
-    // stale records so a lingering one can't try to reposition against a removed object. The
-    // AudioListener lives on the camera (re-added above), so it survives the rebuild.
-    this._tauntEmitters.clear();
+    // scene.clear() dropped every taunt emitter's Object3D, but a PositionalAudio's source is a
+    // Web Audio node wired to the listener — removing it from the SCENE graph does NOT stop the
+    // sound. So STOP + disconnect each one (not just forget it), or a taunt from the previous
+    // match could keep playing into the new one. The AudioListener lives on the camera (re-added
+    // above), so it survives the rebuild.
+    this._stopAllTaunts();
     this.players.clear();
     // scene.clear() also drops the self avatar; reset its trackers and the camera's
     // collision set / smoothed distance so a fresh match starts fully zoomed out.
@@ -1475,10 +1477,31 @@ export class Scene3D {
   }
 
   // Resume the audio context inside a user gesture (iOS keeps audio suspended until then). Called
-  // from the input layer's first-tap / pointer-lock-click path, same as the legacy unlock.
+  // from the taunt open/play gestures (main.js) — the one tap/click/keypress iOS gives us.
   unlockAudio() {
     const ctx = this.audioContext();
     try { if (ctx && ctx.state === 'suspended') ctx.resume(); } catch { /* best-effort */ }
+  }
+
+  // Fetch + decode an audio file to an AudioBuffer via THREE.AudioLoader (which decodes through
+  // THREE's shared AudioContext and handles Safari's callback-style decodeAudioData). Returns a
+  // Promise<AudioBuffer|null> — resolves null (never rejects) on any failure so a missing/bad clip
+  // degrades to silence. Used by the lazy taunt loader (js/taunts.js). Ensures the listener/context
+  // exist first so the decode has a context to run in.
+  loadAudioBuffer(url) {
+    return new Promise((resolve) => {
+      try {
+        if (!THREE.AudioLoader) { resolve(null); return; }
+        this._ensureAudioListener(); // creates THREE's shared AudioContext if needed
+        new THREE.AudioLoader().load(url, (buf) => resolve(buf || null), undefined, () => resolve(null));
+      } catch { resolve(null); }
+    });
+  }
+
+  // Stop + dispose EVERY active taunt emitter (public wrapper). Called by main.js when leaving a
+  // match so no taunt bleeds past the round/menu teardown.
+  clearAllTaunts() {
+    this._stopAllTaunts();
   }
 
   // Play taunt `buffer` as 3D positional audio at player `playerId`'s live position. CUT-OFF

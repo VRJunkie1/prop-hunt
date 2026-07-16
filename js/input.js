@@ -131,6 +131,10 @@ export class Input {
     this.onToggleView = () => {}; // () => void  V key: third-person <-> first-person
     this.onToggleEdit = () => {}; // () => void  Ctrl/Cmd+E: toggle the level editor (desktop)
     this.onSelectTool = () => {}; // (index:number)  number keys 1..9 select a hunter tool
+    // AUDIO TAUNTS: the T key toggles the prop taunt menu (main.js gates it to a living prop).
+    // On desktop the menu opening frees the mouse (main.js exits pointer lock) so the scrolling
+    // list is clickable; on touch the on-screen taunt button does the same job. No-op while typing.
+    this.onToggleTaunt = () => {}; // () => void  T key: toggle the taunt menu
 
     // Touch state. `this.touch` is the ONE classification the whole game keys off (the
     // Escape handler, the click/tap overlay text, the controls-help list, the editor gate,
@@ -401,6 +405,16 @@ export class Input {
     // avoid double-handling. Ignored while typing / on touch.
     if (e.code === 'Escape') {
       if (!this.touch && !this.locked && !this._isTyping()) this.onRequestPause();
+      return;
+    }
+    // T — toggle the prop TAUNT menu. Handled BEFORE the pointer-lock gate (like Backquote) so it
+    // both OPENS while playing (mouse captured) and CLOSES while the menu has freed the mouse. No-op
+    // on touch (the on-screen taunt button covers it there) or while typing in a text field. main.js
+    // gates it to a living prop, so a hunter's T press just does nothing.
+    if (e.code === 'KeyT') {
+      if (this.touch || this._isTyping()) return;
+      e.preventDefault();
+      this.onToggleTaunt();
       return;
     }
     this.keys.add(e.code);

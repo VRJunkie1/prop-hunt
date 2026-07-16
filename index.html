@@ -111,6 +111,26 @@
         <div class="spectate-title">YOU ARE DEAD</div>
         <div class="spectate-sub">Spectating &mdash; look around while the round finishes.</div>
       </div>
+      <!-- AUDIO TAUNTS (props only). The taunt button opens a large scrolling list of taunts;
+           picking one plays it as directional 3D audio at this prop's position for EVERYONE and
+           LEAVES the menu open (spamming back-to-back is the feature). The ✕ closes without
+           playing. On desktop the T key opens it too (and frees the mouse so the list is
+           clickable). Shown only to a living prop in an active phase (main.js updateTauntUi). The
+           list is built data-driven from the manifest (ui.buildTauntList) — ~50 real clips later
+           need ZERO UI code. The stop button appears only while YOUR taunt is playing and kills it
+           immediately for everyone (unless a finder-forced uncancellable taunt). -->
+      <button id="tauntBtn" class="taunt-btn hidden" type="button" aria-label="Taunt">&#128227; Taunt</button>
+      <button id="tauntStopBtn" class="taunt-stop-btn hidden" type="button" aria-label="Stop your taunt">&#9632; Stop taunt</button>
+      <div id="tauntMenu" class="taunt-menu hidden" aria-hidden="true">
+        <div class="taunt-card">
+          <div class="taunt-head">
+            <span class="taunt-title">TAUNTS</span>
+            <button id="tauntClose" class="taunt-close" type="button" aria-label="Close">&#10005;</button>
+          </div>
+          <div id="tauntList" class="taunt-list" role="list"></div>
+          <p id="tauntEmpty" class="taunt-empty hidden">No taunts available yet.</p>
+        </div>
+      </div>
       <!-- PAUSE MENU button (top-right). Opens the pause overlay; the main way in on touch
            (no Escape/pointer-lock there). On desktop, Escape releases the mouse and opens the
            same overlay via the pointer-lock change. -->

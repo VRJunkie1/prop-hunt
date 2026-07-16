@@ -692,3 +692,117 @@ button.ghost:hover { background: #3d2a66; }
 .pause-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .pause-btns button { flex: 1 1 auto; min-height: 40px; }
 .pause-btns .warn { background: #4a1b2a; color: #ff9ab0; }
+
+/* ---- AUDIO TAUNTS (props): taunt button, stop button, scrolling menu ----
+   The taunt + stop buttons sit TOP-CENTRE, just below the HUD pills — a band that's clear of the
+   joystick (bottom-left), the action/jump/rotate stack (bottom-right), the pause ☰ (top-right) and
+   the mid-screen banner. Big touch targets for phones, clickable on desktop when the mouse is free
+   (T key / menu-open frees it). The menu is a large scrolling overlay of big taunt buttons that
+   STAYS OPEN as you spam picks. The centring transform is kept in :active (scale is composed on). */
+.taunt-btn, .taunt-stop-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: 46px;
+  padding: 10px 18px;
+  border: 1px solid #ffffff33;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 45;
+  pointer-events: auto;
+  box-shadow: 0 2px 10px #0007;
+  white-space: nowrap;
+}
+.taunt-btn {
+  top: calc(88px + env(safe-area-inset-top, 0px));
+  background: #6f4fd0dd;
+  color: #f5eaff;
+}
+.taunt-btn:active { transform: translateX(-50%) scale(.97); }
+/* The stop button sits just below the taunt button; alarming red so it reads as "kill it". */
+.taunt-stop-btn {
+  top: calc(140px + env(safe-area-inset-top, 0px));
+  background: #c0263bee;
+  color: #fff;
+  border-color: #ff8a9a88;
+  animation: tauntStopPulse 1s ease-in-out infinite;
+}
+.taunt-stop-btn:active { transform: translateX(-50%) scale(.97); }
+@keyframes tauntStopPulse {
+  0%, 100% { box-shadow: 0 0 6px #ff5a6a55; }
+  50% { box-shadow: 0 0 16px #ff5a6acc; }
+}
+.taunt-btn.hidden, .taunt-stop-btn.hidden { display: none; }
+
+.taunt-menu {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+  background: #060010cc;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  pointer-events: auto;
+}
+.taunt-menu.hidden { display: none; }
+.taunt-card {
+  width: min(94vw, 460px);
+  max-height: 86dvh;
+  display: flex;
+  flex-direction: column;
+  background: #170b28f2;
+  border: 1px solid #59c6ff55;
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 28px #000a;
+}
+.taunt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.taunt-title { font-weight: 800; letter-spacing: 3px; color: #7fd4ff; }
+.taunt-close {
+  min-width: 40px;
+  min-height: 40px;
+  border: 1px solid #ffffff33;
+  border-radius: 10px;
+  background: #2a1b4a;
+  color: #f5eaff;
+  font: bold 16px/1 monospace;
+  cursor: pointer;
+}
+.taunt-close:active { transform: scale(.96); }
+.taunt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 2px;
+}
+.taunt-item {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 14px;
+  border: 1px solid #ffffff22;
+  border-radius: 12px;
+  background: #2a1b4a;
+  color: #f5eaff;
+  font: inherit;
+  font-size: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, transform 0.05s;
+}
+.taunt-item:hover { background: #3a2660; }
+.taunt-item:active { transform: scale(.985); background: #59c6ff; color: #0b1a24; }
+.taunt-empty { margin: 8px 4px; color: #b9a9dd; font-size: 14px; text-align: center; }
+.taunt-empty.hidden { display: none; }

@@ -11,6 +11,7 @@ import { loadConfig } from './config.js';
 import { Session } from './net.js';
 import { Input } from './input.js';
 import { UI } from './ui.js';
+import { TauntLibrary } from './taunts.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 // Physics is imported LAZILY (loadRapier pulls WASM from a CDN) — only referenced
 // inside buildPredict(), which runs at match start, so a bare landing page still
@@ -31,6 +32,11 @@ const HUNTER_TOOLS = [
 
 let session = null; // created in boot() once config is loaded
 let editor = null; // lazily created on the first Ctrl+E (see editor.js)
+// AUDIO TAUNTS: the lazy clip loader/cache (built in boot() from the manifest) and a timer that
+// auto-hides the local player's stop button when their own taunt finishes on its own. See
+// sendTaunt/onTaunt/updateTauntUi.
+let taunts = null;
+let _selfTauntTimer = null;
 // In-game debug MENU (js/debug.js) is now ON BY DEFAULT (2026-07-12, VRmike) — no ?debug=1
 // needed. DEBUG below still reads ?debug=1 and controls the SEPARATE heavier features that
 // flag has always driven: the collider wireframe overlay (read directly in scene.js), the
@@ -130,6 +136,13 @@ const state = {
   // never see a stale value after the pointer re-locks. Desktop-only; always false on touch.
   uiMode: false,
 
+  // AUDIO TAUNTS: the taunt menu is open. Like uiMode, this frees the desktop mouse (so the
+  // scrolling list is clickable) WITHOUT opening the pause menu — onLockChange keys off it. It
+  // also halts movement while open (input loop), and the frame/input loops keep running (the world
+  // is live on the host). Always cleared when leaving a match / dying / phase-out. Touch never
+  // needs the pointer-lock dance, but the flag still gates the same halt + overlay logic.
+  tauntMenuOpen: false,
+
   // Debug FREE CAM (js/debug.js, ?debug=1 only). While true the render camera is flown
   // locally by the debug module and the physics player is frozen (no prediction, zeroed
   // movement sent), so the body stays put. Always false in normal play.
@@ -193,6 +206,9 @@ input.onLockChange = (locked) => {
   }
   if (!inGame || input.touch) return;
   if (state.uiMode) { ui.setClickToPlay(false); return; }
+  // Taunt menu open: the mouse was freed on purpose (to click the list) — like UI mode, show no
+  // overlay and don't open pause. Closing the menu (✕ / T / Esc) re-locks via closeTauntMenu.
+  if (state.tauntMenuOpen) { ui.setClickToPlay(false); return; }
   // Ambient focus loss (the mouse got freed because the window lost focus, NOT because Escape
   // was pressed): do nothing visible — no pause, no overlay, no blur. The game keeps rendering;
   // the camera just stops turning (mouse uncaptured). Clicking the canvas re-locks and resumes
@@ -224,6 +240,7 @@ function openPause() {
   const inGame = !ui.el.game.classList.contains('hidden');
   if (state.paused || !inGame || state.editing) return;
   state.uiMode = false; // pause takes over from UI mode (the two are mutually exclusive)
+  if (state.tauntMenuOpen) { state.tauntMenuOpen = false; ui.closeTauntMenu(); } // pause supersedes it
   state.paused = true;
   if (document.pointerLockElement) document.exitPointerLock(); // release the mouse (no-op on touch)
   ui.setClickToPlay(false);
@@ -360,6 +377,86 @@ function tryFire() {
   lastFireAt = performance.now(); // paces the hold-to-fire auto-repeat (see frameBody)
 }
 
+// ---- audio taunts (props) -------------------------------------------------
+// A living prop may taunt in any active phase (a prop taunting while hiding only snitches on
+// itself — that's the point). The menu is a UI-mode-like overlay: opening it frees the desktop
+// mouse so the scrolling list is clickable, without opening pause. It STAYS open across picks so
+// spamming is easy; the ✕ / T / Escape close it.
+function tauntEligible() {
+  const inGame = !ui.el.game.classList.contains('hidden');
+  return inGame && !state.editing && state.role === ROLE.PROP && state.alive
+    && (state.phase === PHASE.HIDING || state.phase === PHASE.HUNTING);
+}
+function openTauntMenu() {
+  if (state.tauntMenuOpen || state.paused || !tauntEligible()) return;
+  state.tauntMenuOpen = true;
+  state.uiMode = false; // the two free-mouse states are mutually exclusive
+  if (!input.touch && document.pointerLockElement) document.exitPointerLock(); // free the mouse
+  ui.setClickToPlay(false);
+  if (scene && scene.unlockAudio) scene.unlockAudio(); // iOS: resume audio inside this gesture
+  ui.openTauntMenu(); // reveals the list + kicks the background prefetch (onTauntPrefetch)
+}
+function closeTauntMenu(relock = true) {
+  if (!state.tauntMenuOpen) return;
+  state.tauntMenuOpen = false;
+  ui.closeTauntMenu();
+  const inGame = !ui.el.game.classList.contains('hidden');
+  if (relock && inGame && !input.touch && !state.paused) canvas.requestPointerLock();
+  else if (inGame && !input.touch && !state.paused) ui.setClickToPlay(!input.locked);
+}
+
+// Relay a taunt pick to the host (host-authoritative — it validates we're a living prop and the id
+// is real, then broadcasts to everyone). The menu is left OPEN by design. Unlocks audio in the
+// same gesture (the pick is a pointerdown / keypress).
+function sendTaunt(id) {
+  if (!tauntEligible()) return;
+  if (!taunts || !taunts.has(id)) return;
+  if (scene && scene.unlockAudio) scene.unlockAudio();
+  session.send({ t: C2S.TAUNT, id });
+}
+
+// Reflect taunt-related UI (the taunt button visibility) from live role/phase/alive. Called from
+// applyToolView (role/alive/scene rebuild) and the phase event. When the player can no longer
+// taunt (died / became a hunter / round ended), also tear the menu + stop button down.
+function updateTauntUi() {
+  const ok = tauntEligible();
+  ui.setTauntButton(ok);
+  if (!ok) {
+    closeTauntMenu(false); // no re-lock: we're leaving the taunt-able state
+    ui.setTauntStop(false);
+    if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
+  }
+}
+
+// A taunt event arrived (from the host relay). Play the clip as 3D positional audio at the taunter's
+// live position; lazy-load + cache the buffer on first use. For OUR OWN taunt, show the stop button
+// (unless the finder tool forced it uncancellable) and auto-hide it when the clip ends.
+async function onTaunt(msg) {
+  if (!scene || !taunts) return;
+  const buf = await taunts.load(msg.id);
+  if (!buf) return; // clip unavailable → silence (never breaks the game); nothing to stop
+  scene.playTaunt(msg.by, buf, { mapSize: state.map && state.map.size });
+  if (msg.by === state.selfId) {
+    if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
+    if (msg.uncancellable) {
+      ui.setTauntStop(false); // finder-forced: our stop button can't kill it
+    } else {
+      ui.setTauntStop(true);
+      const ms = (buf.duration || 1) * 1000 + 250;
+      _selfTauntTimer = setTimeout(() => { ui.setTauntStop(false); _selfTauntTimer = null; }, ms);
+    }
+  }
+}
+
+// A stop event arrived: kill that player's taunt everywhere. If it's ours, hide our stop button.
+function onTauntStop(msg) {
+  if (scene && scene.stopTaunt) scene.stopTaunt(msg.by);
+  if (msg.by === state.selfId) {
+    ui.setTauntStop(false);
+    if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
+  }
+}
+
 // RAPID FIRE cadence (ms between shots) the CLIENT paces its held-fire auto-repeat off —
 // the SAME rounds-per-minute the host caps with (rules.fireRateRpm). Damage/bullet is
 // unchanged (host-side). Falls back to the legacy cooldown if rpm is absent.
@@ -387,6 +484,7 @@ function applyToolView() {
   const liveHunter = state.role === ROLE.HUNTER && state.alive;
   if (scene && scene.setViewModel) scene.setViewModel(liveHunter ? state.tool : null);
   ui.setToolbar(liveHunter, state.tool);
+  updateTauntUi(); // AUDIO TAUNTS: the taunt button follows role/alive (props only) as well
 }
 
 // ---- network handling -----------------------------------------------------
@@ -558,6 +656,14 @@ function backToMenu(msg) {
   state.paused = false;
   state.hasLocked = false;
   state.uiMode = false; // drop the free-mouse state on the way back to the menu
+  // AUDIO TAUNTS: tear the taunt UI + any playing clip down on the way out (a taunt is a Web Audio
+  // node, not a scene child, so it must be explicitly stopped or it bleeds past the match).
+  state.tauntMenuOpen = false;
+  ui.closeTauntMenu();
+  ui.setTauntButton(false);
+  ui.setTauntStop(false);
+  if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
+  if (scene && scene.clearAllTaunts) scene.clearAllTaunts();
   ui.hidePause();
   ui.setBlindfold(false); // clear any active blindfold overlay + release look
   input.lookFrozen = false;
@@ -703,6 +809,15 @@ function onEvent(msg) {
       updateBlindfold(msg.seconds);
       if (msg.phase === PHASE.HIDING) ui.banner('HIDING PHASE — props, disguise now!', 2500);
       if (msg.phase === PHASE.HUNTING) ui.banner('HUNT! Hunters are loose.', 2500);
+      updateTauntUi(); // taunt button follows the phase (available during HIDING/HUNTING only)
+      break;
+    case 'taunt':
+      // Play the taunt as 3D positional audio at the taunter's position for everyone (async: the
+      // clip is lazy-loaded on first use). See onTaunt (cut-off + own-stop-button handling).
+      onTaunt(msg);
+      break;
+    case 'tauntStop':
+      onTauntStop(msg);
       break;
     case 'shot':
       // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
@@ -1005,7 +1120,7 @@ function startInputLoop() {
     // driving the body forward, so we must actively send a stop.
     // Free cam OR the pause menu OR UI mode -> send zeroed movement so the (frozen) body stays put
     // while the local view is detached; the world keeps running on the host regardless.
-    const halt = state.freeCam || state.paused || state.uiMode;
+    const halt = state.freeCam || state.paused || state.uiMode || state.tauntMenuOpen;
     const { mx, mz } = halt ? { mx: 0, mz: 0 } : input.moveVector();
     // seq = the latest predicted-frame id; the host echoes it back as `ack` so we
     // know which inputs it has applied. jump/rotUnlock drive physics + the disguise
@@ -1238,6 +1353,19 @@ function newSession() {
   ui.buildToolbar(HUNTER_TOOLS);
   ui.onSelectTool = selectTool;
   input.onSelectTool = (i) => { const t = HUNTER_TOOLS[i]; if (t) selectTool(t.id); };
+  // AUDIO TAUNTS: build the lazy clip loader (decodes through the scene's shared audio context)
+  // and the data-driven menu list from the manifest, then wire the open/pick/stop/close/prefetch
+  // callbacks + the desktop T key. Clips are never fetched here — only on first play / menu-open
+  // prefetch. An empty manifest just yields an empty menu (the referee rejects every taunt id too).
+  const tauntList = (state.cfg.taunts && state.cfg.taunts.taunts) || [];
+  taunts = new TauntLibrary(tauntList, (url) => (scene && scene.loadAudioBuffer ? scene.loadAudioBuffer(url) : Promise.resolve(null)));
+  ui.buildTauntList(tauntList);
+  ui.onTauntButton = () => { if (state.tauntMenuOpen) closeTauntMenu(true); else openTauntMenu(); };
+  ui.onTauntPick = (id) => sendTaunt(id);
+  ui.onTauntStop = () => { if (session) session.send({ t: C2S.STOP_TAUNT }); };
+  ui.onTauntClose = () => closeTauntMenu(true);
+  ui.onTauntPrefetch = () => { if (taunts) taunts.prefetch(); };
+  input.onToggleTaunt = () => { if (state.tauntMenuOpen) closeTauntMenu(true); else openTauntMenu(); };
   updateEditorButton(); // show the dev editor button on the landing screen (desktop solo)
   startInputLoop();
   requestAnimationFrame(frame);

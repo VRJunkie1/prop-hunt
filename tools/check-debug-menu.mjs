@@ -169,7 +169,9 @@ ok(/function openPause\(\)[\s\S]*?state\.uiMode = false;/.test(mainSrc),
   'openPause() clears uiMode — Esc→pause from UI mode hands over to the pause menu');
 const uiModeClears = (mainSrc.match(/state\.uiMode = false;/g) || []).length;
 ok(uiModeClears >= 4, `every resume/pause/exit path resets uiMode (${uiModeClears} clears — lock, pause, back-to-menu, lobby, started)`);
-ok(/const halt = state\.freeCam \|\| state\.paused \|\| state\.uiMode;/.test(mainSrc),
+// Tolerant of ADDITIONAL halt conditions appended after uiMode (e.g. the taunt menu, 2026-07-16):
+// the assertion is "movement halts in UI mode", so it only requires uiMode in the halt term.
+ok(/const halt = state\.freeCam \|\| state\.paused \|\| state\.uiMode\b/.test(mainSrc),
   'the input loop halts movement in UI mode (avatar holds still, like pause)');
 ok(/state\.role !== ROLE\.HUNTER \|\| !state\.movable \|\| state\.paused \|\| state\.uiMode/.test(mainSrc),
   'tryFire() is blocked in UI mode (belt-and-braces; primaryHeld is already clear while unlocked)');

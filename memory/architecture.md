@@ -480,6 +480,29 @@ are ignored mid-round (scoreboards stay stable); the name is saved to localStora
 (`main.js saveName`) and pre-fills next time. Guard: `tools/check-lobby-rename.mjs`. Detail:
 `memory/notes/lobby-rename.md`.
 
+## Audio taunts (props, host-authoritative relay) — 2026-07-16
+
+A prop plays an audio taunt as DIRECTIONAL 3D audio at its own world position for EVERYONE
+(hunters locate props by ear — taunting is a deliberate self-snitch, allowed in any active
+phase). Same host-authoritative relay pattern as `C2S.SHOOT`: client sends `C2S.TAUNT{id}` →
+`Referee.applyTaunt` accepts only a LIVING PROP in HIDING/HUNTING with a real manifest id →
+broadcasts `S2C.EVENT kind:'taunt'{by,id,uncancellable}`; every client plays the clip at that
+prop's live position via `THREE.PositionalAudio`. `C2S.STOP_TAUNT` → `applyStopTaunt` relays
+`kind:'tauntStop'{by}` unless the taunt was forced uncancellable. **`Referee.forceTaunt(propId)`**
+is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancellable taunt.
+- **Data-driven:** `assets/taunts/manifest.json` ({id,label,file}); adding the ~50 real clips
+  later is data-only (drop files + manifest lines, ZERO code). `js/config.js` loads it into
+  `cfg.taunts.taunts` (absent/empty tolerated); the referee validates against the SAME list.
+- **Client:** `js/taunts.js` (`TauntLibrary`) lazy-loads + caches clips (fetch on first play,
+  background `prefetch()` on menu-open; NEVER at join). `js/scene.js` holds the audio engine
+  (`AudioListener` on the camera; one `PositionalAudio` emitter per taunter, keyed by id,
+  repositioned each frame in `updateTauntEmitters`; per-emitter CUT-OFF — a prop's new taunt
+  stops its previous one, different props overlap; linear falloff tuned to `map.size`). `js/ui.js`
+  owns the scrolling menu (STAYS OPEN across picks — spam is the feature) + taunt/stop buttons.
+  Desktop `T` key / on-screen button open it (`state.tauntMenuOpen` frees the mouse like UI mode);
+  iOS audio unlocked in the gesture (`scene.unlockAudio`). Guard: `tools/check-taunts.mjs`.
+  Detail: `memory/notes/audio-taunts.md`.
+
 ## Role/identity hiding
 
 Snapshots expose `hunter: bool` (seekers are meant to be visible) and `disguise`

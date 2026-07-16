@@ -41,6 +41,14 @@ export class UI {
       pauseExit: $('pauseExit'),
       pauseHelpPanel: $('pauseHelpPanel'),
       pauseHelpBody: $('pauseHelpBody'),
+      // AUDIO TAUNTS (props): the taunt button, the (while-playing) stop button, and the
+      // scrolling menu with its list + close + empty-state note.
+      tauntBtn: $('tauntBtn'),
+      tauntStopBtn: $('tauntStopBtn'),
+      tauntMenu: $('tauntMenu'),
+      tauntList: $('tauntList'),
+      tauntClose: $('tauntClose'),
+      tauntEmpty: $('tauntEmpty'),
     };
     // Pause-menu callbacks, injected by main.js (no game logic in the UI). Resume re-locks
     // the pointer / dismisses the menu; Exit leaves the match.
@@ -52,6 +60,27 @@ export class UI {
     // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
     // main.js injects the real handler (selectTool). No game logic lives in the UI.
     this.onSelectTool = () => {};
+
+    // AUDIO TAUNTS: callbacks injected by main.js (the UI holds no game logic). onTauntButton =
+    // the taunt button was tapped (main.js opens the menu, freeing the mouse on desktop);
+    // onTauntPick(id) = a taunt row was tapped (main.js relays it — the menu STAYS open for spam);
+    // onTauntStop = the stop button was tapped; onTauntClose = the ✕ closed the menu without
+    // playing; onTauntPrefetch = fired when the menu opens so main.js can background-prefetch the
+    // library. Wired to pointerdown so a tap unlocks audio + never bubbles to the canvas.
+    this.onTauntButton = () => {};
+    this.onTauntPick = () => {};
+    this.onTauntStop = () => {};
+    this.onTauntClose = () => {};
+    this.onTauntPrefetch = () => {};
+    if (this.el.tauntBtn) {
+      this.el.tauntBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntButton(); });
+    }
+    if (this.el.tauntStopBtn) {
+      this.el.tauntStopBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntStop(); });
+    }
+    if (this.el.tauntClose) {
+      this.el.tauntClose.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntClose(); });
+    }
     // Diagnostic: peerId -> true(relayed)/false(direct). Painted in the lobby so
     // a playtest can see whether the free TURN relay is being leaned on. Purely
     // informational; the network layer fills it via setLink().
@@ -301,6 +330,58 @@ export class UI {
   // Show/hide the dead-player spectator banner (hunters do not respawn).
   setSpectator(on) {
     if (this.el.spectate) this.el.spectate.classList.toggle('hidden', !on);
+  }
+
+  // ---- AUDIO TAUNTS (props) -------------------------------------------------
+  // Build the scrolling taunt list from the manifest ([{ id, label }], possibly empty). Called
+  // once at boot — DATA-DRIVEN, so the ~50 real clips later need ZERO UI code (drop files + add
+  // manifest lines). An empty library shows the "no taunts yet" note and no rows. Each row is a
+  // big touch target; a tap relays that id and LEAVES the menu open (back-to-back spam is intended).
+  buildTauntList(taunts) {
+    const list = this.el.tauntList;
+    if (!list) return;
+    list.innerHTML = '';
+    const items = Array.isArray(taunts) ? taunts : [];
+    for (const t of items) {
+      if (!t || !t.id) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'taunt-item';
+      btn.setAttribute('role', 'listitem');
+      btn.dataset.tauntId = t.id;
+      btn.textContent = t.label || t.id;
+      // pointerdown (not click): zero-latency on touch, unlocks audio in the gesture, and never
+      // punches through to the canvas. The menu is deliberately NOT closed here.
+      btn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.onTauntPick(t.id);
+      });
+      list.appendChild(btn);
+    }
+    if (this.el.tauntEmpty) this.el.tauntEmpty.classList.toggle('hidden', items.length > 0);
+  }
+
+  // Open the taunt menu (main.js has already freed the mouse on desktop). Kicks off the background
+  // prefetch so most picks are already decoded by the time they're clicked.
+  openTauntMenu() {
+    if (!this.el.tauntMenu) return;
+    this.el.tauntMenu.classList.remove('hidden');
+    this.onTauntPrefetch();
+  }
+  closeTauntMenu() {
+    if (this.el.tauntMenu) this.el.tauntMenu.classList.add('hidden');
+  }
+  isTauntMenuOpen() {
+    return !!(this.el.tauntMenu && !this.el.tauntMenu.classList.contains('hidden'));
+  }
+  // Show/hide the taunt button (a living prop in an active phase).
+  setTauntButton(show) {
+    if (this.el.tauntBtn) this.el.tauntBtn.classList.toggle('hidden', !show);
+  }
+  // Show/hide the stop button (only while YOUR own cancellable taunt is playing).
+  setTauntStop(show) {
+    if (this.el.tauntStopBtn) this.el.tauntStopBtn.classList.toggle('hidden', !show);
   }
 
   banner(text, ms = 0) {
