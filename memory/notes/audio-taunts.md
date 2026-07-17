@@ -15,14 +15,22 @@ close it. A STOP button appears while your own taunt plays and kills it for ever
 
 ## Data-driven library (ZERO code to add clips)
 - `assets/taunts/manifest.json` = `{ taunts: [{ id, label, file }] }`. `id` unique+stable, `label` =
-  menu text, `file` = path under `assets/` (e.g. `taunts/beep_high.wav`).
-- Adding the ~50 real clips later: drop the audio files into `assets/taunts/` and add manifest lines.
+  menu text, `file` = path relative to `assets/`. The client loader (`js/taunts.js` `_url`) resolves
+  it under `/assets/` and tolerates a leading `/` or an `assets/` prefix.
+- **REAL CLIPS ARE WIRED IN (2026-07-16, build/112).** 29 real meme .mp3s VRmike/Teravortryx
+  uploaded via Discord are registered in the manifest. They sit FLAT in `assets/` (e.g.
+  `assets/Never_Gonna_Give_You_Up.mp3`) — that's where the canonical root `assets/manifest.json`
+  + `CREDITS.md` register them — so the taunt manifest `file` fields are bare filenames
+  (`"Never_Gonna_Give_You_Up.mp3"`), NOT `taunts/…`. There is no `assets/audio/` dir. LICENSE is
+  UNVERIFIED on every clip (Discord attachments) — recorded in CREDITS.md.
+- Adding more clips: drop the audio file into `assets/` and add one manifest line (id/label/file).
   NO code change. An empty/absent manifest is valid (menu shows the empty-state note; the host
   rejects every taunt id).
-- Ships now with 3 tiny SYNTHESIZED placeholder WAVs (beep_high / beep_low / warble) so the whole
-  path is provable today. `Write` can't emit binary safely, so `tools/gen-taunt-placeholders.mjs`
-  synthesizes valid 16-bit PCM mono WAVs (deterministic — no randomness). Re-run it if you change the
-  placeholder set; keep ids in sync with the manifest.
+- **The 3 synthesized placeholder beeps (beep_high / beep_low / warble) were REMOVED** (VRmike) —
+  their manifest entries are gone and `tools/gen-taunt-placeholders.mjs` is now a RETIRED no-op stub.
+  Note: this sandbox has no shell/`rm` and `Write` can't touch binaries, so the stale
+  `assets/taunts/beep_*.wav` files may still be on disk — nothing references them; delete in a normal
+  commit if desired.
 
 ## Files / responsibilities
 - **`shared/protocol.js`** — `C2S.TAUNT{id}`, `C2S.STOP_TAUNT`; `S2C.EVENT` kinds
@@ -88,8 +96,10 @@ The taunt + stop buttons sit TOP-CENTRE (just below the HUD pills). That band is
 touch control: joystick (bottom-left, tall), action/jump/rotate stack (bottom-right), pause ☰
 (top-right corner), and the mid-screen banner (top:30%). Bottom-left/right were both taken.
 
-## Headless check — `tools/check-taunts.mjs` (40 assertions, build-gating)
-(A) manifest ids unique + every referenced file exists + library non-empty now. (B) drives the REAL
+## Headless check — `tools/check-taunts.mjs` (build-gating, passes with the 29 real clips)
+(A) manifest ids unique + every referenced file exists + library non-empty now. The check reads
+ids DYNAMICALLY from the manifest (`taunts[0]`/`taunts[1]`), so it never assumed exactly 3 entries
+and needed no logic change for 29 — only stale "placeholder" wording was updated. (B) drives the REAL
 referee: taunt relayed to every player tagged by the taunter; a second taunt re-relayed; stop relayed;
 hunter / dead prop / bogus id / lobby-phase all REJECTED; `forceTaunt` fires an uncancellable taunt and
 the prop's stop is then ignored; a normal taunt clears the flag; empty library degrades gracefully.

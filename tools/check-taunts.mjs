@@ -9,7 +9,7 @@
 // a headless browser boot exercises (no peers, no THREE audio graph). So this drives the REAL
 // shared code paths directly and asserts the OUTPUTS the requester cares about:
 //   A) MANIFEST is valid: ids unique, and every referenced clip file actually exists on disk
-//      (the placeholder clips ship now; ~50 real clips drop in later with ZERO code changes).
+//      (the 29 real Discord clips are wired in now; the old placeholder beeps were removed).
 //   B) EVENT FLOW against the real referee: a prop's taunt is relayed to EVERY player tagged with
 //      the taunter; a second taunt from the same prop is relayed again (the client cut-off is
 //      per-emitter, the referee just relays); a stop is relayed; a NON-prop / dead prop / bogus id
@@ -63,8 +63,8 @@ console.log('\nA) manifest: unique ids + referenced files exist');
     const abs = join(root, 'assets', t.file);
     ok(existsSync(abs), `clip file exists for "${t.id}": assets/${t.file}`);
   }
-  // Ship-now expectation: the placeholder library is non-empty so the whole path is testable today.
-  ok(items.length >= 1, `library is non-empty now (${items.length} placeholder clip(s)) so the path is provable end-to-end`);
+  // Ship-now expectation: the library is non-empty so the whole path is testable today.
+  ok(items.length >= 1, `library is non-empty now (${items.length} clip(s)) so the path is provable end-to-end`);
 }
 
 // ---------------------------------------------------------------------------
