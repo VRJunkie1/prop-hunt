@@ -228,7 +228,17 @@ input.onToggleUiMode = () => {
   if (state.uiMode) exitUiMode(true); // ` again -> re-lock and resume
   else enterUiMode();
 };
-input.onRequestPause = () => openPause(); // Esc while unlocked (UI mode) -> pause takes over
+// Esc arrives here ONLY while the pointer is already free (UI mode, the pause menu open, or the taunt
+// menu open) — when the mouse is captured the browser eats Esc to release the lock and pause opens via
+// the onLockChange path above instead. Derive the action from live state so open/close stays consistent
+// across both routes (the "derive, don't latch" rule): Esc closes the taunt menu, toggles the pause menu
+// shut if it's up, otherwise opens pause. Each close re-locks the pointer (this keypress is a user
+// gesture, so the re-lock request is allowed).
+input.onRequestPause = () => {
+  if (state.tauntMenuOpen) { closeTauntMenu(true); return; } // Esc closes the taunt menu + re-locks
+  if (state.paused) { closePause(true); return; }            // Esc toggles the pause menu closed + re-locks
+  openPause();                                               // otherwise Esc opens the pause menu
+};
 
 // ---- pause menu (Escape / on-screen button) -------------------------------
 // A menu OVERLAY — it does NOT pause the simulation (multiplayer: the world runs on the

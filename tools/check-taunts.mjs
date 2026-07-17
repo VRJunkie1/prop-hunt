@@ -215,5 +215,41 @@ console.log('\nC) scene / client audio API present in source');
   ok(cfg.includes('/assets/taunts/manifest.json'), 'config.js loads the taunt manifest');
 }
 
+// ---------------------------------------------------------------------------
+// D) TAUNT MENU + PAUSE MENU UX FIXES FOR PC (Jie, 2026-07). Source assertions for the five UX
+//    changes: (1) discoverable hotkey hint, (2) a Stop button INSIDE the menu, (3) the menu docks
+//    LEFT, (4) NO background tint/blur behind it, (5) Esc toggles the pause menu (and closes the
+//    taunt menu). All keyboard-side; the mobile touch controls are untouched.
+// ---------------------------------------------------------------------------
+console.log('\nD) taunt/pause UX (PC): left dock, no tint, in-menu stop, hotkey hint, Esc toggle');
+{
+  const html = readText('index.html');
+  ok(/id="tauntStopInline"/.test(html), '(2) index.html has an in-menu Stop button (#tauntStopInline)');
+  ok(/class="taunt-hint"/.test(html), '(1) index.html shows the hotkey hint near the menu (.taunt-hint)');
+
+  const ui = readText('js', 'ui.js');
+  ok(ui.includes('tauntStopInline'), 'ui.js wires the in-menu Stop button');
+  // setTauntStop must toggle BOTH stop buttons so the in-menu one tracks "your taunt is playing".
+  const setStop = (ui.match(/setTauntStop\s*\([^)]*\)\s*\{[\s\S]*?\n {2}\}/) || [''])[0];
+  ok(setStop.includes('tauntStopBtn') && setStop.includes('tauntStopInline'),
+    'setTauntStop toggles BOTH the floating and in-menu stop buttons together');
+
+  const css = readText('css', 'style.css');
+  const menuBlock = (css.match(/\.taunt-menu\s*\{[\s\S]*?\}/) || [''])[0];
+  ok(/justify-content:\s*flex-start/.test(menuBlock), '(3) .taunt-menu docks LEFT (justify-content: flex-start)');
+  ok(!/backdrop-filter/.test(menuBlock) && !/\bbackground\s*:/.test(menuBlock),
+    '(4) .taunt-menu has NO background tint / blur (world stays fully visible)');
+
+  const main = readText('js', 'main.js');
+  const reqPause = (main.match(/onRequestPause\s*=\s*\(\)\s*=>\s*\{[\s\S]*?\n\};/) || [''])[0];
+  ok(reqPause.includes('closePause'), '(5) Esc closes the pause menu when open (onRequestPause -> closePause)');
+  ok(reqPause.includes('closeTauntMenu'), '(1/5) Esc closes the taunt menu (onRequestPause -> closeTauntMenu)');
+
+  // The desktop T key must still toggle the taunt menu (opens AND frees the mouse in one press).
+  const input = readText('js', 'input.js');
+  ok(/KeyT/.test(input) && /onToggleTaunt/.test(input), '(1) T key toggles the taunt menu (input.js)');
+  ok(/openTauntMenu[\s\S]*exitPointerLock/.test(main), '(1) opening the taunt menu frees the mouse (exitPointerLock)');
+}
+
 console.log(fails ? `\nFAILED (${fails})` : '\nAll taunt checks passed.');
 process.exit(fails ? 1 : 0);

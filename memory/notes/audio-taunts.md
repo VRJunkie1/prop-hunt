@@ -96,6 +96,29 @@ The taunt + stop buttons sit TOP-CENTRE (just below the HUD pills). That band is
 touch control: joystick (bottom-left, tall), action/jump/rotate stack (bottom-right), pause ☰
 (top-right corner), and the mid-screen banner (top:30%). Bottom-left/right were both taken.
 
+## PC UX fixes (Jie, 2026-07-16, branch build/116-taunt-menu-pause-menu)
+Keyboard-side polish; the mobile touch controls (on-screen Taunt button, floating stop) are UNTOUCHED.
+- **Menu docks LEFT + NO tint.** `.taunt-menu` (css/style.css) is `justify-content: flex-start` and
+  has NO `background`/`backdrop-filter` — the game world stays fully visible while the menu is open.
+  The full-screen container still keeps `pointer-events: auto` so a stray click on empty space can't
+  punch through to the canvas and re-lock the mouse (which would close the menu). The `.taunt-card`
+  carries its own near-opaque background (`#170b28fa`) so it reads over the live world.
+- **In-menu STOP button** (`#tauntStopInline`, in `.taunt-head`) silences your current taunt WITHOUT
+  closing the menu — same `onTauntStop` → `C2S.STOP_TAUNT` path as the floating button. `setTauntStop`
+  toggles BOTH buttons together, so the in-menu one shows only while your cancellable taunt plays.
+- **Hotkey hint** `.taunt-hint` ("T / Esc to close") in the header; hidden on touch via
+  `@media (pointer: coarse)` (the same primary-pointer signal input.js classifies control scheme by).
+- **T already opens+frees the mouse in one press** (was true since the taunt system shipped — no
+  tilde-first two-step). T or Esc closes and re-locks.
+- **Esc TOGGLES the pause menu** (previously open-only). `main.js` `input.onRequestPause` now DERIVES
+  the action from live state (derive-don't-latch): taunt menu open → `closeTauntMenu(true)`; pause open
+  → `closePause(true)` (re-locks); else `openPause()`. The pointer-lock minefield is sidestepped because
+  each of these Esc presses happens while the mouse is ALREADY free (menu/pause open ⇒ unlocked), so the
+  Esc keydown reaches the page normally; the OPEN-from-play path still routes through the browser's
+  lock-release → `onLockChange` → `openPause`. Locked⇔unlocked are mutually exclusive so the two paths
+  never double-fire. Controls-help text (ui.js `_controlsHtml`) updated for the Esc toggle + a T row.
+- `tools/check-taunts.mjs` section **D** asserts all of the above from source.
+
 ## Headless check — `tools/check-taunts.mjs` (build-gating, passes with the 29 real clips)
 (A) manifest ids unique + every referenced file exists + library non-empty now. The check reads
 ids DYNAMICALLY from the manifest (`taunts[0]`/`taunts[1]`), so it never assumed exactly 3 entries

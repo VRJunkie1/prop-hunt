@@ -189,7 +189,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   ambient pointer-lock loss (Alt-Tab / Windows key / other-window click) does NOTHING — no pause,
   no overlay, no blur; the game keeps rendering and just stops turning the camera until the player
   clicks back in. `input._releaseHeldInput()` (on `window 'blur'`) drops stuck held keys so
-  focus-loss can't walk the avatar off. Touch untouched. See `notes/pause-menu.md`. Also paints a
+  focus-loss can't walk the avatar off. **Esc TOGGLES (2026-07-16):** `input.onRequestPause`
+  derives the action from live state — taunt menu open → close it; pause open → `closePause` (was
+  open-only, a second Esc did nothing); else `openPause`. Works because Esc reaches that handler only
+  while the mouse is already free (pause/menu open ⇒ unlocked); the open-from-play path still routes
+  through the browser lock-release. Touch untouched. See `notes/pause-menu.md`. Also paints a
   `direct`/`relayed` diagnostic badge per lobby row from `setLink()` — the
   connection-type is *detected* in `net.js`, never here. Also owns the hunter
   **blindfold** overlay via `setBlindfold(blind, seconds)` — a plain show/hide of the
@@ -516,7 +520,10 @@ is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancella
   owns the scrolling menu (STAYS OPEN across picks — spam is the feature) + taunt/stop buttons.
   Desktop `T` key / on-screen button open it (`state.tauntMenuOpen` frees the mouse like UI mode);
   iOS audio unlocked in the gesture (`scene.unlockAudio`). Guard: `tools/check-taunts.mjs`.
-  Detail: `memory/notes/audio-taunts.md`.
+  **PC UX (2026-07-16, Jie):** the menu docks LEFT with NO background tint/blur (world stays visible),
+  carries a discoverable `T / Esc to close` hint (hidden on touch), and an in-menu STOP button that
+  silences your taunt without closing the menu; `T`/`Esc` close + re-lock. Detail:
+  `memory/notes/audio-taunts.md`.
 
 ## Role/identity hiding
 

@@ -45,6 +45,7 @@ export class UI {
       // scrolling menu with its list + close + empty-state note.
       tauntBtn: $('tauntBtn'),
       tauntStopBtn: $('tauntStopBtn'),
+      tauntStopInline: $('tauntStopInline'), // STOP button INSIDE the menu (same handler as the floating one)
       tauntMenu: $('tauntMenu'),
       tauntList: $('tauntList'),
       tauntClose: $('tauntClose'),
@@ -77,6 +78,11 @@ export class UI {
     }
     if (this.el.tauntStopBtn) {
       this.el.tauntStopBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntStop(); });
+    }
+    // The in-menu Stop button shares the exact same handler — it just lives inside the taunt card so
+    // you can silence a taunt without leaving the menu (the menu stays open).
+    if (this.el.tauntStopInline) {
+      this.el.tauntStopInline.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntStop(); });
     }
     if (this.el.tauntClose) {
       this.el.tauntClose.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); this.onTauntClose(); });
@@ -379,9 +385,12 @@ export class UI {
   setTauntButton(show) {
     if (this.el.tauntBtn) this.el.tauntBtn.classList.toggle('hidden', !show);
   }
-  // Show/hide the stop button (only while YOUR own cancellable taunt is playing).
+  // Show/hide the stop button (only while YOUR own cancellable taunt is playing). Toggles BOTH the
+  // floating on-screen button (the mobile control) and the in-menu Stop button together, so whichever
+  // is visible reflects the same "your taunt is playing" state.
   setTauntStop(show) {
     if (this.el.tauntStopBtn) this.el.tauntStopBtn.classList.toggle('hidden', !show);
+    if (this.el.tauntStopInline) this.el.tauntStopInline.classList.toggle('hidden', !show);
   }
 
   banner(text, ms = 0) {
@@ -502,9 +511,10 @@ export class UI {
           ['Space', 'Jump'],
           ['E', 'Disguise (prop)'],
           ['1 / 2', 'Pick hunter tool'],
+          ['T', 'Taunt menu (prop) — frees the mouse; T or Esc closes it'],
           ['V', 'Toggle view'],
           ['`', 'Free the mouse for debug/UI — click the view to resume'],
-          ['Esc', 'This menu (releases the mouse; Resume re-locks)'],
+          ['Esc', 'Open / close this menu (releases the mouse; re-locks on close)'],
         ];
     return rows.map(([k, v]) => `<div class="pause-help-row"><b>${k}</b><span>${v}</span></div>`).join('');
   }

@@ -736,17 +736,19 @@ button.ghost:hover { background: #3d2a66; }
 }
 .taunt-btn.hidden, .taunt-stop-btn.hidden { display: none; }
 
+/* The taunt menu docks to the LEFT of the screen and has NO background tint / blur — the game world
+   stays fully visible and playable-looking while the menu is open (Jie, 2026-07). The full-screen
+   container still captures pointer events so a stray click on empty space can't punch through to the
+   canvas and accidentally re-lock the mouse (which would close the menu); only the card is interactive
+   content. The card itself carries its own solid-ish background so it stays readable over the world. */
 .taunt-menu {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start; /* LEFT side */
   padding: 16px;
   z-index: 50;
-  background: #060010cc;
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
   pointer-events: auto;
 }
 .taunt-menu.hidden { display: none; }
@@ -755,19 +757,42 @@ button.ghost:hover { background: #3d2a66; }
   max-height: 86dvh;
   display: flex;
   flex-direction: column;
-  background: #170b28f2;
-  border: 1px solid #59c6ff55;
+  background: #170b28fa;
+  border: 1px solid #59c6ff88;
   border-radius: 14px;
   padding: 14px;
-  box-shadow: 0 8px 28px #000a;
+  box-shadow: 0 8px 28px #000c;
 }
 .taunt-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 10px;
 }
-.taunt-title { font-weight: 800; letter-spacing: 3px; color: #7fd4ff; }
+/* Title takes the left; the hint + stop + close group to the right of it. */
+.taunt-title { font-weight: 800; letter-spacing: 3px; color: #7fd4ff; margin-right: auto; }
+/* Desktop-only hotkey hint. Hidden on touch (no T key there) via the pointer:coarse query below. */
+.taunt-hint { font-size: 12px; color: #b9a9dd; letter-spacing: .5px; white-space: nowrap; }
+/* In-menu Stop button: alarming red like the floating stop, but sized to sit in the header. */
+.taunt-stop-inline {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid #ff8a9a88;
+  border-radius: 10px;
+  background: #c0263bee;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.taunt-stop-inline:active { transform: scale(.96); }
+.taunt-stop-inline.hidden { display: none; }
+/* On touch devices the T-key hint is meaningless (the on-screen Taunt button drives the menu), so
+   drop it. Same primary-pointer signal input.js classifies control scheme by. */
+@media (pointer: coarse) {
+  .taunt-hint { display: none; }
+}
 .taunt-close {
   min-width: 40px;
   min-height: 40px;

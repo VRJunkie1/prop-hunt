@@ -42,7 +42,15 @@ the pause menu is a **local overlay only**. Nothing on the referee changes; the 
   calls `openPause()` directly (no pointer lock exists on touch).
 - **Close / Resume:** `closePause(true)` re-requests pointer lock on desktop (a user gesture, so
   it survives the browser's post-Escape lock cooldown); the lock-regained event hides the menu.
-  On touch it just hides. Escape-again works because releasing lock re-opens, Resume re-locks.
+  On touch it just hides.
+- **Esc TOGGLES (2026-07-16, Jie, branch build/116).** Previously Esc only OPENED pause (a second Esc
+  did nothing — `openPause()` early-returns when already paused). Now `input.onRequestPause` DERIVES the
+  action from live state: taunt menu open → `closeTauntMenu(true)`; pause open → `closePause(true)`
+  (re-locks); else `openPause()`. This works because Esc reaches this handler ONLY while the mouse is
+  already free (pause/menu open ⇒ pointer unlocked), so the Esc keydown isn't swallowed by the browser's
+  lock-release — that swallow only affects the OPEN-from-play path, which still routes through
+  `pointerlockchange`→`onLockChange`→`openPause`. Locked (playing) and unlocked (paused) are mutually
+  exclusive, so the keydown and lock-change routes can't double-fire the same toggle.
 - **Contents** (`index.html` `#pauseMenu`, rendered by `ui.js`): a live SCOREBOARD
   (`ui.updatePauseScoreboard` — every player with role/disguise + current health, refreshed from
   each snapshot while open, dead players struck through), a collapsible Controls/help panel

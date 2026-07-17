@@ -125,6 +125,13 @@
         <div class="taunt-card">
           <div class="taunt-head">
             <span class="taunt-title">TAUNTS</span>
+            <!-- Desktop hotkey hint (hidden on touch via CSS pointer:coarse). T opens/closes the
+                 menu and frees/re-locks the mouse in one press; Esc also closes it. -->
+            <span class="taunt-hint">T / Esc to close</span>
+            <!-- In-menu STOP: kills YOUR currently-playing taunt without closing the menu, so you can
+                 immediately pick another. Mirrors the floating stop button's visibility (only while a
+                 cancellable taunt of yours is playing). Same C2S.STOP_TAUNT path (ui.onTauntStop). -->
+            <button id="tauntStopInline" class="taunt-stop-inline hidden" type="button" aria-label="Stop your taunt">&#9632; Stop</button>
             <button id="tauntClose" class="taunt-close" type="button" aria-label="Close">&#10005;</button>
           </div>
           <div id="tauntList" class="taunt-list" role="list"></div>
