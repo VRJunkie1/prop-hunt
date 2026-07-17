@@ -268,6 +268,23 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   base 5). Health rides every snapshot player entry (HUD only, no secret).
 - **Hunters do NOT respawn** (DECISIONS.md #1): a dead player spectates; `checkRoundOver`
   ends the round PROPS-WIN when a round's hunters are all dead.
+- **PROP FINDER (hunter tool #2, 2026-07-17)** — the second selectable tool beside the rifle
+  (grenades come later). Unlike the rifle's client-only fire, activating the finder is
+  **host-authoritative**: `C2S.FIND` → `referee.applyFind` (a LIVING HUNTER in HUNTING, off its
+  PER-HUNTER cooldown `player._lastFindAt`) forces a RANDOM UNCANCELLABLE taunt out of every living
+  prop within `rules.finderRadius` (8 m, **2D** distance — the AOE cylinder is effectively infinite
+  height so height is ignored) by reusing the pre-existing `referee.forceTaunt` hook — the taunt
+  system is otherwise UNTOUCHED. The victims taunt positionally for everyone through the existing 3D
+  taunt path. Cooldown `rules.finderCooldownSeconds` (20 s) is host-enforced (a hacked client can't
+  skip it) and reset to ready in `startMatch`/`resetToLobby`. The host replies `S2C.EVENT kind:'find'`
+  privately to the acting hunter (`ok:true` cooldownMs/hits, or `ok:false` remainMs). Client
+  (`js/main.js`): `tryFinder` (LEFT-CLICK / mobile fire button while selected), a translucent AOE
+  cylinder that follows the hunter (`scene.updateFinderZone`, green ready / grey cooling), the
+  "Finder (14s)" countdown on the tool button (`ui.setToolCooldown`), a synthesized denied buzz on a
+  cooldown click (`assets/finder/deny.wav` via `tools/gen-finder-deny.mjs`, played by
+  `scene.playUiSound`), and a PROP taunt-UI LOCK while a forced (uncancellable) taunt plays
+  (`ui.setTauntLocked` + `state.tauntLocked` gating open/send). Both knobs hot-tunable in
+  `rules.json`. Guard: `tools/check-finder.mjs`. Detail: `notes/prop-finder.md`.
 
 ## Shared (`shared/`)
 

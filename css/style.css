@@ -594,6 +594,15 @@ button.ghost:hover { background: #3d2a66; }
   border-color: #ffffffaa;
   box-shadow: 0 0 10px #6f4fd077;
 }
+/* PROP FINDER: a tool that is cooling down shows "(14s)" on its name and reads as not-ready
+   (dimmed + muted border). Layered under .selected so the highlighted-but-cooling state still
+   reads as selected. */
+.tool-btn.cooling {
+  color: #b9bcc6;
+}
+.tool-btn.cooling .tool-name {
+  opacity: 0.85;
+}
 
 /* Dead-player spectator banner. Non-interactive; sits over the (still-rendering) world. */
 .spectate {
@@ -735,6 +744,16 @@ button.ghost:hover { background: #3d2a66; }
   50% { box-shadow: 0 0 16px #ff5a6acc; }
 }
 .taunt-btn.hidden, .taunt-stop-btn.hidden { display: none; }
+/* PROP FINDER: while a forced (uncancellable) taunt plays on the local prop, their taunt button is
+   LOCKED — greyed + non-interactive (a small padlock cue) — until the clip finishes. */
+.taunt-btn.locked {
+  background: #4a4550cc;
+  color: #cfc8d8;
+  border-color: #ffffff22;
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+.taunt-btn.locked::before { content: "🔒 "; }
 
 /* The taunt menu docks to the LEFT of the screen and has NO background tint / blur — the game world
    stays fully visible and playable-looking while the menu is open (Jie, 2026-07). The full-screen

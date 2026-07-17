@@ -37,6 +37,12 @@ let editor = null; // lazily created on the first Ctrl+E (see editor.js)
 // sendTaunt/onTaunt/updateTauntUi.
 let taunts = null;
 let _selfTauntTimer = null;
+// PROP FINDER: timer that releases the local prop's taunt-UI lock when a finder-forced taunt ends,
+// and the lazily-decoded denied-buzz AudioBuffer (played when a hunter clicks the finder while it
+// is still cooling down). Loaded on first denial through the scene's shared audio context.
+let _forcedTauntTimer = null;
+let _finderDenyBuf = null;
+let _finderDenyBufLoading = false;
 // In-game debug MENU (js/debug.js) is now ON BY DEFAULT (2026-07-12, VRmike) — no ?debug=1
 // needed. DEBUG below still reads ?debug=1 and controls the SEPARATE heavier features that
 // flag has always driven: the collider wireframe overlay (read directly in scene.js), the
@@ -116,9 +122,19 @@ const state = {
   aimPropId: null,
 
   // HUNTER-TOOLS v1: the hunter's currently selected tool (see HUNTER_TOOLS). Local-only
-  // (not networked); the rifle fires, the prop finder is a no-op. Defaults to the rifle.
+  // (not networked); the rifle fires, the prop finder activates its AOE. Defaults to the rifle.
   tool: 'rifle',
   alive: true, // local player's authoritative alive flag (for the tool bar + spectator view)
+
+  // PROP FINDER (hunter tool #2). finderCooldownUntil = performance.now() time this hunter's own
+  // finder is ready again (0 = ready now); set optimistically on activation and reconciled by the
+  // host's kind:'find' reply. Drives the on-button countdown + the AOE cylinder colour (green
+  // ready / grey cooling) + the local denied buzz. Per-hunter (each client tracks only its own).
+  finderCooldownUntil: 0,
+  // AUDIO TAUNTS: while a finder-FORCED (uncancellable) taunt is playing on the LOCAL prop, their
+  // taunt UI is locked — they can't start their own taunt until it finishes. Cleared by a timer
+  // sized to the clip (onTaunt) and on any teardown. Gates tauntEligible / openTauntMenu.
+  tauntLocked: false,
 
   // Pause menu overlay (Escape / ☰). paused === menu shown; hasLocked tracks whether the
   // pointer was ever captured this game (so the first unlock shows "Click to play", a later
@@ -153,7 +169,7 @@ const state = {
 input.onAction = (name) => {
   if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
   // HUNTER-TOOLS v1: a hunter's primary action fires the selected tool (rifle shoots; the
-  // prop finder does nothing); a prop's primary disguises. The old instant 'tag' melee is
+  // prop finder activates its AOE); a prop's primary disguises. The old instant 'tag' melee is
   // SUPERSEDED by the rifle + health system and fully unwired (client + referee) so it can't
   // bypass health (an instant-kill path would defeat the whole damage model).
   if (name === 'primary') name = state.role === ROLE.HUNTER ? 'fire' : 'disguise';
@@ -380,11 +396,70 @@ function tryDisguise() {
 // authoritative world, decides the hit + damage, and broadcasts the tracer to everyone.
 function tryFire() {
   if (state.role !== ROLE.HUNTER || !state.movable || state.paused || state.uiMode) return;
-  if (state.tool !== 'rifle') return; // prop finder does nothing (yet)
+  if (state.tool === 'finder') { tryFinder(); return; } // the finder tool activates instead of firing
+  if (state.tool !== 'rifle') return;
   const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
   if (!dir) return;
   session.send({ t: C2S.SHOOT, dx: dir.x, dy: dir.y, dz: dir.z });
   lastFireAt = performance.now(); // paces the hold-to-fire auto-repeat (see frameBody)
+}
+
+// PROP FINDER cooldown (ms) — the SAME per-hunter cooldown the host enforces (rules.finderCooldownSeconds).
+function finderCooldownMs() {
+  const r = state.cfg && state.cfg.rules;
+  const s = r && r.finderCooldownSeconds;
+  return Number.isFinite(s) && s >= 0 ? Math.round(s * 1000) : 20000;
+}
+function finderRadius() {
+  const r = state.cfg && state.cfg.rules;
+  const v = r && r.finderRadius;
+  return Number.isFinite(v) && v > 0 ? v : 8;
+}
+
+// PROP FINDER: activate the finder (LEFT-CLICK on PC / the fire button on mobile while the finder is
+// selected). If the local cooldown is still running, play the short denied buzz and DON'T send. Else
+// tell the host (which is the authority — it re-checks the cooldown, finds the in-range props, and
+// forces their taunts) and start the on-button countdown optimistically; the host's kind:'find'
+// reply reconciles the exact remaining time.
+function tryFinder() {
+  if (state.role !== ROLE.HUNTER || !state.movable || state.paused || state.uiMode) return;
+  const now = performance.now();
+  if (now < state.finderCooldownUntil) { playFinderDenied(); return; }
+  state.finderCooldownUntil = now + finderCooldownMs(); // optimistic; host reply reconciles
+  if (scene && scene.unlockAudio) scene.unlockAudio(); // iOS: keep audio warm in the gesture
+  session.send({ t: C2S.FIND });
+}
+
+// PROP FINDER: play the short, quiet synthesized "denied" buzz (our own generated WAV — NOT a ripped
+// Windows sound) for a click during cooldown. Lazily fetch+decode it once through the scene's shared
+// audio context, then play it non-positionally. Silent if audio/asset is unavailable.
+function playFinderDenied() {
+  if (!scene) return;
+  if (scene.unlockAudio) scene.unlockAudio(); // this runs from a click/tap gesture — keep iOS audio warm
+  if (_finderDenyBuf) { scene.playUiSound(_finderDenyBuf, 0.5); return; }
+  if (_finderDenyBufLoading || !scene.loadAudioBuffer) return;
+  _finderDenyBufLoading = true;
+  scene.loadAudioBuffer('/assets/finder/deny.wav').then((buf) => {
+    _finderDenyBufLoading = false;
+    if (buf) { _finderDenyBuf = buf; scene.playUiSound(buf, 0.5); }
+  });
+}
+
+// PROP FINDER: reflect the finder cooldown onto its tool button ("Finder (14s)") and drive the AOE
+// zone cylinder (visible + green ready / grey cooling) while a live hunter holds the finder. Called
+// every frame from the render loop with the hunter's displayed position.
+function updateFinderHud(now, disp) {
+  const liveHunter = state.role === ROLE.HUNTER && state.alive;
+  const remainMs = Math.max(0, state.finderCooldownUntil - now);
+  ui.setToolCooldown('finder', remainMs / 1000);
+  if (scene && scene.updateFinderZone) {
+    scene.updateFinderZone({
+      visible: liveHunter && state.tool === 'finder' && state.movable,
+      ready: remainMs <= 0,
+      radius: finderRadius(),
+      pos: disp,
+    });
+  }
 }
 
 // ---- audio taunts (props) -------------------------------------------------
@@ -398,7 +473,7 @@ function tauntEligible() {
     && (state.phase === PHASE.HIDING || state.phase === PHASE.HUNTING);
 }
 function openTauntMenu() {
-  if (state.tauntMenuOpen || state.paused || !tauntEligible()) return;
+  if (state.tauntMenuOpen || state.paused || state.tauntLocked || !tauntEligible()) return;
   state.tauntMenuOpen = true;
   state.uiMode = false; // the two free-mouse states are mutually exclusive
   if (!input.touch && document.pointerLockElement) document.exitPointerLock(); // free the mouse
@@ -419,7 +494,7 @@ function closeTauntMenu(relock = true) {
 // is real, then broadcasts to everyone). The menu is left OPEN by design. Unlocks audio in the
 // same gesture (the pick is a pointerdown / keypress).
 function sendTaunt(id) {
-  if (!tauntEligible()) return;
+  if (state.tauntLocked || !tauntEligible()) return; // finder-forced taunt locks self-taunting
   if (!taunts || !taunts.has(id)) return;
   if (scene && scene.unlockAudio) scene.unlockAudio();
   session.send({ t: C2S.TAUNT, id });
@@ -435,6 +510,11 @@ function updateTauntUi() {
     closeTauntMenu(false); // no re-lock: we're leaving the taunt-able state
     ui.setTauntStop(false);
     if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
+    // PROP FINDER: release any forced-taunt lock too (died / became a hunter / round ended).
+    if (state.tauntLocked || _forcedTauntTimer) {
+      if (_forcedTauntTimer) { clearTimeout(_forcedTauntTimer); _forcedTauntTimer = null; }
+      setTauntLocked(false);
+    }
   }
 }
 
@@ -449,13 +529,27 @@ async function onTaunt(msg) {
   if (msg.by === state.selfId) {
     if (_selfTauntTimer) { clearTimeout(_selfTauntTimer); _selfTauntTimer = null; }
     if (msg.uncancellable) {
-      ui.setTauntStop(false); // finder-forced: our stop button can't kill it
+      // PROP FINDER forced this taunt: our stop button can't kill it AND we can't start our own
+      // taunt until it finishes — LOCK the taunt UI for the clip's duration, then auto-release.
+      ui.setTauntStop(false);
+      setTauntLocked(true);
+      if (_forcedTauntTimer) clearTimeout(_forcedTauntTimer);
+      const lockMs = (buf.duration || 1) * 1000 + 200;
+      _forcedTauntTimer = setTimeout(() => { setTauntLocked(false); _forcedTauntTimer = null; }, lockMs);
     } else {
       ui.setTauntStop(true);
       const ms = (buf.duration || 1) * 1000 + 250;
       _selfTauntTimer = setTimeout(() => { ui.setTauntStop(false); _selfTauntTimer = null; }, ms);
     }
   }
+}
+
+// PROP FINDER: lock/unlock the local prop's taunt UI while a forced (uncancellable) taunt plays.
+// While locked the prop can't open the menu or start a taunt; the button greys out (ui.setTauntLocked).
+function setTauntLocked(locked) {
+  state.tauntLocked = !!locked;
+  ui.setTauntLocked(!!locked);
+  if (locked && state.tauntMenuOpen) closeTauntMenu(false);
 }
 
 // A stop event arrived: kill that player's taunt everywhere. If it's ours, hide our stop button.
@@ -535,6 +629,7 @@ function handleGameMessage(msg) {
           ui.setSpectator(false);
           state.tool = 'rifle';
           state.alive = true;
+          resetFinderState(); // PROP FINDER: cooldown/zone/lock reset to ready between rounds
           resetDebugView(); // drop free cam / focus box between rounds
           resetReadyButton();
           destroyPredict();
@@ -572,6 +667,9 @@ function handleGameMessage(msg) {
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
       state.uiMode = false; // fresh match starts uncaptured, not in the free-mouse state
+      // PROP FINDER: a fresh match starts with the finder ready (no stuck grey cylinder / countdown)
+      // and no forced-taunt lock carried across rounds.
+      resetFinderState();
       // First time we need Three.js: build the renderer now (lazy CDN load). The
       // render catalog merges the disguise props with the static fixtures catalog
       // (kept in separate files so fixtures can't leak into the disguise pool) into
@@ -682,11 +780,23 @@ function backToMenu(msg) {
   ui.setSpectator(false);
   state.tool = 'rifle';
   state.alive = true;
+  resetFinderState(); // PROP FINDER: clear cooldown/zone/taunt-lock on the way out
   resetDebugView(); // drop free cam / focus box so they don't bleed into the next match
   ui.show('menu');
   if (msg) ui.menuError(msg);
   newSession();
   updateEditorButton(); // back on the landing screen (solo) → editor available again
+}
+
+// PROP FINDER: clear all finder + forced-taunt-lock client state so a new round/match starts clean
+// (ready cylinder, no countdown, no stuck taunt lock). Called on STARTED, on the lobby transition,
+// and on backToMenu — the cooldown must reset to ready across respawns/round transitions.
+function resetFinderState() {
+  state.finderCooldownUntil = 0;
+  ui.setToolCooldown('finder', 0);
+  if (_forcedTauntTimer) { clearTimeout(_forcedTauntTimer); _forcedTauntTimer = null; }
+  setTauntLocked(false);
+  if (scene && scene.updateFinderZone) scene.updateFinderZone({ visible: false });
 }
 
 // Turn off the debug free cam + focus box when leaving a match, so a persisted scene
@@ -828,6 +938,20 @@ function onEvent(msg) {
       break;
     case 'tauntStop':
       onTauntStop(msg);
+      break;
+    case 'find':
+      // PROP FINDER: the host's private reply to OUR activation. ok:true => it fired; sync the
+      // on-button countdown to the authoritative cooldown. ok:false => we were still cooling (a
+      // click during cooldown) → play the denied buzz + keep the countdown honest. The forced
+      // taunts themselves arrive as normal 'taunt' events (uncancellable) for everyone.
+      if (msg.ok) {
+        state.finderCooldownUntil = performance.now() + (msg.cooldownMs || finderCooldownMs());
+        if (msg.hits > 0) ui.feed(`Finder pinged ${msg.hits} prop${msg.hits === 1 ? '' : 's'}!`);
+        else ui.feed('Finder: no props in range.');
+      } else {
+        state.finderCooldownUntil = performance.now() + (msg.remainMs || 0);
+        playFinderDenied();
+      }
       break;
     case 'shot':
       // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
@@ -1082,6 +1206,10 @@ function frameBody(now) {
       z: state.self.z + state.corr.z,
     };
     scene.setCamera(disp, input.yaw, input.pitch, state.selfDispYaw);
+
+    // PROP FINDER: countdown on the tool button + the AOE cylinder follows the hunter (green ready /
+    // grey cooling). After setCamera so the zone sits on the freshest displayed position.
+    updateFinderHud(now, disp);
 
     // Crosshair-based disguise targeting + highlight. While alive as a PROP in an active
     // phase, raycast from the player along the look direction for the first disguisable

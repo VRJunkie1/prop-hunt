@@ -126,6 +126,9 @@ export class Referee {
     // (future) prop-finder tool (referee.forceTaunt) — their stop button is then ignored. A
     // normal self-chosen taunt clears it (see applyTaunt). Reset each match in startMatch.
     player.tauntUncancellable = false;
+    // PROP FINDER: timestamp of this player's last finder activation (PER-HUNTER cooldown, never
+    // shared). 0 = ready. Reset each match (startMatch) and on resetToLobby. See applyFind.
+    player._lastFindAt = 0;
 
     this.players.set(player.id, player);
     if (!this.hostId) this.hostId = player.id; // host adds itself first
@@ -290,6 +293,9 @@ export class Referee {
       // health (an instant kill). Dropped so even a hand-crafted TAG message is a no-op.
       case C2S.SHOOT:
         this.applyShot(player, msg);
+        break;
+      case C2S.FIND:
+        this.applyFind(player);
         break;
       case C2S.DEBUG:
         this.handleDebug(player, msg);
@@ -646,6 +652,56 @@ export class Referee {
     return true;
   }
 
+  // ---- PROP FINDER (hunter tool #2, host-authoritative) -------------------
+  // Per-hunter cooldown (ms) between finder activations. Derived from rules.finderCooldownSeconds
+  // (VRmike expects to tune it live). Enforced HOST-SIDE so a hacked client can't skip it.
+  _finderCooldownMs() {
+    const s = this.rules.finderCooldownSeconds;
+    return Number.isFinite(s) && s >= 0 ? Math.round(s * 1000) : 20000;
+  }
+
+  // AOE radius (metres). The zone cylinder the hunter sees is this radius and effectively
+  // infinite in height, so the target test is a FLAT 2D distance — height is ignored.
+  _finderRadius() {
+    const r = this.rules.finderRadius;
+    return Number.isFinite(r) && r > 0 ? r : 8;
+  }
+
+  // Activate the prop finder for `hunter`. Host is the authority for EVERYTHING: it checks the
+  // hunter's OWN per-hunter cooldown (`_lastFindAt`, never shared between hunters), then forces a
+  // random UNCANCELLABLE taunt out of every LIVING PROP whose position is within finderRadius of
+  // the hunter (2D — the cylinder is infinitely tall). Each forced taunt rides the normal
+  // forceTaunt broadcast (kind:'taunt', uncancellable:true) so all clients hear the victims taunt
+  // positionally through the existing 3D taunt path. Replies privately to the hunter with the
+  // cooldown state so its tool button can show the countdown / play the denied buzz.
+  applyFind(hunter) {
+    if (!hunter || hunter.role !== ROLE.HUNTER || !hunter.alive) return;
+    if (this.phase !== PHASE.HUNTING) return; // hunters act only during HUNTING (frozen in HIDING)
+    const now = Date.now();
+    const cd = this._finderCooldownMs();
+    const since = now - (hunter._lastFindAt || 0);
+    if (hunter._lastFindAt && since < cd) {
+      // Still cooling down — reject (host-enforced) and tell the hunter how long is left so its
+      // client plays the short denied buzz and keeps the on-button countdown honest.
+      send(hunter, { t: S2C.EVENT, kind: 'find', ok: false, remainMs: cd - since });
+      return;
+    }
+    hunter._lastFindAt = now;
+
+    const r = this._finderRadius();
+    const r2 = r * r;
+    const hx = hunter.pos.x, hz = hunter.pos.z;
+    let hits = 0;
+    for (const p of this.players.values()) {
+      if (p.role !== ROLE.PROP || !p.alive) continue;
+      const dx = p.pos.x - hx, dz = p.pos.z - hz; // 2D distance only (infinite-height cylinder)
+      if (dx * dx + dz * dz <= r2) {
+        if (this.forceTaunt(p.id)) hits++;
+      }
+    }
+    send(hunter, { t: S2C.EVENT, kind: 'find', ok: true, cooldownMs: cd, hits });
+  }
+
   // ---- lobby settings -----------------------------------------------------
   // The ONE gate for the lobby map choice. All guard rails live here so nothing
   // downstream re-checks: only the host may pick, only during LOBBY, and only a
@@ -811,6 +867,7 @@ export class Referee {
       player.input = { mx: 0, mz: 0, jump: false };
       player.dispYaw = player.yaw;
       player.tauntUncancellable = false; // fresh round: no forced taunt in flight
+      player._lastFindAt = 0; // PROP FINDER: fresh round → cooldown reset to ready (no stuck grey)
       if (i < hunterCount) {
         player.role = ROLE.HUNTER;
         player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
@@ -932,6 +989,8 @@ export class Referee {
       p.ready = false;
       p.input = { mx: 0, mz: 0, jump: false };
       p.rotUnlock = false;
+      p.tauntUncancellable = false; // no forced taunt survives a round teardown
+      p._lastFindAt = 0; // PROP FINDER: cooldown resets to ready across round/lobby transitions
     }
     this.broadcastLobby();
   }

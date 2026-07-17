@@ -47,6 +47,16 @@ export const C2S = {
   // (S2C.EVENT kind:'shot'). Trusting only the AIM direction (not any claimed hit) is not a
   // cheat vector — a player can always aim where they like; the host validates the WORLD.
   SHOOT: 'shoot', // { dx, dy, dz }
+  // PROP FINDER (hunter tool #2). Activate the finder: no payload — the host knows the
+  // hunter's authoritative position, radius, and PER-HUNTER cooldown, so it decides
+  // everything. The host validates (sender is a LIVING HUNTER in HUNTING, off cooldown),
+  // then forces a RANDOM UNCANCELLABLE taunt out of EVERY living prop within rules.finderRadius
+  // (2D distance — the AOE cylinder is effectively infinite in height, so height is ignored)
+  // via referee.forceTaunt, and replies S2C.EVENT kind:'find' to the acting hunter with the
+  // authoritative cooldown (ok:true) or the remaining cooldown (ok:false, so a click during
+  // cooldown is a host-confirmed denial → the client's short denied buzz). The cooldown is
+  // enforced host-side so a hacked client can't skip it. See shared/referee.js applyFind.
+  FIND: 'find', // {}
   // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
   // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
   // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
@@ -86,6 +96,13 @@ export const S2C = {
   //                     props overlap). `uncancellable`=true marks a prop-finder-forced taunt
   //                     the taunter's stop button can't kill.
   //   kind:'tauntStop'  { by } -> stop player `by`'s currently-playing taunt for everyone.
+  //   kind:'find'       { ok, cooldownMs?, remainMs?, hits? } -> PRIVATE reply to the hunter who
+  //                     activated the prop finder. ok:true  => activated; cooldownMs is the full
+  //                     per-hunter cooldown just started (client shows the countdown on the tool
+  //                     button) and hits = how many props were forced to taunt. ok:false => the
+  //                     hunter was still cooling down; remainMs is the time left (client plays the
+  //                     short denied buzz + keeps its countdown synced). The forced taunts themselves
+  //                     ride the normal kind:'taunt' broadcast (uncancellable:true) to EVERYONE.
   ERROR: 'error', // { msg }
 };
 

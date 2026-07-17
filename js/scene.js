@@ -163,6 +163,12 @@ export class Scene3D {
     this.scene.add(this.camera);
     this._viewModel = null; // local hunter's held-tool mesh (child of the camera), or null
     this._viewModelTool = null; // tool id the current viewmodel represents (rifle/finder/null)
+    // PROP FINDER: the translucent AOE cylinder shown while the finder tool is selected. Built
+    // lazily on first use, added straight to the scene (so buildWorld's scene.clear() drops it —
+    // we null the handle there). Follows the hunter + recolours ready(green)/cooling(grey) via
+    // updateFinderZone. See notes/prop-finder.md.
+    this._finderZone = null;
+    this._finderZoneRadius = 0;
     this._effects = []; // active shot effects: { tracer, flash, life, max }
 
     // ---- audio taunts (3D positional) ---------------------------------------
@@ -372,6 +378,9 @@ export class Scene3D {
     this.scene.add(this.camera);
     if (this._viewModel) { this.camera.remove(this._viewModel); this._viewModel = null; }
     this._viewModelTool = null;
+    // scene.clear() dropped the finder AOE cylinder (it was added straight to the scene); forget
+    // the stale handle so updateFinderZone rebuilds it against the fresh world next time.
+    this._finderZone = null;
     this._effects = [];
     // scene.clear() dropped every taunt emitter's Object3D, but a PositionalAudio's source is a
     // Web Audio node wired to the listener — removing it from the SCENE graph does NOT stop the
@@ -1394,8 +1403,8 @@ export class Scene3D {
         g.userData.rifleFallback = true; // upgrade to the real GLB once it finishes loading
       }
     } else if (toolId === 'finder') {
-      // PROP FINDER: a ~1 ft (0.3 m) box in the hand. Does NOTHING — exists only to prove
-      // tool/weapon switching works end to end (the rifle hides, the box appears).
+      // PROP FINDER: a ~1 ft (0.3 m) handheld device. Activating it (left-click / fire button)
+      // forces every prop inside the AOE cylinder to taunt — see main.js tryFinder / scene.updateFinderZone.
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshLambertMaterial({ color: 0x49b6ff }));
       g.add(box);
     } else {
@@ -1404,6 +1413,63 @@ export class Scene3D {
     g.position.set(0.32, -0.3, -0.7); // held down-and-right in front of the camera
     g.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
     return g;
+  }
+
+  // PROP FINDER: draw / update the translucent AOE cylinder centred on the local hunter while the
+  // finder tool is selected. `opts`:
+  //   visible : show it at all (a live hunter holding the finder)
+  //   ready   : true => GREEN @ 40% opacity (activatable); false => GREY @ 20% (cooling down)
+  //   radius  : AOE radius in metres (rules.finderRadius — hot-tunable)
+  //   pos     : {x,y,z} the hunter's displayed foot position; the cylinder follows it each frame
+  // The cylinder is EFFECTIVELY INFINITE in height — a very tall fixed height, clamped so it reads
+  // as floor-to-ceiling without z-fighting the ground/roof. Built once, cheaply toggled/recoloured.
+  updateFinderZone(opts = {}) {
+    if (!this.scene) return;
+    const visible = !!opts.visible;
+    if (!visible) {
+      if (this._finderZone) this._finderZone.visible = false;
+      return;
+    }
+    const radius = opts.radius > 0 ? opts.radius : 8;
+    // Rebuild if missing or the tunable radius changed (VRmike adjusts it in testing).
+    if (!this._finderZone || Math.abs(this._finderZoneRadius - radius) > 1e-3) {
+      if (this._finderZone && this._finderZone.parent) this._finderZone.parent.remove(this._finderZone);
+      const H = 200; // "infinite" height — tall enough to read as floor-to-ceiling on any map
+      const geo = new THREE.CylinderGeometry(radius, radius, H, 40, 1, true); // open-ended tube
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x39ff88, transparent: true, opacity: 0.4,
+        side: THREE.DoubleSide, depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.renderOrder = 3; // draw over the world so the translucency reads cleanly
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      this._finderZone = mesh;
+      this._finderZoneRadius = radius;
+    }
+    const z = this._finderZone;
+    z.visible = true;
+    const ready = opts.ready !== false;
+    z.material.color.setHex(ready ? 0x39ff88 : 0x9aa0aa); // green ready / grey cooling
+    z.material.opacity = ready ? 0.4 : 0.2;
+    const p = opts.pos || { x: 0, y: 0, z: 0 };
+    z.position.set(p.x, p.y || 0, p.z); // cylinder is centred on its own height, so it spans ±H/2
+  }
+
+  // Play a short NON-positional UI sound (the prop-finder denied buzz) through THREE's shared audio
+  // context/listener — a flat 2D blip for the local player, not a world-positioned taunt. No-op
+  // (silent, never throws) if audio is unavailable. See main.js playFinderDenied.
+  playUiSound(buffer, volume = 0.5) {
+    if (!buffer) return;
+    const listener = this._ensureAudioListener();
+    if (!listener || !THREE.Audio) return;
+    try {
+      const a = new THREE.Audio(listener);
+      a.setBuffer(buffer);
+      a.setLoop(false);
+      a.setVolume(volume);
+      a.play();
+    } catch { /* audio blocked/unavailable → silent */ }
   }
 
   // Spawn a muzzle flash at (a*) and a tracer round from (a*) to the impact point (b*),

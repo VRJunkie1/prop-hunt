@@ -311,7 +311,9 @@ export class UI {
       key.className = 'tool-key';
       key.textContent = t.key;
       const name = document.createElement('span');
+      name.className = 'tool-name';
       name.textContent = t.name;
+      btn.dataset.baseName = t.name; // PROP FINDER: base label so setToolCooldown can append "(14s)"
       btn.append(key, name);
       // pointerdown (not click) so a tap doesn't also punch through to the canvas / steal
       // pointer lock focus; preventDefault keeps the touch from scrolling.
@@ -331,6 +333,34 @@ export class UI {
     if (!bar) return;
     bar.classList.toggle('hidden', !show);
     for (const btn of bar.children) btn.classList.toggle('selected', btn.dataset.toolId === currentId);
+  }
+
+  // PROP FINDER: show the remaining cooldown right on a tool's button/name (VRmike's preferred
+  // "Finder (14s)"). secondsLeft <= 0 (or null) restores the base name and clears the cooling
+  // style; > 0 appends the countdown + greys the button so the tool always reads as "not ready".
+  setToolCooldown(toolId, secondsLeft) {
+    const bar = this.el.toolbar;
+    if (!bar) return;
+    for (const btn of bar.children) {
+      if (btn.dataset.toolId !== toolId) continue;
+      const nameEl = btn.querySelector('.tool-name');
+      const base = btn.dataset.baseName || (nameEl && nameEl.textContent) || '';
+      const s = Math.ceil(secondsLeft || 0);
+      const cooling = s > 0;
+      if (nameEl) nameEl.textContent = cooling ? `${base} (${s}s)` : base;
+      btn.classList.toggle('cooling', cooling);
+    }
+  }
+
+  // PROP FINDER: lock/unlock the PROP's own taunt UI while a finder-forced (uncancellable) taunt
+  // plays — the prop can't start their own taunt until it finishes. Disables + greys the floating
+  // taunt button and closes the menu (main.js gates opening on the same lock). Pure DOM.
+  setTauntLocked(locked) {
+    if (this.el.tauntBtn) {
+      this.el.tauntBtn.classList.toggle('locked', !!locked);
+      this.el.tauntBtn.disabled = !!locked;
+    }
+    if (locked) this.closeTauntMenu();
   }
 
   // Show/hide the dead-player spectator banner (hunters do not respawn).
