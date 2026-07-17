@@ -1,5 +1,18 @@
 # Restaurant map + the static/dynamic (fixtures vs props) split
 
+## 2026-07-16 EVERYTHING DYNAMIC + KITCHEN SEATED ON ITS TILE (VRmike attempt #3)
+The static/dynamic split flipped: the built-ins (counters, oven, stove(s), fridge, cabinet,
+cabinet_corner, prep_sink, table_sink, shelf) are NO LONGER `static` — they are shovable dynamic
+bodies. Only ARCHITECTURE (floor_kitchen, kitchen_wall, wall_post, wall_header), the structural
+PILLARS (pillar/pillar_b), the DOOR and the vent/extractor HOOD stay static. The kitchen is a
+6 cm-raised platform (`floor_kitchen` tiles, collider top y=0.06); EVERY non-arch item over a tile
+now carries `y = its base + 0.06` so its bottom face sits ON the tile (counters no longer clip the
+floor; a counter disguise matches the real counter height). Surface clutter (authored y>0.5) is
+`pinned` to a fixed collider for stability. Two authored spawn-overlaps fixed: divider
+`cabinet_corner` moved x=±16→±15.4 (cleared the end `wall_post`); back-corner floor condiments moved
+z=-5.0/-5.4 → -6.0/-6.5 (out of the cabinet footprint). Full detail: `notes/physics.md` +
+`notes/grounding.md` (2026-07-16). New gate: `tools/check-settle.mjs`.
+
 ## 2026-07-16 DENSITY + GROUPED-IDENTICAL PROPS (VRmike)
 Data-only additions to `maps.json` → restaurant (documented in the map's `_density` key):
 - **Dining density:** +4 `round_table` fixtures at (±6, 3) and (±6, 10), pairing with the

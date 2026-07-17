@@ -3,6 +3,46 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-16 EVERYTHING IS A PHYSICS OBJECT + counters seated (VRmike attempt #3, `build/114`)
+The restaurant's bolted-in built-ins are now SHOVABLE dynamic rigid bodies, and the sunken counters
+are fixed. Three coupled changes:
+- **Built-ins un-`static`.** Removed `"static": true` from `oven/stove/stove_plain/stove_single/
+  fridge/cabinet/cabinet_corner/counter/prep_sink/table_sink/shelf` in `fixtures.json`. Removing the
+  one flag flips a fixture cleanly: it gets a dynamic body in `_buildProps`, drops its immovable
+  collider from `_buildStatic` (which keys on `c.static`), still renders (scene's prop path) and is
+  still disguisable — NO double collider. STILL STATIC (immovable): arch (floor/walls), the structural
+  PILLARS (`pillar`/`pillar_b` — 3.08 m columns, wall-class, would topple + are structurally wedged),
+  the DOOR and the vent/`extractor` HOOD (both keep `noGround`). Mass = collider volume × `propDensity`
+  (uniform 1.0), so a fridge is heavy/reluctant and a pot is light/skittery for free — FEEL is the live
+  playtest dial (`propDensity`, damping) since headless can't judge it.
+- **PINNED surface clutter (the stability keystone).** A prop/fixture authored to rest ON a surface
+  (authored `y` > `rules.pinClutterAboveY` = 0.5 — plates/pots/condiments/food on a counter/table top)
+  is `pinned` by the referee → `_buildProps` keeps it a FIXED collider even under the cap
+  (`if (this.dynamicProps && !p.pinned && dynCount < cap)`). Reason (found by the settle test + a
+  velocity probe): those clutter heights were tuned against each GLB's VISUAL surface, but several
+  combined models carry a hull much TALLER than that surface (`table_food` hull = 1.39 m), so waking
+  the clutter dynamic LAUNCHED it out of the furniture (hams/plates flying at match start). Floor-
+  STANDING objects (y at/near the floor) are the shovable ones. Tradeoff (documented, minor): surface
+  clutter stays put if you shove the furniture under it — far better than plates flying every match.
+- **Budget order.** The referee now orders the dynamic-body candidates (disguise-pool props +
+  now-dynamic fixtures) GLOBALLY biggest-first, so the phone-safe cap spends on the largest objects
+  (fridge, tables, counters, chairs, stools, crates); the smallest scraps overflow to fixed colliders.
+  `rules.maxDynamicProps` 130 → 150 (headroom so post-removal everything meaningful is shovable). PHONE
+  HOSTS are the watch item — HOT-TUNABLE.
+- **Seating.** Every kitchen fixture is seated on the raised `floor_kitchen` tile (bottom face at the
+  tile top, y=0.06) so it no longer clips the floor and the counter disguise matches the real counter
+  height. See `notes/grounding.md` (2026-07-16) + `notes/restaurant-map.md`.
+- **Guard: `tools/check-settle.mjs` (NEW build gate).** Builds the REAL `PhysicsWorld` with the full
+  restaurant map (promoted exactly like `referee.startMatch`), steps 6 s with NO players, asserts
+  nothing LAUNCHES / SINKS / DRIFTS / TIPS and ≥90 % of bodies are asleep. This is the offline gate
+  that would have caught the "fridge launches out of the floor" failure mode attempts #1/#2 risked.
+  GREEN: 132 dynamic bodies, 98 % asleep, zero anomalies. (Needs a dev Rapier; SKIP+exit 3 if absent.)
+- Divider `cabinet_corner`s were nudged x=±16 → ±15.4 to clear the static end `wall_post` (a dynamic
+  body wedged in a static post ejects), and the back-corner floor condiment clusters moved out of the
+  cabinet footprint — both were spawn-overlaps the settle test caught.
+- OWED (live, can't be headless): FEEL of the shoves (fridge reluctant, pot skittery — tune
+  `propDensity`); phone-host FPS at match-start settle with ~132 dynamic bodies.
+
 ## 2026-07-13 CONVEX HULLS FOR EVERYTHING — round 3 (VRmike, `build/94-convex-hulls-for-everything`)
 Round 2 skipped `arch` + code-built geometry; VRmike's debug screenshots showed oversized boxes
 floating outside the white walls / columns / archway. Round 3 hulls the code-built architecture

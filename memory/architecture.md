@@ -296,7 +296,20 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   vent, doors, **pillars**) into the disguise pool; only architecture stays out. props.json
   vs fixtures.json is still a useful split (movable vs built-in, and character models stay
   fully separate — see below), but a fixture is no longer barred from the pool. Detail:
-  `notes/disguise-anything.md`. Adding maps/props needs no engine change; the lobby map picker renders
+  `notes/disguise-anything.md`.
+  **EVERYTHING-IS-PHYSICS (2026-07-16, VRmike attempt #3):** the built-ins are no longer `static` —
+  `oven/stove(s)/fridge/cabinet/cabinet_corner/counter/prep_sink/table_sink/shelf` are now shovable
+  DYNAMIC bodies. ONLY architecture (floor/walls), the structural PILLARS, the DOOR and the
+  vent/`extractor` stay `static`. Removing `static:true` flips a fixture cleanly (dynamic body in
+  `_buildProps`, no `_buildStatic` collider, still rendered + disguisable — one flag, no double
+  collider). Surface clutter (authored y>`rules.pinClutterAboveY`=0.5) is `pinned` → a FIXED collider
+  even under the cap (else it launches out of a taller-than-visual hull like `table_food`). The
+  referee orders dynamic candidates GLOBALLY biggest-first so `maxDynamicProps` (now 150) spends on
+  the largest objects; the smallest scraps degrade to fixed colliders. Kitchen fixtures are seated on
+  the 0.06 m `floor_kitchen` tile (bottom face on the tile). Guard: `tools/check-settle.mjs` (spawn
+  the full map, step, assert nothing launches/sinks/drifts/tips). Detail: `notes/physics.md` +
+  `notes/grounding.md` (2026-07-16).
+  Adding maps/props needs no engine change; the lobby map picker renders
   any new map automatically. **`physics-feel.json`** (2026-07-11) holds the physics
   FEEL tunables (restitution / solver iterations / prop damping / anti-bob) — a
   physics-owned file, NOT `rules.json` (which is the referee's game rules);
@@ -368,10 +381,12 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   can never be knocked over). A disguised player's capsule GIRTH is grown to the
   disguise footprint (solidity pass #3, `PhysicsWorld.setPlayerCollider`, capped at
   `rules.disguiseColliderMaxRadius` for doorway fit; total height kept constant) so a
-  big disguise is solid instead of clipping into world props. **Map fixtures/walls/ground** are static colliders.
-  **Dynamic props** are rigid bodies that get shoved (the TELL: real props tumble,
-  a kinematic disguised player doesn't). A phone-safety cap
-  (`rules.maxDynamicProps`, default 60) keeps extra props as static colliders.
+  big disguise is solid instead of clipping into world props. **Architecture / pillars / door / vent
+  and pinned surface clutter** are static colliders; **everything else** (all props AND the un-`static`
+  built-ins: counters/appliances/tables/chairs/crates) are **dynamic** rigid bodies that get shoved
+  (the TELL: real props tumble, a kinematic disguised player doesn't). A phone-safety cap
+  (`rules.maxDynamicProps`, now 150; ordered biggest-first) keeps the smallest overflow props as
+  static colliders. See the EVERYTHING-IS-PHYSICS note above + `notes/physics.md` (2026-07-16).
 - **Collider shapes** are chosen by the ONE selector `physics.shapeFor()` in this order:
   **convex hull → measured cuboid → primitive**. (1) HULL: model-bearing, non-`arch`,
   box-shaped props/fixtures use a `ColliderDesc.convexHull` baked from the model's real mesh

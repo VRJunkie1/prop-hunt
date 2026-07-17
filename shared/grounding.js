@@ -36,9 +36,23 @@ import { halfExtentsFor, isArchEntry } from './physics.js';
 // and starts at least this far below its base — enough to be a genuine surface underneath, not
 // a side-by-side neighbour at the same height.
 const SUPPORT_MIN_DROP = 0.05;
-// Only act when a piece is off its floor by more than this (metres). Generous, so authored
-// clutter that rests a hair proud of a surface is never disturbed — we only catch real gaps.
+// FLOAT tolerance. Only treat a piece as an orphan FLOATER when it hangs more than this above
+// its floor (metres). Generous, so authored clutter resting a hair proud of a surface is never
+// disturbed — we only catch real gaps ABOVE a surface.
 export const GROUND_TOL = 0.12;
+// SINK tolerance — deliberately TIGHT (2026-07-16, VRmike attempt #3). A piece whose base is
+// BELOW the floor surface it stands on is CLIPPING INTO the floor — there is never a legitimate
+// reason for that, so it must be caught at a much finer grain than the float side. The old code
+// reused the lenient 0.12 m float tolerance for BOTH directions, which silently accepted the
+// restaurant's whole kitchen stack: every counter/fridge/oven/stove sits over the raised
+// `floor_kitchen` tile (top at y=0.06) but was authored at y=0, so each was buried 6 cm — inside
+// the 0.12 m window, so the guard passed while the screenshot showed sunken counters. A player
+// disguised as a counter stands ON the tile (feet at 0.06), so their disguise sat 6 cm ABOVE the
+// real counters — VRmike's exact complaint. 2 cm tolerates sub-centimetre authoring noise while
+// flagging the tile-step burial. NOTE: sinkers also spawn a DYNAMIC body buried in the floor
+// collider (once everything is shovable), which jitters/launches — so a tight sink gate also
+// guards the physics conversion, not just the visual.
+export const SINK_TOL = 0.02;
 
 // EXEMPT from ground-snapping. Architecture stays put by definition; `noGround` marks the few
 // mounted pieces (vents, doors) that must not be re-grounded.
@@ -110,7 +124,9 @@ function hasSupportBeneath(item, items) {
 export function classify(item, items) {
   const floor = floorUnder(item, items);
   if (item.exempt) return { kind: 'ok', floor };
-  if (item.base < floor - GROUND_TOL) return { kind: 'sink', floor };
+  // SINK uses the TIGHT tolerance (clipping into the floor is never acceptable — VRmike's
+  // sunken counters); FLOAT keeps the lenient one (clutter resting a hair proud is fine).
+  if (item.base < floor - SINK_TOL) return { kind: 'sink', floor };
   if (item.base > floor + GROUND_TOL && !hasSupportBeneath(item, items)) return { kind: 'float', floor };
   return { kind: 'ok', floor };
 }

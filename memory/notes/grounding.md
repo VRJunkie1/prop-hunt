@@ -1,5 +1,27 @@
 # Object grounding (floating props / sunken objects)
 
+## 2026-07-16 — TIGHT SINK TOLERANCE + kitchen seated on its floor (VRmike attempt #3)
+VRmike's sunken counters were REAL and the guard was WRONG. Mechanism (root-caused via git —
+original to commit `9ee0f7d` "fix #5 THICK FLOORS", 2026-07-10, NOT a regression from the collider
+overhauls): the restaurant kitchen sits on a raised `floor_kitchen` tile whose collider TOP is at
+y=0.06, but every kitchen fixture (counter/fridge/oven/stove/cabinet/sink…) was authored at y=0, so
+each was buried 6 cm. A player disguised as a counter stands ON the tile (feet at 0.06), so their
+disguise floated 6 cm ABOVE the real counters — his exact complaint. The old guard passed because
+`classify()` reused the lenient `GROUND_TOL = 0.12` for BOTH float AND sink, swallowing the 6 cm.
+- **FIX 1 — the check now proves itself.** `SINK_TOL = 0.02` (tight; clipping into a floor is never
+  OK) is now used for the SINK branch of `classify()`; `GROUND_TOL = 0.12` still governs FLOAT
+  (clutter a hair proud is fine). Verified fail→pass: the guard FAILED on 44 sunk kitchen items,
+  then passed after seating.
+- **FIX 2 — the whole kitchen stack seated on the tile.** `tools/_seat_kitchen.mjs` (one-time
+  migration) added `floorUnder` (=0.06) to the `y` of EVERY non-arch item over a tile — fixtures AND
+  the clutter resting on them — so a counter's bottom face sits ON the tile AND its canisters/pots
+  stay resting on the counter (coherent +0.06 platform shift, no cascade embedding). maps.json is now
+  clean authored data (not relying on the load-time pass). The disguise costume now matches the real
+  counter height exactly.
+- Also seated a pre-existing floater the tight tol exposed (a stacked `planks` was 0.09 m proud).
+- NOTE for future edits: the load-time `groundMapData` still does NOT cascade (it only seats a single
+  floater/sinker to its floor). Author kitchen items measured from the tile top (y≥0.06), not 0.
+
 ## What it is
 `shared/grounding.js` `groundMapData(map, catalog)` — ONE pure, physics-free, deterministic pass
 that keeps every map object resting on a real support. Wired into `js/config.js` `loadConfig`, the

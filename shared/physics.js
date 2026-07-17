@@ -485,7 +485,14 @@ export class PhysicsWorld {
       // actually is (a chair kicked across the room stays kicked).
       const moved = Number.isFinite(p.qx);
       const cy = moved ? p.y : halfH + (p.y || 0);
-      if (this.dynamicProps && dynCount < cap) {
+      // PINNED clutter (2026-07-16): items the referee marks `pinned` — the small decor RESTING ON
+      // a surface (food, dishes, cookware, condiments perched on a counter/table top) — stay a FIXED
+      // collider even under the cap. They were effectively fixed already (overflow-static), and
+      // waking them as dynamic bodies made them eject from the imperfect combined-table surfaces
+      // (a table_food GLB's hull is 1.39m tall, so a plate authored at 0.8 sits INSIDE it and
+      // launches). The FLOOR-STANDING objects — counters, appliances, tables, chairs, crates — are
+      // the ones that become shovable. See referee.startMatch (pin decision) + notes/physics.md.
+      if (this.dynamicProps && !p.pinned && dynCount < cap) {
         // Host: a real rigid body that can be knocked around and settles to sleep.
         // Spawn a hair above rest (SPAWN_EPS) so nothing starts interpenetrating.
         const spawnY = moved ? cy : cy + SPAWN_EPS;

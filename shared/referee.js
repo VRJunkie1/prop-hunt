@@ -707,6 +707,13 @@ export class Referee {
     this.matchSeed = (Math.random() * 0x100000000) >>> 0;
     const skipRatio = this.rules.mapRandomizeSkip != null ? this.rules.mapRandomizeSkip : 0.25;
     const minKept = this.rules.minPropsKept != null ? this.rules.minPropsKept : 6;
+    // PIN THRESHOLD (everything-is-physics, 2026-07-16). A prop/fixture authored to rest ON a
+    // surface (a plate/pot/condiment/food with a y offset above the floor) is PINNED: it keeps a
+    // fixed collider instead of a dynamic body, because its authored height was tuned against a
+    // model's VISUAL surface, not its (often taller) collider hull — waking it dynamic makes it
+    // launch out of the furniture it sits on. Floor-standing objects (y at/near the floor: counters,
+    // appliances, tables, chairs, crates) are BELOW this and become the shovable dynamic bodies.
+    const pinY = this.rules.pinClutterAboveY != null ? this.rules.pinClutterAboveY : 0.5;
 
     // (1) Disguise-pool props (map.props) — all disguisable; existing behaviour, ratio bumped.
     // `mi` = the source index in map.props, carried so the client can still zip authored
@@ -719,7 +726,7 @@ export class Referee {
       .filter(({ i }) => !propSkip.has(i))
       .map(({ p, i }) => ({
         id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0,
-        disguisable: isDisguisableEntry(catalog[p.type]),
+        disguisable: isDisguisableEntry(catalog[p.type]), pinned: (p.y || 0) > pinY,
       }));
 
     // (2) Fixtures — remove the SAME ratio of the DISGUISABLE (non-architecture) ones. Eligible =
@@ -739,17 +746,17 @@ export class Referee {
     const removedFixtures = new Set([...fxSkipLocal].map((k) => eligibleFixtureIdx[k]));
     this.removedFixtures = [...removedFixtures];
 
-    // DISGUISE-ANYTHING (Part B). Every NON-ARCHITECTURE fixture that SURVIVED removal is promoted
-    // into the prop stream and flagged disguisable, so a player can aim at + become it. Two kinds:
-    //   - dynFixtures: knockable fixtures (tables, cookware, dishes, food) — real dynamic
-    //     bodies AND disguise targets now. Bigger pieces first so the dynamic-body cap
-    //     (rules.maxDynamicProps) spends its budget on furniture/large cookware; overflow
-    //     degrades to a solid STATIC collider (unchanged — only `disguisable` flips true).
-    //   - staticFixtures: bolted-in built-ins (counters, oven, fridge, cabinets, sinks,
-    //     shelves, the vent/extractor hood, doors, PILLARS). These stay IMMOVABLE — physics
-    //     builds their collider in _buildStatic and _buildProps skips them — but they ride
-    //     the prop stream so scene.js can raycast + highlight them and applyDisguise accepts
-    //     them (as an invisible aim proxy; the visible mesh is the local scenery).
+    // DISGUISE-ANYTHING (Part B) + EVERYTHING-IS-A-PHYSICS-OBJECT (2026-07-16, VRmike attempt #3).
+    // Every NON-ARCHITECTURE fixture that SURVIVED removal is promoted into the prop stream and
+    // flagged disguisable, so a player can aim at + become it. Two kinds:
+    //   - dynFixtures: knockable fixtures (tables, cookware, dishes, food) AND — now that the
+    //     built-ins are un-`static` — the counters, cabinets, oven, stove(s), fridge, sinks and
+    //     shelf. All get a REAL dynamic body (shovable) and are disguise targets.
+    //   - staticFixtures: the only pieces still bolted in — PILLARS (structural columns), the
+    //     DOOR, and the vent/extractor HOOD. These stay IMMOVABLE — physics builds their collider
+    //     in _buildStatic and _buildProps skips them — but they ride the prop stream so scene.js
+    //     can raycast + highlight them and applyDisguise accepts them (invisible aim proxy; the
+    //     visible mesh is the local scenery).
     // The removed fixtures are excluded HERE exactly as the client scenery loop + _buildStatic
     // exclude them, carrying each survivor's original index through the dyn/static split.
     const nonArchFixtures = mapFixtures
@@ -760,16 +767,27 @@ export class Referee {
       });
     const dynFixtures = nonArchFixtures
       .filter(({ f }) => !isStaticEntry(catalog[f.type]))
-      .map(({ f }) => ({ type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0 }))
-      .sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]))
-      .map((f) => ({ id: nextPropId++, ...f, disguisable: isDisguisableEntry(catalog[f.type]) }));
+      .map(({ f }) => ({
+        id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
+        disguisable: isDisguisableEntry(catalog[f.type]), pinned: (f.y || 0) > pinY,
+      }));
     const staticFixtures = nonArchFixtures
       .filter(({ f }) => isStaticEntry(catalog[f.type]))
       .map(({ f }) => ({
         id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
         disguisable: isDisguisableEntry(catalog[f.type]),
       }));
-    this.props = [...disguiseProps, ...dynFixtures, ...staticFixtures];
+    // ONE pool of dynamic-body candidates: the disguise-pool props AND the now-dynamic fixtures.
+    // Order them GLOBALLY BIGGEST-FIRST so the phone-safe dynamic-body cap (rules.maxDynamicProps,
+    // enforced in physics._buildProps) spends its budget on the largest, most-worth-shoving objects
+    // (fridge, tables, counters, chairs, stools, crates) instead of letting 100 tiny disguise props
+    // jump the queue and silently demote a counter to a fixed collider. Whatever falls past the cap
+    // (the smallest scraps — condiments, cut veg) stays a solid STATIC collider: still collidable,
+    // just not shovable. staticFixtures (pillars/door/vent) never get a body and go last.
+    // The sort is deterministic (stable, footprint-keyed) so host + late joiners agree.
+    const dynamicCandidates = [...disguiseProps, ...dynFixtures]
+      .sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]));
+    this.props = [...dynamicCandidates, ...staticFixtures];
     // Live x/z per prop id, seeded at spawn and updated from awake transforms each
     // tick (see integrate). Read by applyDisguise for range against the real position.
     this.propLive = new Map(this.props.map((p) => [p.id, { x: p.x, z: p.z }]));

@@ -30,7 +30,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { findUngrounded, groundMapData, GROUND_TOL } from '../shared/grounding.js';
+import { findUngrounded, groundMapData, GROUND_TOL, SINK_TOL } from '../shared/grounding.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const cfg = (name) => JSON.parse(readFileSync(join(here, '..', 'shared', 'config', name), 'utf8'));
@@ -72,7 +72,8 @@ for (const [mapId, map] of Object.entries(maps)) {
   } else {
     for (const b of bad) {
       const gap = (b.base - b.floor).toFixed(2);
-      ok(false, `${b.kind === 'float' ? 'FLOATING' : 'SUNK'} "${b.type}" @ (${b.x},${b.z}) base=${b.base.toFixed(2)} floor=${b.floor.toFixed(2)} (Δ${gap}m > ${GROUND_TOL}m) — place it on a support or below-tol`);
+      const tol = b.kind === 'float' ? GROUND_TOL : SINK_TOL;
+      ok(false, `${b.kind === 'float' ? 'FLOATING' : 'SUNK'} "${b.type}" @ (${b.x},${b.z}) base=${b.base.toFixed(2)} floor=${b.floor.toFixed(2)} (Δ${gap}m, tol ${tol}m) — seat it ON its floor (bottom face = floor surface)`);
     }
   }
 }
