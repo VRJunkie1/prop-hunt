@@ -19,6 +19,306 @@
       "sha256": "a6b90047927c65d0026bb19b5d4625b5ed3270e4ea5e39619cc50f0770aa6259",
       "added": "2026-07-11",
       "by": "VRmike"
+    },
+    {
+      "name": "Never_Gonna_Give_You_Up",
+      "file": "assets/Never_Gonna_Give_You_Up.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "f4c0c37ba91c47e010e87d7f15fce00944be376de3546c3707f37787345e8950",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "John_Cena",
+      "file": "assets/John_Cena.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "08f5596d6f892eec69bddfdf203e644009b7b494f0fcb008559c0df746cc19c7",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Hey_Kappa_Kappa",
+      "file": "assets/Hey_Kappa_Kappa.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "1646c0c80e7b2adff2ef76f8bbaf2d51ab2143aebbb3c4a37db452b384109091",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Bad_Boys",
+      "file": "assets/Bad_Boys.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "ce9753c5f5b6119f392187617a9ef3552ea2a64204e27ae558ccafda39bfd125",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Alert_Sound",
+      "file": "assets/Alert_Sound.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "b082570c3746fe2b275fc9933ca8d08e7c8bdd2ee617bc247cea328166ec2906",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Santa_Claus",
+      "file": "assets/Santa_Claus.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "57def7f650a5731a45892771297fe4becd06374f4b117f8c2f848a45788ed738",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Scary_music_mixdown",
+      "file": "assets/Scary_music_mixdown.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "6400fc850c07bca1c4c5722a196171d8e2e84f54e8750e8005ea267ff1e3bbe0",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "scaryMusic",
+      "file": "assets/scaryMusic.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "c9796c498485277d06ceb153c3387e87ef6e530465db1861b8ea5bf73aa72006",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "myaah",
+      "file": "assets/myaah.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "641827cac3f2cbc5dc6cb1d6da7273c1f253c9c6375d024f9515e76742404907",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "NOPE",
+      "file": "assets/NOPE.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "cb12b8d28dc642a1497169dbdb4b6fb76a443b6fa7dfceb77fa5a09ba2e0ab76",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "ILLUMINATI",
+      "file": "assets/ILLUMINATI.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "030db0f903ec8760e597a3500611d874aceb1751891b43ec7b1bc9dc173330bb",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "I_GOTTA_BAD_FEELING_ABOUT_THIS_HAN_SOLO",
+      "file": "assets/I_GOTTA_BAD_FEELING_ABOUT_THIS_HAN_SOLO.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "1af1c78824eff4112fe26d87adb89d543183a6c21d66f06ad9f97901103d31e1",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "HA_HA_NELSON",
+      "file": "assets/HA_HA_NELSON.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "20d9fe039e56ce8e1781aadd50a26b802f2847cc28c30786afc6abb452ec414e",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "GET_OVER_HERE",
+      "file": "assets/GET_OVER_HERE.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "22a536c1f6bb568d327856421e683ea8250bd4743cd94d5a78a4c0843be46f8b",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "SAD_MUSIC_2",
+      "file": "assets/SAD_MUSIC_2.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "b61d9628357421a4c0db0d10f3f338c3684fc187c4e947d70ce62cab86dee10e",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "SAD_MUSIC",
+      "file": "assets/SAD_MUSIC.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "aebfc2a720324b20c60973dec77b9994ea8146444f088a30de0d004ac669c1bd",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "You_get_nothing",
+      "file": "assets/You_get_nothing.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "2b1d4be416d14efc8767ef889a454bb1065da2217cfbe3e069e083304d9214b2",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Look_At_This_Dube_Sound_Effect",
+      "file": "assets/Look_At_This_Dube_Sound_Effect.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "4fae64519d3b1626727072a3085145dd0539ee69c2d70642d9fcaf9021114948",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "ManDownGrenade",
+      "file": "assets/ManDownGrenade.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "781e82b422567edcf4af160a0abfe9a0e033a4ec696e6ac75f2c890f2a7866a1",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Why_are_we_still_here",
+      "file": "assets/Why_are_we_still_here.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "079cad57d950778efa631711b6ef48a3f6dda6c84219fa92338c0659c4f7e829",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Stahp",
+      "file": "assets/Stahp.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "5363ee9c242461d9e59761084d3de0f2fd51dbaace4b1eaffb6dcc1715983adb",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Minecraft_Alpha_Damage",
+      "file": "assets/Minecraft_Alpha_Damage.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "0a6e5700a67aa4d9849046adaac36fc1390196c06fe049a1881e69d66d80ddc0",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Jesus_Christ_its_Jason_Bourne",
+      "file": "assets/Jesus_Christ_its_Jason_Bourne.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "2702386de4f3bcc23623d6f757ebb783ee0258589a7c06c2ac2e3573163a1211",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "End_credits",
+      "file": "assets/End_credits.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "c64ce5be4c1f0bfde3b3a381b5bb414404e7f196e2d9075732720613566b46d9",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "Coffin_Dance",
+      "file": "assets/Coffin_Dance.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "da837bc8d713e14a371a7e15a3f1756930b8f6313d95f2b85a566790c6e7be32",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "SUSPENSE_2",
+      "file": "assets/SUSPENSE_2.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "5e0a5e5f48aa84a12b13d8710a2e1bd2445058ba522e2b9a6ca3c49c2e7ee9b1",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "SUSPENSE_1",
+      "file": "assets/SUSPENSE_1.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "f8bf2333a67d4acfe462204618d966e7e6f13e8e5dec266b747395ca1b1f483f",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "SAY_WHAT",
+      "file": "assets/SAY_WHAT.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "bb8921b472c433f288e7c6b988e678d998cf920780e32f5b8fe00914b2e55b55",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "RUBBER_DUCK",
+      "file": "assets/RUBBER_DUCK.mp3",
+      "kind": "audio",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from Teravortryx (2026-07-17)",
+      "sha256": "85e0ce1ee4b0e8f0028fcad9d3bce968395b1b93bdeecef2250659db1b4c4b20",
+      "added": "2026-07-17",
+      "by": "Teravortryx"
+    },
+    {
+      "name": "image",
+      "file": "assets/image.png",
+      "kind": "image",
+      "license": "UNVERIFIED",
+      "source": "Discord attachment from VRmike (2026-07-17)",
+      "sha256": "b0a2797e4d33b4450319632731f4afa32513ac4aa37ab6a7b5a09726bf0d2228",
+      "added": "2026-07-17",
+      "by": "VRmike"
     }
   ]
 }

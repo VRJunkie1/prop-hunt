@@ -27,3 +27,93 @@ mapping and `memory/notes/restaurant-map.md` for the loader wiring.
 - **9a0e478c-de82-4773-9b70-a0219bb0057c.glb** — https://static.poly.pizza/9a0e478c-de82-4773-9b70-a0219bb0057c.glb
   - license: CC0
   - added: 2026-07-11 (requested by VRmike)
+- **Never_Gonna_Give_You_Up.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **John_Cena.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Hey_Kappa_Kappa.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Bad_Boys.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Alert_Sound.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Santa_Claus.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Scary_music_mixdown.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **scaryMusic.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **myaah.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **NOPE.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **ILLUMINATI.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **I_GOTTA_BAD_FEELING_ABOUT_THIS_HAN_SOLO.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **HA_HA_NELSON.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **GET_OVER_HERE.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **SAD_MUSIC_2.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **SAD_MUSIC.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **You_get_nothing.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Look_At_This_Dube_Sound_Effect.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **ManDownGrenade.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Why_are_we_still_here.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Stahp.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Minecraft_Alpha_Damage.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Jesus_Christ_its_Jason_Bourne.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **End_credits.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **Coffin_Dance.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **SUSPENSE_2.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **SUSPENSE_1.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **SAY_WHAT.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **RUBBER_DUCK.mp3** — Discord attachment from Teravortryx (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by Teravortryx)
+- **image.png** — Discord attachment from VRmike (2026-07-17)
+  - license: UNVERIFIED
+  - added: 2026-07-17 (requested by VRmike)
