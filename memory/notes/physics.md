@@ -36,7 +36,10 @@ Round 4 removes the pin and instead makes it SAFE for everything to be dynamic.
 - **`noHull` flag** (fixtures.json, honoured in `shapeFor`+`halfExtentsFor`): opt a catalog entry out
   of a DEGENERATE baked hull and use its symmetric measured/primitive box. `shelf` (hull off-COM →
   tipped itself over as a dynamic body) and `stove_plain` (hull baked to 0.20 m for a ~0.9 m stove → a
-  pot floated) both use it. Fixes both stability + the floating pot.
+  pot floated) both use it. Fixes both stability + the floating pot. NOTE `tools/check-true-colliders.mjs`
+  now treats a `noHull` entry as a DOCUMENTED primitive exception (alongside floor/round) in its live
+  restaurant coverage walk — it predated round 4 and had flagged shelf/stove_plain as oversized-box
+  regressions; the coverage check reads the same `noHull` flag physics.js does so they can't drift.
 - **Guards:** NEW `tools/check-floating-props.mjs` (fixed-classification + seating + self-test; fails
   under `--assume-pin=0.5`, passes shipped). `check-settle.mjs` rewritten for round 4: seats like the
   game, spawns asleep, **Phase A** asserts the fresh map is QUIET (nothing spawns embedded → nothing

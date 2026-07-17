@@ -284,6 +284,15 @@ for (const type of collidableTypes) {
   } else if (c && c.floor) {
     primitiveExceptions++;
     console.log(`  · ${type} — PRIMITIVE by design: floor piece uses a thick-DOWNWARD anti-tunnel slab (visible top flush); the extension is below the floor, not an over-coverage.`);
+  } else if (c && c.noHull) {
+    // noHull opt-out (floating-fixed-props round 4, 2026-07-17, VRmike): a few baked hulls are
+    // DEGENERATE for a now-dynamic body — shelf's has an off-centre mass (tips itself over on
+    // spawn) and stove_plain's baked to just ~0.20 m for a ~0.9 m stove (a pot floats inside).
+    // These entries are flagged `noHull` in fixtures.json so shapeFor()/halfExtentsFor() skip the
+    // bad hull and use the symmetric measured/primitive box instead — a DELIBERATE, documented
+    // primitive, not an oversized-box regression. Mirrors the physics.js branch order.
+    primitiveExceptions++;
+    console.log(`  · ${type} — PRIMITIVE by design: noHull opt-out — ${c._noHull || 'degenerate baked hull'}`);
   } else if (rec.kind === 'cylinder' || rec.kind === 'cone' || rec.kind === 'ball') {
     primitiveExceptions++;
     console.log(`  · ${type} — PRIMITIVE by design: round ${rec.kind} — a true ${rec.kind} collider hugs the drawn mesh tighter than a faceted hull (round rule).`);
