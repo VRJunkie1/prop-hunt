@@ -30,7 +30,7 @@
 // entry flagged `noGround` — vents (the extractor hood) and doors, which are mounted in place
 // and must never be dropped to the floor if their neighbour is ever removed.
 
-import { halfExtentsFor, isArchEntry } from './physics.js';
+import { halfExtentsFor, isArchEntry, isFixedBodyEntry } from './physics.js';
 
 // A piece counts as "supported" (not an orphan) if some other object's footprint overlaps it
 // and starts at least this far below its base — enough to be a genuine surface underneath, not
@@ -53,6 +53,12 @@ export const GROUND_TOL = 0.12;
 // collider (once everything is shovable), which jitters/launches — so a tight sink gate also
 // guards the physics conversion, not just the visual.
 export const SINK_TOL = 0.02;
+// SEAT tolerance (floating-fixed-props round 4, 2026-07-17). seatMapData raises a dynamic item
+// onto the collider top beneath it whenever its base sits more than this far BELOW that top — i.e.
+// it is embedded INSIDE a taller hull. Kept tight so an item that already rests cleanly (base at/
+// near its support top) is left byte-identical; only genuine embeds move. After the pass no dynamic
+// item is embedded more than this, which is exactly what tools/check-floating-props.mjs verifies.
+export const SEAT_TOL = 0.02;
 
 // EXEMPT from ground-snapping. Architecture stays put by definition; `noGround` marks the few
 // mounted pieces (vents, doors) that must not be re-grounded.
@@ -86,7 +92,7 @@ function buildItems(map, catalog) {
       const fp = footprint(o, c);
       items.push({
         o, kind, type: o.type, x: o.x, z: o.z, hx: fp.hx, hz: fp.hz, height: fp.height,
-        base: o.y || 0, isFloor: !!c.floor, exempt: isGroundExempt(c),
+        base: o.y || 0, isFloor: !!c.floor, exempt: isGroundExempt(c), fixed: isFixedBodyEntry(c),
       });
     }
   };
@@ -142,6 +148,121 @@ export function findUngrounded(map, catalog) {
   for (const it of items) {
     const { kind, floor } = classify(it, items);
     if (kind !== 'ok') out.push({ kind, type: it.type, x: it.x, z: it.z, base: it.base, floor });
+  }
+  return out;
+}
+
+// The TOP of the collider `item` actually rests ON: the tallest DYNAMIC piece whose footprint
+// overlaps it and starts meaningfully below it, else its floor surface. TWO guards learned the hard
+// way (round 4):
+//   - SKIP FIXED pieces (walls, wall-posts, headers, pillars): a counter authored 9 cm from a wall
+//     post is NEXT TO it, not resting ON it — treating a 2.8 m wall top as a "support" launched the
+//     counter to 2.8 m. Clutter only ever rests on DYNAMIC furniture (counters/tables/appliances);
+//     the floor tile is handled separately by floorUnder. So fixed pieces are obstacles, not shelves.
+//   - REQUIRE a real drop (SUPPORT_MIN_DROP): two items at nearly the same height (burger layers)
+//     must not seat onto each other, or they leapfrog upward every iteration and climb into the air.
+function supportTopUnder(item, items) {
+  let top = floorUnder(item, items);
+  for (const s of items) {
+    if (s === item || s.fixed || s.isFloor) continue;   // fixed pieces + floor tiles aren't shelves
+    if (s.base >= item.base - SUPPORT_MIN_DROP) continue; // support must start MEANINGFULLY below (no leapfrog)
+    if (!overlaps(item, s)) continue;
+    const sTop = s.base + s.height;
+    if (sTop > top) top = sTop;
+  }
+  return top;
+}
+
+// SEAT dynamic clutter on reality (floating-fixed-props round 4, 2026-07-17, VRmike). Runs AFTER
+// groundMapData at the ONE shared load point (js/config.js). groundMapData fixes the two floor-
+// relative failures (orphan floaters -> floor, sinkers -> floor). seatMapData fixes the SUPPORT-
+// relative one the all-dynamic world exposed: several restaurant GLBs carry a convex-hull collider
+// much TALLER than their visual working surface (table_food's hull is 1.39 m, a sink's ~1.35 m incl.
+// the faucet), so a plate/pot/food authored to sit on the VISUAL top was authored INSIDE that hull.
+// Frozen (the old `pinned` bug) it hung in mid-air; woken as a dynamic body it LAUNCHED out of the
+// hull. This raises every NON-fixed item whose base is below the collider top actually beneath it up
+// ONTO that top, so it spawns RESTING (never interpenetrating) and then falls/shoves like everything
+// else. Iterated to a fixed point so stacks seat bottom-up. Pure geometry over the SAME halfExtentsFor
+// footprints => identical on every client + late joiner (no per-machine settle, no desync). Fixed
+// bodies (architecture + wall-attached) keep their authored heights. Mutates each item's `y` in place
+// and returns { type, x, z, from, to } per moved item (empty when nothing is embedded). Idempotent.
+export function seatMapData(map, catalog) {
+  if (!map || !catalog) return [];
+  const items = buildItems(map, catalog);
+  const original = new Map(); // item -> authored base, so the change log shows the true from->to
+  let moved = true;
+  let guard = 0;
+  while (moved && guard++ < 24) {
+    moved = false;
+    for (const it of items) {
+      if (it.exempt || it.fixed) continue; // architecture / wall-attached / doors / vents: never re-seated
+      const supTop = supportTopUnder(it, items);
+      if (it.base < supTop - SEAT_TOL) {
+        if (!original.has(it)) original.set(it, it.base);
+        it.base = supTop;
+        it.o.y = supTop; // rewrite the ONE authoritative record every consumer reads
+        moved = true;
+      }
+    }
+  }
+  const changes = [];
+  for (const [it, from] of original) changes.push({ type: it.type, x: it.x, z: it.z, from, to: it.base });
+  return changes;
+}
+
+// NON-MUTATING inspection: every NON-fixed item embedded more than SEAT_TOL inside the collider
+// beneath it, as { type, x, z, base, supportTop, embed }. Used by tools/check-floating-props.mjs to
+// prove the seating pass leaves nothing interpenetrating (which would launch as a dynamic body).
+// Empty array => every dynamic item spawns resting on its support. Run it AFTER seatMapData.
+export function findEmbedded(map, catalog) {
+  if (!map || !catalog) return [];
+  const items = buildItems(map, catalog);
+  const out = [];
+  for (const it of items) {
+    if (it.exempt || it.fixed) continue;
+    const supTop = supportTopUnder(it, items);
+    if (it.base < supTop - SEAT_TOL) {
+      out.push({ type: it.type, x: it.x, z: it.z, base: it.base, supportTop: supTop, embed: supTop - it.base });
+    }
+  }
+  return out;
+}
+
+// NON-MUTATING inspection of the FIXED-vs-DYNAMIC classification (floating-fixed-props round 4).
+// Used by tools/check-floating-props.mjs. Returns every offender as { kind, type, x, z, base, floor,
+// reason }:
+//   (a) kind:'pinned' — a NON-architecture, NON-wall-attached object that would be a FIXED collider.
+//       In a correct build this is impossible (only isFixedBodyEntry pieces are fixed). It can only
+//       reappear if a y-threshold "pin" comes back — pass that threshold as opts.pinY and this flags
+//       every surface prop it would freeze (the exact round-4 bug: plates/food/dishes hanging fixed).
+//   (b) kind:'floating' — a FLOOR-STANDING fixed piece (wall-attached but not architecture and not a
+//       wall-MOUNTED noGround door/vent — i.e. a structural pillar) whose base hangs above the surface
+//       beneath it. Architecture (headers/ceilings/walls at authored heights) and mounted door/vent
+//       are trusted and never flagged. Empty array => the classification is clean.
+export function findFloatingProps(map, catalog, opts = {}) {
+  if (!map || !catalog) return [];
+  const pinY = opts.pinY != null ? opts.pinY : null;
+  const items = buildItems(map, catalog);
+  const out = [];
+  for (const it of items) {
+    const c = catalog[it.type];
+    if (!it.fixed) {
+      // (a) dynamic-by-classification, but a live pin would freeze it in mid-air.
+      if (pinY != null && it.base > pinY) {
+        out.push({ kind: 'pinned', type: it.type, x: it.x, z: it.z, base: it.base, floor: floorUnder(it, items),
+          reason: `a y>${pinY} pin would FREEZE this at its authored height, but it is not architecture/wall-attached — it must be a dynamic body that falls` });
+      }
+      continue;
+    }
+    // (b) a floor-standing fixed piece (pillar) that hangs above the floor. Skip architecture (arch
+    // may sit at any authored height — headers, ceilings) and wall-MOUNTED noGround pieces (door/vent).
+    if (!isArchEntry(c) && !(c && c.noGround)) {
+      const floor = floorUnder(it, items);
+      if (it.base > floor + GROUND_TOL) {
+        out.push({ kind: 'floating', type: it.type, x: it.x, z: it.z, base: it.base, floor,
+          reason: `fixed piece hangs ${(it.base - floor).toFixed(2)} m above the surface beneath it` });
+      }
+    }
   }
   return out;
 }

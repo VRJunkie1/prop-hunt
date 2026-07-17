@@ -1,7 +1,7 @@
 // Fetches the same content-as-data config the referee uses, so the client
 // renders exactly the world the referee simulates. Loaded once at startup.
 // These are plain static JSON files served alongside the app (no backend).
-import { groundMapData } from '/shared/grounding.js';
+import { groundMapData, seatMapData } from '/shared/grounding.js';
 
 let cache = null;
 
@@ -81,6 +81,12 @@ export async function loadConfig() {
   // few pieces that genuinely float or sink. tools/check-grounding.mjs guards the invariant.
   const catalog = { ...props, ...fixtures };
   for (const map of Object.values(maps)) groundMapData(map, catalog);
+  // SEATING PASS (floating-fixed-props round 4, 2026-07-17). AFTER grounding, seat every dynamic
+  // item on the collider actually beneath it so nothing spawns embedded in a taller hull and
+  // launches when it wakes as a rigid body (the all-dynamic world's failure mode). Same one-shared-
+  // load-point, same in-place mutation of the ONE `y` every consumer reads, so physics, render,
+  // disguise and the debug overlay all agree. tools/check-floating-props.mjs guards the result.
+  for (const map of Object.values(maps)) seatMapData(map, catalog);
   // Normalize the taunt manifest to a stable shape so downstream code can always read
   // cfg.taunts.taunts as an array (an empty library is valid — see loader above).
   const tauntList = (taunts && Array.isArray(taunts.taunts)) ? taunts.taunts : [];

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 // became a knockable rigid body isn't ALSO drawn as immovable scenery here (it would
 // double-render and leave a ghost collider). Importing the constant does not load
 // Rapier — physics.js only fetches the WASM inside loadRapier().
-import { isStaticEntry, halfExtentsFor } from '/shared/physics.js';
+import { isFixedBodyEntry, halfExtentsFor } from '/shared/physics.js';
 // Bone-derived hunter sizing — the SAME code the build's headless size check runs
 // (shared/hunter-sizing.js), so what ships is exactly what's verified. See the module
 // header + memory/notes/hunter-model.md for why measuring the skeleton (not the raw
@@ -441,7 +441,7 @@ export class Scene3D {
       if (this._removedFixtures.has(fi)) continue; // hide-spot-removed built-in: no mesh, no collider
       const f = fixtures[fi];
       const c = catalog[f.type];
-      if (!c || !isStaticEntry(c)) continue; // knockable fixtures render via propInstances (below)
+      if (!c || !isFixedBodyEntry(c)) continue; // fixed scenery (arch + wall-attached); dynamic fixtures render via propInstances (below)
       const built = makePropMesh(f.type, catalog);
       if (!built) continue;
       // Optional per-object uniform scale (default 1) — authored by the level editor.
@@ -479,7 +479,7 @@ export class Scene3D {
       // the disguise raycast still hits it (Raycaster ignores visibility), and highlightProp
       // fits its footprint — without a second visible mesh or GLB load. Knockable/disguise
       // props (the default) render their primitive normally and swap in a GLB.
-      const isStatic = isStaticEntry(catalog[p.type]);
+      const isStatic = isFixedBodyEntry(catalog[p.type]);
       // Optional per-object uniform scale (default 1) — authored by the level editor.
       // The container origin stays the body CENTRE (== physics translation, what the
       // awake snapshot moves); at rest it sits at baseY*s so the scaled primitive's

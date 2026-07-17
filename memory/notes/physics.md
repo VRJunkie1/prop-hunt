@@ -3,6 +3,51 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-17 FLOATING FIXED PROPS — round 4 (VRmike, `build/118`). Read before touching the fixed/dynamic split.
+The 2026-07-16 pass (below) made built-ins dynamic but **PINNED** surface clutter (`pinClutterAboveY`,
+any prop with authored `y>0.5`) as a FIXED collider to stop it launching out of tall hulls. That pin
+IS the "plates hang fixed in mid-air, you can stand on them, they jitter neighbours" bug VRmike
+reported — a fixed body is an infinite-mass obstacle the solver fights dynamic neighbours against.
+Round 4 removes the pin and instead makes it SAFE for everything to be dynamic.
+
+- **THE classifier: `isFixedBodyEntry(c) = isArchEntry(c) || isWallAttachedEntry(c)`.** A world object
+  is a FIXED, immovable collider IFF it's architecture (`arch/floor/wall/ceiling`) OR wall-attached
+  (`wallAttached`). Everything else is a dynamic, shovable body that falls. This ONE predicate is read
+  by `_buildStatic`, `_buildProps`, `referee.startMatch` (prop-stream split), `scene.js` (scenery vs
+  prop render) and `bounds.js` (debug overlay) — no drift. It does NOT read `static`/`decor`/a
+  y-threshold. (`static` is kept on the fixed pieces for backward-compat but is no longer the input;
+  `isStaticEntry` is retained/exported only for legacy tool callers.)
+- **NEW `wallAttached` flag** (fixtures.json): door, extractor(vent), pillar, pillar_b. DELIBERATELY
+  SEPARATE from the disguise classifier (`isDisguisableEntry` = `shape && !arch`) — the critic's catch:
+  a door/vent must stay BOTH disguisable AND immovable, and reusing the disguise list (which treats
+  doors/vents as NOT architecture so you can dress as them) for physics would have unbolted them from
+  the walls. Physics reads `wallAttached`; the disguise system reads its own list; neither rewrites the
+  other.
+- **PIN GONE.** referee no longer sets `pinned`; `_buildProps` no longer has a `!p.pinned` branch;
+  `rules.pinClutterAboveY` deleted. Anti-launch is handled at the SOURCE instead:
+- **Seating (`grounding.js seatMapData`, at load).** Raises any dynamic item embedded in the collider
+  beneath it onto that collider top, so it spawns resting, not interpenetrating → no launch. See
+  notes/grounding.md for the two `supportTopUnder` guards (skip fixed supports; require a real drop).
+- **Props spawn SEATED + ASLEEP** (`_buildProps`: `if (!moved) body.sleep()`). A resting prop costs
+  nothing (phone budget → the fresh dense map is 100% quiet) and doesn't spontaneously tumble off a
+  slightly-domed hull; it WAKES on the first contact (player push / shot impulse / a shoved neighbour),
+  so it's fully dynamic and shovable AND stops LOOKING fixed. This is what makes "everything dynamic"
+  phone-safe on the dense restaurant. Mid-round joiners' already-moving props (`moved`) keep motion.
+- **`noHull` flag** (fixtures.json, honoured in `shapeFor`+`halfExtentsFor`): opt a catalog entry out
+  of a DEGENERATE baked hull and use its symmetric measured/primitive box. `shelf` (hull off-COM →
+  tipped itself over as a dynamic body) and `stove_plain` (hull baked to 0.20 m for a ~0.9 m stove → a
+  pot floated) both use it. Fixes both stability + the floating pot.
+- **Guards:** NEW `tools/check-floating-props.mjs` (fixed-classification + seating + self-test; fails
+  under `--assume-pin=0.5`, passes shipped). `check-settle.mjs` rewritten for round 4: seats like the
+  game, spawns asleep, **Phase A** asserts the fresh map is QUIET (nothing spawns embedded → nothing
+  wakes on its own; 150/150 asleep), **Phase B** wakes everything and asserts no LAUNCH + all
+  FLOOR-STANDING FURNITURE stays put/upright (small surface clutter is "dynamic & falls" per VRmike →
+  reported, not failed).
+- **Known cosmetic (follow-up):** on DOMED combined-model hulls (esp. `table_food`, which already has
+  food modelled) a couple of authored food items seat at the hull-AABB top → rest a bit HIGH. Real fix
+  = better hulls / remove redundant clutter on those models. Not the reported bug (dynamic, resting on
+  a real collider extent, shoves when touched).
+
 ## 2026-07-16 EVERYTHING IS A PHYSICS OBJECT + counters seated (VRmike attempt #3, `build/114`)
 The restaurant's bolted-in built-ins are now SHOVABLE dynamic rigid bodies, and the sunken counters
 are fixed. Three coupled changes:

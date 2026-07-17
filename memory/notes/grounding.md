@@ -1,5 +1,33 @@
 # Object grounding (floating props / sunken objects)
 
+## 2026-07-17 — SEATING PASS + everything-dynamic (floating-fixed-props round 4, VRmike)
+The 2026-07-16 note below says "do NOT re-enable hull-top grounding without fixing those hulls
+first." Round 4's directive (everything non-architecture is a dynamic body that FALLS) forced the
+issue, so we added a SEPARATE, NARROW pass that seats ONLY what would otherwise launch — and left
+`groundMapData` exactly as-is.
+- **NEW `seatMapData(map, catalog)`** — runs at load AFTER `groundMapData` (js/config.js). For each
+  DYNAMIC (non-fixed) item, if its base sits more than `SEAT_TOL` (0.02 m) BELOW the top of the
+  collider actually beneath it (a tall/degenerate hull it was authored INSIDE — e.g. a `dinner` at
+  0.81 inside `table_food`'s 1.39 m hull), it is RAISED onto that collider top. So a newly-dynamic
+  prop spawns RESTING, never interpenetrating → it can't launch when it wakes. Iterated to a fixed
+  point (stacks seat bottom-up). Pure geometry over the SAME `halfExtentsFor` footprints physics
+  bakes → deterministic, identical on every client. Idempotent. Fixed bodies (arch + wall-attached)
+  keep their authored heights.
+- **`supportTopUnder` — two hard-won guards** (both bugs found live in `_probe_seat`): (1) SKIP FIXED
+  pieces as supports — a counter authored 9 cm from a wall-post is NEXT TO it, not resting ON it;
+  counting the 2.8 m wall top as a "support" launched the counter to 2.8 m. Clutter only rests on
+  DYNAMIC furniture; the floor tile is handled by `floorUnder`. (2) REQUIRE `SUPPORT_MIN_DROP` (0.05)
+  of drop — two items at nearly the same height (burger layers) must not seat onto each other or they
+  leapfrog upward forever (climbed to 2.02 m before the guard).
+- **`findFloatingProps` / `findEmbedded`** — non-mutating inspectors for the NEW guard
+  `tools/check-floating-props.mjs` (see notes/physics.md round-4 section). `findFloatingProps` also
+  detects a re-introduced y-threshold PIN (pass `opts.pinY`) so the guard can prove-itself by failing
+  on main's pin. The FIXED-vs-DYNAMIC classifier itself is `physics.isFixedBodyEntry` (arch OR
+  wall-attached) — see notes/physics.md.
+- The degenerate hulls the 2026-07-16 note flagged (`stove_plain` 0.20 m, `shelf` off-COM) are now
+  fixed at the source with a `noHull` catalog flag (use the symmetric primitive box) rather than
+  worked-around — so seating them behaves.
+
 ## 2026-07-16 — TIGHT SINK TOLERANCE + kitchen seated on its floor (VRmike attempt #3)
 VRmike's sunken counters were REAL and the guard was WRONG. Mechanism (root-caused via git —
 original to commit `9ee0f7d` "fix #5 THICK FLOORS", 2026-07-10, NOT a regression from the collider

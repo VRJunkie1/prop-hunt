@@ -14,7 +14,7 @@
 // the only thing that moved. Authority now lives on the host, not a server; see
 // memory/architecture.md for why that trade was made.
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
-import { loadRapier, PhysicsWorld, isStaticEntry, isArchEntry, isDisguisableEntry } from './physics.js';
+import { loadRapier, PhysicsWorld, isFixedBodyEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
 import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty } from './damage.js';
 
@@ -707,13 +707,11 @@ export class Referee {
     this.matchSeed = (Math.random() * 0x100000000) >>> 0;
     const skipRatio = this.rules.mapRandomizeSkip != null ? this.rules.mapRandomizeSkip : 0.25;
     const minKept = this.rules.minPropsKept != null ? this.rules.minPropsKept : 6;
-    // PIN THRESHOLD (everything-is-physics, 2026-07-16). A prop/fixture authored to rest ON a
-    // surface (a plate/pot/condiment/food with a y offset above the floor) is PINNED: it keeps a
-    // fixed collider instead of a dynamic body, because its authored height was tuned against a
-    // model's VISUAL surface, not its (often taller) collider hull — waking it dynamic makes it
-    // launch out of the furniture it sits on. Floor-standing objects (y at/near the floor: counters,
-    // appliances, tables, chairs, crates) are BELOW this and become the shovable dynamic bodies.
-    const pinY = this.rules.pinClutterAboveY != null ? this.rules.pinClutterAboveY : 0.5;
+    // NO MORE PIN (floating-fixed-props round 4, 2026-07-17). Every non-architecture object is a
+    // dynamic body now — plates/food/decor included, per VRmike's standing instruction. The old
+    // `pinClutterAboveY` pin that froze surface clutter in mid-air is gone; the launch-out-of-hull
+    // problem it worked around is solved by seating each item on the collider actually beneath it
+    // (shared/grounding.js seatMapData, run at load). See isFixedBodyEntry + notes/physics.md.
 
     // (1) Disguise-pool props (map.props) — all disguisable; existing behaviour, ratio bumped.
     // `mi` = the source index in map.props, carried so the client can still zip authored
@@ -726,7 +724,7 @@ export class Referee {
       .filter(({ i }) => !propSkip.has(i))
       .map(({ p, i }) => ({
         id: nextPropId++, mi: i, type: p.type, x: p.x, z: p.z, y: p.y || 0, rot: p.rot || 0,
-        disguisable: isDisguisableEntry(catalog[p.type]), pinned: (p.y || 0) > pinY,
+        disguisable: isDisguisableEntry(catalog[p.type]),
       }));
 
     // (2) Fixtures — remove the SAME ratio of the DISGUISABLE (non-architecture) ones. Eligible =
@@ -766,13 +764,13 @@ export class Referee {
         return c && !isArchEntry(c) && !removedFixtures.has(i);
       });
     const dynFixtures = nonArchFixtures
-      .filter(({ f }) => !isStaticEntry(catalog[f.type]))
+      .filter(({ f }) => !isFixedBodyEntry(catalog[f.type]))
       .map(({ f }) => ({
         id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
-        disguisable: isDisguisableEntry(catalog[f.type]), pinned: (f.y || 0) > pinY,
+        disguisable: isDisguisableEntry(catalog[f.type]),
       }));
     const staticFixtures = nonArchFixtures
-      .filter(({ f }) => isStaticEntry(catalog[f.type]))
+      .filter(({ f }) => isFixedBodyEntry(catalog[f.type]))
       .map(({ f }) => ({
         id: nextPropId++, type: f.type, x: f.x, z: f.z, y: f.y || 0, rot: f.rot || 0,
         disguisable: isDisguisableEntry(catalog[f.type]),

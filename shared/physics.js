@@ -68,6 +68,31 @@ export function isDisguisableEntry(c) {
   return !!(c && c.shape && !isArchEntry(c));
 }
 
+// WALL/ARCHITECTURE-ATTACHED (floating-fixed-props round 4, 2026-07-17, VRmike). A catalog
+// entry flagged `wallAttached` is bolted to the walls/architecture — the DOOR (set in its
+// frame), the VENT/extractor hood (mounted high above the stove) and the structural PILLARS
+// (floor-to-ceiling columns). These stay FIXED, immovable colliders even though the world is
+// otherwise all-dynamic. DELIBERATELY SEPARATE from the disguise classifier: a door and a vent
+// are still `isDisguisableEntry` (a player may dress as them) yet must never fall off the wall,
+// so physics reads THIS flag, never the disguise list — one system can't rewrite the other.
+export function isWallAttachedEntry(c) {
+  return !!(c && c.wallAttached);
+}
+
+// THE fixed-vs-dynamic rule (floating-fixed-props round 4). A world object is a FIXED,
+// immovable collider IFF it is world ARCHITECTURE (floors/walls/ceilings/ground, isArchEntry)
+// OR explicitly WALL-ATTACHED (doors, vents, wall-mounted fixtures, structural pillars,
+// isWallAttachedEntry). EVERYTHING ELSE — counters, appliances, tables, chairs, crates, pots,
+// pans, plates, dishes, food, condiments, ALL decor — is a dynamic, shovable rigid body that
+// falls onto whatever is beneath it. This is VRmike's standing instruction made into ONE
+// predicate: physics (_buildStatic/_buildProps), the referee's prop-stream split, scene.js's
+// scenery-vs-prop render split, and tools/check-floating-props.mjs all read THIS so they can
+// never drift. NOTE it deliberately does NOT read a y-threshold "pin": that froze
+// non-architecture decor in mid-air (the round-4 bug) and is gone.
+export function isFixedBodyEntry(c) {
+  return isArchEntry(c) || isWallAttachedEntry(c);
+}
+
 // FEEL TUNING (2026-07). The single derivation point for the physics-feel knobs,
 // used by BOTH the host's authoritative world and every client's prediction world.
 // Both sims call this with the SAME `feel` object (config.js loads one
@@ -152,7 +177,11 @@ export async function loadRapier() {
 // accepted cost of option 1; see notes/physics.md. Baking (vs load-time generation) chosen for
 // determinism + zero runtime collider-swap machinery — see notes/convex-hull-colliders.md.
 function shapeFor(RAPIER, c) {
-  if (c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0) {
+  // `noHull` opt-out (floating-fixed-props round 4): a few baked hulls are DEGENERATE for a dynamic
+  // body — shelf's hull has an off-centre mass (it tips itself over on spawn) and stove_plain's baked
+  // to just 0.20 m for a ~0.9 m stove (so a pot rests 0.7 m inside thin air). Flag the entry `noHull`
+  // to skip the bad hull and use its symmetric measured/primitive box instead. See fixtures.json.
+  if (!c.noHull && c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb && c.hullAabb.h > 0) {
     const desc = RAPIER.ColliderDesc.convexHull(
       c.hullVerts instanceof Float32Array ? c.hullVerts : Float32Array.from(c.hullVerts)
     );
@@ -187,7 +216,7 @@ export function halfExtentsFor(c) {
   // Convex hull first (matches shapeFor's branch order): its footprint is the baked world-space
   // AABB. Treated as `box:true` for coverage/solidity purposes — the hull's AABB equals the mesh
   // AABB by construction (the bake includes the 6 axis support points), so it covers the visual.
-  const hb = c && c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb;
+  const hb = c && !c.noHull && c.hullVerts && c.hullVerts.length >= 12 && c.hullAabb;
   if (hb && c.hullAabb.w > 0 && c.hullAabb.h > 0 && c.hullAabb.d > 0) {
     return { hx: c.hullAabb.w / 2, hy: c.hullAabb.h / 2, hz: c.hullAabb.d / 2, box: true };
   }
@@ -375,7 +404,7 @@ export class PhysicsWorld {
       if (this._removedFixtures.has(fi)) continue; // hide-spot-removed built-in: no collider
       const f = fixtures[fi];
       const c = catalog[f.type];
-      if (!c || !c.static) continue;
+      if (!c || !isFixedBodyEntry(c)) continue; // fixed = architecture OR wall-attached (round 4)
       const { desc, halfH } = shapeFor(R, c);
       if (c.floor) {
         // FLOOR PIECE (fix #5): grow the collider to ~1 m thick, extended DOWNWARD so
@@ -476,7 +505,7 @@ export class PhysicsWorld {
       // collider (and on the host a DYNAMIC body wedged inside a static clone would explode).
       // Architecture never reaches propInstances. The disguised player's OWN capsule still
       // grows to this footprint via setPlayerCollider, exactly as for a knockable prop.
-      if (isStaticEntry(c)) continue;
+      if (isFixedBodyEntry(c)) continue; // fixed = architecture OR wall-attached (round 4)
       const { desc, halfH } = shapeFor(R, c);
       // A prop instance carries EITHER spawn semantics (x/z = floor position, y =
       // rest offset above the surface, rot = yaw) OR — for a mid-round joiner's
@@ -485,14 +514,16 @@ export class PhysicsWorld {
       // actually is (a chair kicked across the room stays kicked).
       const moved = Number.isFinite(p.qx);
       const cy = moved ? p.y : halfH + (p.y || 0);
-      // PINNED clutter (2026-07-16): items the referee marks `pinned` — the small decor RESTING ON
-      // a surface (food, dishes, cookware, condiments perched on a counter/table top) — stay a FIXED
-      // collider even under the cap. They were effectively fixed already (overflow-static), and
-      // waking them as dynamic bodies made them eject from the imperfect combined-table surfaces
-      // (a table_food GLB's hull is 1.39m tall, so a plate authored at 0.8 sits INSIDE it and
-      // launches). The FLOOR-STANDING objects — counters, appliances, tables, chairs, crates — are
-      // the ones that become shovable. See referee.startMatch (pin decision) + notes/physics.md.
-      if (this.dynamicProps && !p.pinned && dynCount < cap) {
+      // EVERYTHING NON-ARCHITECTURE IS DYNAMIC (floating-fixed-props round 4, 2026-07-17). There is
+      // no more `pinned` clutter: the small decor resting on a surface (food, dishes, cookware,
+      // condiments) is a real shovable rigid body like everything else. The launch-out-of-the-hull
+      // problem the old pin worked around is instead solved at the SOURCE — shared/grounding.js
+      // seatMapData seats each item's base on the collider TOP actually beneath it (not its authored
+      // visual height), so nothing spawns interpenetrating a taller hull. The only NON-dynamic
+      // objects are architecture + wall-attached (isFixedBodyEntry), already skipped above. Past the
+      // phone-safe cap the smallest overflow degrades to a still-collidable STATIC collider — but it
+      // was SEATED, so it rests on its support, never hangs in mid-air.
+      if (this.dynamicProps && dynCount < cap) {
         // Host: a real rigid body that can be knocked around and settles to sleep.
         // Spawn a hair above rest (SPAWN_EPS) so nothing starts interpenetrating.
         const spawnY = moved ? cy : cy + SPAWN_EPS;
@@ -513,6 +544,16 @@ export class PhysicsWorld {
         if (bodyDesc.setCcdEnabled) bodyDesc.setCcdEnabled(true);
         const body = this.world.createRigidBody(bodyDesc);
         const col = this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
+        // SPAWN AT REST, ASLEEP (floating-fixed-props round 4, 2026-07-17). A fresh-match prop is
+        // SEATED on the collider beneath it (seatMapData), so it spawns in a valid resting pose — put
+        // it straight to sleep so the dense restaurant map is QUIET at match start (phone budget: a
+        // sleeping body costs nothing) instead of every plate/pot settling at once. It wakes the
+        // instant a player, a shot, or a shoved neighbour touches it — so it is fully dynamic and
+        // shovable, it just doesn't spontaneously tumble off a slightly-domed hull before anyone
+        // interacts. This is what makes "everything dynamic" phone-safe AND stops the newly-dynamic
+        // clutter from LOOKING fixed-yet-floating (it reacts the moment it is touched). A mid-round
+        // joiner's already-moving props (`moved`) keep their broadcast motion — only fresh spawns sleep.
+        if (!moved && body.sleep) body.sleep();
         this._propHandles.add(col.handle);
         this._propHandleToId.set(col.handle, p.id);
         // Keep the spawn transform so the failsafe can respawn a prop that escapes the

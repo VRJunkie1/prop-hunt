@@ -7,13 +7,13 @@
 //   3. numeric diagnosis (collider vs mesh, by hand or in the guard)
 //
 // Collider SIZES come from the SAME pure helpers shared/physics.js uses to build the real
-// colliders (halfExtentsFor / thickenWallHalfExtents / isStaticEntry / FLOOR_Y), so this
+// colliders (halfExtentsFor / thickenWallHalfExtents / isFixedBodyEntry / FLOOR_Y), so this
 // module and the engine can never disagree on a collider's size. The static-collider
 // PLACEMENT math below is a faithful, line-for-line mirror of shared/physics.js
 // _buildStatic — if you change one, change the other; tools/check-physics.mjs cross-checks
 // the wall/ground constants so an accidental divergence fails the build.
 
-import { halfExtentsFor, thickenWallHalfExtents, FLOOR_Y } from './physics.js';
+import { halfExtentsFor, thickenWallHalfExtents, isFixedBodyEntry, FLOOR_Y } from './physics.js';
 
 // ---- constants shared with physics.js _buildStatic (MUST stay in lockstep) --------------
 export const GROUND_SLAB_HALF_Y = 1.5; // slab is 3 m thick; its TOP sits on FLOOR_Y
@@ -67,14 +67,14 @@ export function worldColliderBoxes(map, catalog, rules, removedFixtures = null) 
   boxes.push({ kind: 'wall', type: '(wall -x)', cx: -cOut, cy: WALL_HALF_HEIGHT, cz: 0, hx: WALL_HALF_THICK, hy: WALL_HALF_HEIGHT, hz: along, rot: 0 });
   boxes.push({ kind: 'wall', type: '(wall +x)', cx: cOut, cy: WALL_HALF_HEIGHT, cz: 0, hx: WALL_HALF_THICK, hy: WALL_HALF_HEIGHT, hz: along, rot: 0 });
 
-  // Static fixtures (ONLY c.static — knockable fixtures are promoted to props by the
-  // referee and built by _buildProps, so they are prop colliders, below).
+  // Fixed fixtures (architecture + wall-attached, isFixedBodyEntry — matches _buildStatic; the
+  // dynamic fixtures are promoted to props by the referee and built by _buildProps, below).
   const fixtures = map.fixtures || [];
   for (let fi = 0; fi < fixtures.length; fi++) {
     if (removed.has(fi)) continue; // hide-spot-removed built-in: no collider box (matches physics)
     const f = fixtures[fi];
     const c = catalog[f.type];
-    if (!c || !c.static) continue;
+    if (!c || !isFixedBodyEntry(c)) continue;
     const he = halfExtentsFor(c); // hull AABB first, else measured, else primitive — matches shapeFor
     const halfH = he.hy; // == shapeFor's halfH
     if (c.floor) {
@@ -115,7 +115,7 @@ export function propColliderBoxes(map, catalog) {
   };
   for (const f of map.fixtures || []) {
     const c = catalog[f.type];
-    if (c && !c.static) push(f.type, f);
+    if (c && !isFixedBodyEntry(c)) push(f.type, f);
   }
   for (const p of map.props || []) push(p.type, p);
   return boxes;
