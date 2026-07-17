@@ -528,7 +528,8 @@ export class UI {
       ? [
           ['Left joystick', 'Move'],
           ['Drag (right side)', 'Look'],
-          ['ACTION (hold)', 'Hunter: fire the rifle · Prop: disguise as what you aim at'],
+          ['ACTION (hold)', 'Hunter: use the selected tool (fire / finder / grenade) · Prop: disguise as what you aim at'],
+          ['Tool buttons', 'Hunter: switch tool — rifle · finder · grenade'],
           ['JUMP', 'Jump'],
           ['ROTATE (hold)', 'Turn a disguise'],
           ['☰', 'This menu'],
@@ -540,7 +541,7 @@ export class UI {
           ['Right-click (hold)', 'Turn a disguise'],
           ['Space', 'Jump'],
           ['E', 'Disguise (prop)'],
-          ['1 / 2', 'Pick hunter tool'],
+          ['1 / 2 / 3', 'Pick hunter tool (rifle · finder · grenade)'],
           ['T', 'Taunt menu (prop) — frees the mouse; T or Esc closes it'],
           ['V', 'Toggle view'],
           ['`', 'Free the mouse for debug/UI — click the view to resume'],
@@ -558,5 +559,32 @@ export class UI {
   setAimHint(noTarget) {
     if (!this.el.crosshair) return;
     this.el.crosshair.classList.toggle('no-target', !!noTarget);
+  }
+
+  // HUNTER GRENADES: a brief full-screen explosion flash for the local player when a grenade
+  // goes off near them (intensity 0..1 by camera distance, from scene.blastFlashAt). Pure DOM —
+  // a lazily-created overlay div that fades out on its own. Guaranteed non-throwing (a nearby
+  // blast must never blank the render loop). Intensity <= 0 is a no-op.
+  flashScreen(intensity = 1) {
+    const k = Math.max(0, Math.min(1, intensity));
+    if (k <= 0) return;
+    let el = this.el.blastFlash;
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'blastFlash';
+      el.className = 'blast-flash';
+      el.setAttribute('aria-hidden', 'true');
+      (this.el.game || document.body).appendChild(el);
+      this.el.blastFlash = el;
+    }
+    // Restart the fade: clear any running animation, force reflow, set peak opacity, then fade.
+    if (this._blastTimer) { clearTimeout(this._blastTimer); this._blastTimer = null; }
+    el.style.transition = 'none';
+    el.style.opacity = String(0.65 * k);
+    // Force a reflow so the transition below actually runs from the peak opacity.
+    void el.offsetWidth;
+    el.style.transition = 'opacity 0.4s ease-out';
+    el.style.opacity = '0';
+    this._blastTimer = setTimeout(() => { el.style.opacity = '0'; this._blastTimer = null; }, 450);
   }
 }

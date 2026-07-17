@@ -285,13 +285,37 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   `scene.playUiSound`), and a PROP taunt-UI LOCK while a forced (uncancellable) taunt plays
   (`ui.setTauntLocked` + `state.tauntLocked` gating open/send). Both knobs hot-tunable in
   `rules.json`. Guard: `tools/check-finder.mjs`. Detail: `notes/prop-finder.md`.
+- **HUNTER GRENADES (hunter tool #3, 2026-07-17)** — the third selectable tool beside the rifle +
+  finder, built on the finder's tool-selection infra (`HUNTER_TOOLS` gains `{id:'grenade',key:'3'}`;
+  selectable on PC via key 3 / the tool bar AND on mobile by tapping the same button — the data-driven
+  bar needs no separate mobile UI). Like the rifle it is **host-authoritative** and sends ONLY the
+  aim direction: `C2S.GRENADE {dx,dy,dz}` → `referee.applyGrenade` (a LIVING HUNTER in HUNTING, NO
+  cooldown) raycasts the aim through its own world (reusing the rifle's `raycastShot`) and explodes
+  INSTANTLY at the first hit (no arc/travel/fuse). The client never sends a hit point, so a hacked
+  client can't move the blast to fake a kill or dodge backfire. `_resolveGrenadeBlast(hunter,center)`:
+  prop PLAYERS in range take `baseDamage×size-multiplier×falloff` (same `multiplierForDisguise` curve
+  the rifle uses, so tiny props take proportionally more); the THROWING hunter takes BACKFIRE off
+  non-player DECOY props only (disguisable, non-arch prop instances — the same objects the rifle
+  backfires on), FLAT `baseDamage×falloff` with NO size mult so ~3 direct decoy hits are lethal
+  (math, not hardcoded); NO friendly fire (other hunters never targeted) and NO direct self-damage.
+  **REDEMPTION RULE (ordering is load-bearing):** compute all prop-player damage + all backfire → apply
+  prop damage → if any prop PLAYER died, the thrower is restored to FULL HP and the backfire is forgiven;
+  only if nobody died does the backfire land (may kill the hunter). Reuses `_damagePlayer` (incl. its
+  prop-kill refill) + `describeCollider`. Config `rules.grenade` (`baseDamage` 0.45 = 45% of full
+  health, `fullDamageRadius` 1, `falloffDistance` 2) is hot-tunable and authored as **1 + 2**, NOT a
+  stored outer of 3 (VRmike's ask); pure `grenadeFalloff` in `shared/damage.js` (d≤1 full, d=2 half,
+  d=2.99 ~0, d≥3 zero). Broadcasts `S2C.EVENT kind:'grenade'` for everyone's 3D explosion
+  (`scene.spawnExplosion`) + a distance-scaled local screen flash (`scene.blastFlashAt` →
+  `ui.flashScreen`). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
 
 ## Shared (`shared/`)
 
 - `damage.js` — **HUNTER-TOOLS v1 damage math (PURE).** Imports only `physics.halfExtentsFor`
   (no Rapier/DOM) so the host referee and the offline guard run identical numbers. Lerps a
   size multiplier between `rules.damage` anchors over each disguise's collider footprint —
-  ONE size source, auto-upgrades to measured `asset-dims` bounds when populated.
+  ONE size source, auto-upgrades to measured `asset-dims` bounds when populated. Also holds the
+  **grenade** helpers (`resolveGrenadeCfg`/`grenadeOuterRadius`/`grenadeFalloff`) — same PURE,
+  shared-by-referee-and-guard pattern; outer radius is derived `fullDamageRadius + falloffDistance`.
 - `protocol.js` — **one protocol** now: `C2S`/`S2C`/`PHASE`/`ROLE` (client ↔
   referee). Dependency-free ESM. (The old `SIG` matchmaker-signaling protocol was
   deleted with the matchmaker; PeerJS's own connect/disconnect events replace it.)

@@ -604,6 +604,19 @@ button.ghost:hover { background: #3d2a66; }
   opacity: 0.85;
 }
 
+/* HUNTER GRENADES: a brief full-screen explosion flash for the local player when a grenade goes
+   off nearby. Non-interactive; opacity is driven inline by ui.flashScreen() (peak then fade). Sits
+   over the world but under the pause/blindfold overlays so it never blocks a menu. */
+.blast-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 45;
+  background: radial-gradient(circle at 50% 55%, #fff4d6 0%, #ffb24d 35%, #ff6a2b88 65%, #ff6a2b00 100%);
+  mix-blend-mode: screen;
+}
+
 /* Dead-player spectator banner. Non-interactive; sits over the (still-rendering) world. */
 .spectate {
   position: absolute;

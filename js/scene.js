@@ -170,6 +170,7 @@ export class Scene3D {
     this._finderZone = null;
     this._finderZoneRadius = 0;
     this._effects = []; // active shot effects: { tracer, flash, life, max }
+    this._blasts = []; // HUNTER GRENADES: active explosion effects: { core, ring, life, max, radius }
 
     // ---- audio taunts (3D positional) ---------------------------------------
     // A THREE.AudioListener parented to the camera (so the Web Audio listener tracks the
@@ -382,6 +383,7 @@ export class Scene3D {
     // the stale handle so updateFinderZone rebuilds it against the fresh world next time.
     this._finderZone = null;
     this._effects = [];
+    this._blasts = []; // scene.clear() dropped any live explosion meshes; forget the handles
     // scene.clear() dropped every taunt emitter's Object3D, but a PositionalAudio's source is a
     // Web Audio node wired to the listener — removing it from the SCENE graph does NOT stop the
     // sound. So STOP + disconnect each one (not just forget it), or a taunt from the previous
@@ -1407,6 +1409,14 @@ export class Scene3D {
       // forces every prop inside the AOE cylinder to taunt — see main.js tryFinder / scene.updateFinderZone.
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshLambertMaterial({ color: 0x49b6ff }));
       g.add(box);
+    } else if (toolId === 'grenade') {
+      // HUNTER GRENADES: a small handheld grenade (a dark-green sphere with a lighter cap). Throwing
+      // it (left-click / fire button) raycasts from the aim point and explodes INSTANTLY at the first
+      // hit — see main.js tryGrenade / referee.applyGrenade. Purely cosmetic (no cooldown to show).
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), new THREE.MeshLambertMaterial({ color: 0x3c5a34 }));
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 8), new THREE.MeshLambertMaterial({ color: 0x9aa0aa }));
+      cap.position.set(0, 0.12, 0);
+      g.add(body, cap);
     } else {
       return null;
     }
@@ -1494,6 +1504,42 @@ export class Scene3D {
     this._effects.push({ tracer, flash, life: 0.12, max: 0.12 });
   }
 
+  // HUNTER GRENADES: a short-lived 3D explosion at the host-computed blast centre (x,y,z), visible
+  // to EVERYONE (driven by the host's kind:'grenade' event). A bright core plus an expanding shell
+  // that grows to roughly the blast's outer radius and fades. updateEffects animates + retires it.
+  spawnExplosion(x, y, z) {
+    if (!this.scene || x == null) return;
+    // Read the blast radius from the shared rules (main.js sets scene.rules); fall back to 3 m
+    // (= the shipping fullDamageRadius 1 + falloffDistance 2). Authored as the sum, never hardcoded.
+    const g = this.rules && this.rules.grenade;
+    const radius = g && Number.isFinite(g.fullDamageRadius) && Number.isFinite(g.falloffDistance)
+      ? g.fullDamageRadius + g.falloffDistance : 3;
+    const cgeo = this._blastCoreGeo || (this._blastCoreGeo = new THREE.SphereGeometry(1, 16, 12));
+    const core = new THREE.Mesh(cgeo, new THREE.MeshBasicMaterial({ color: 0xfff1c2, transparent: true, opacity: 1, depthWrite: false }));
+    core.position.set(x, y, z);
+    core.scale.setScalar(radius * 0.35);
+    const ring = new THREE.Mesh(cgeo, new THREE.MeshBasicMaterial({ color: 0xff7a2e, transparent: true, opacity: 0.7, depthWrite: false }));
+    ring.position.set(x, y, z);
+    ring.scale.setScalar(radius * 0.5);
+    this.scene.add(core, ring);
+    this._blasts.push({ core, ring, life: 0.5, max: 0.5, radius });
+  }
+
+  // HUNTER GRENADES: intensity (0..1) of the local screen flash for a blast at (x,y,z), by distance
+  // from the camera — full up close, zero past ~4× the blast radius. main.js passes it to
+  // ui.flashScreen so a distant explosion doesn't flash your screen. Never throws.
+  blastFlashAt(x, y, z) {
+    if (!this.camera || x == null) return 0;
+    const g = this.rules && this.rules.grenade;
+    const radius = g && Number.isFinite(g.fullDamageRadius) && Number.isFinite(g.falloffDistance)
+      ? g.fullDamageRadius + g.falloffDistance : 3;
+    const c = this.camera.position;
+    const d = Math.hypot(c.x - x, c.y - y, c.z - z);
+    const reach = radius * 4; // beyond this the blast is too far to flash the screen
+    if (d >= reach) return 0;
+    return Math.max(0, Math.min(1, 1 - d / reach));
+  }
+
   // Fade + retire active shot effects. Called each frame from main.js (like updateAnimations).
   updateEffects(dt) {
     // Upgrade a first-person rifle viewmodel from its primitive fallback to the real GLB
@@ -1505,6 +1551,28 @@ export class Scene3D {
         this._viewModelTool = null; // force a rebuild against the now-loaded GLB
         this.setViewModel('rifle');
       }
+    }
+    // HUNTER GRENADES: grow + fade each active explosion, then retire it (dispose its materials).
+    if (this._blasts && this._blasts.length) {
+      const keptBlasts = [];
+      for (const b of this._blasts) {
+        b.life -= dt;
+        const t = b.life > 0 ? b.life / b.max : 0; // 1 -> 0 over the lifetime
+        const grow = 1 - t; // 0 -> 1
+        b.core.scale.setScalar(b.radius * (0.35 + grow * 0.35));
+        b.core.material.opacity = t; // core fades fastest
+        b.ring.scale.setScalar(b.radius * (0.5 + grow * 0.9));
+        b.ring.material.opacity = 0.7 * t;
+        if (b.life > 0) {
+          keptBlasts.push(b);
+        } else {
+          this.scene.remove(b.core);
+          this.scene.remove(b.ring);
+          b.core.material.dispose();
+          b.ring.material.dispose();
+        }
+      }
+      this._blasts = keptBlasts;
     }
     if (!this._effects || !this._effects.length) return;
     const keep = [];

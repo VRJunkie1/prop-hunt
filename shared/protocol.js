@@ -57,6 +57,18 @@ export const C2S = {
   // cooldown is a host-confirmed denial → the client's short denied buzz). The cooldown is
   // enforced host-side so a hacked client can't skip it. See shared/referee.js applyFind.
   FIND: 'find', // {}
+  // HUNTER GRENADES (hunter tool #3). Throw a grenade: { dx, dy, dz } = the shooter's
+  // camera-forward aim direction (the SAME ray SHOOT sends). The client NEVER sends a hit
+  // point — the HOST is the authority: it raycasts that aim through its own world (reusing the
+  // rifle's shot raycast), explodes INSTANTLY at the first hit (no arc/travel/fuse), and
+  // resolves all damage. So a hacked client can aim anywhere (legal) but can never move the
+  // blast to fake a kill or dodge the backfire. NO COOLDOWN (grenades are balanced by risk).
+  // Damage vs distance from the blast centre falls off (full within fullDamageRadius, ~0 at
+  // fullDamageRadius+falloffDistance): prop PLAYERS take baseDamage×size-multiplier×falloff;
+  // the THROWING hunter takes backfire (flat baseDamage×falloff, no size mult) through
+  // non-player DECOY props only — never other hunters, never direct self-damage. If the blast
+  // kills a prop player the thrower is REDEEMED to full HP. See shared/referee.js applyGrenade.
+  GRENADE: 'grenade', // { dx, dy, dz }
   // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
   // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
   // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
@@ -103,6 +115,12 @@ export const S2C = {
   //                     hunter was still cooling down; remainMs is the time left (client plays the
   //                     short denied buzz + keeps its countdown synced). The forced taunts themselves
   //                     ride the normal kind:'taunt' broadcast (uncancellable:true) to EVERYONE.
+  //   kind:'grenade'    { by, x, y, z, hits, backfire, redeemed } -> a grenade exploded at the
+  //                     host-computed blast centre (x,y,z). Everyone draws the explosion flash
+  //                     there. hits = prop players killed; backfire = HP the thrower took from
+  //                     decoy props (0 when redeemed); redeemed = a prop-player kill restored the
+  //                     thrower to full HP. Per-target damage/deaths still ride the normal
+  //                     kind:'hurt' / kind:'eliminated' events + the health snapshot.
   ERROR: 'error', // { msg }
 };
 

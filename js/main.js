@@ -28,6 +28,7 @@ const ui = new UI();
 const HUNTER_TOOLS = [
   { id: 'rifle', name: 'Assault Rifle', key: '1' },
   { id: 'finder', name: 'Prop Finder', key: '2' },
+  { id: 'grenade', name: 'Grenade', key: '3' },
 ];
 
 let session = null; // created in boot() once config is loaded
@@ -397,11 +398,26 @@ function tryDisguise() {
 function tryFire() {
   if (state.role !== ROLE.HUNTER || !state.movable || state.paused || state.uiMode) return;
   if (state.tool === 'finder') { tryFinder(); return; } // the finder tool activates instead of firing
+  if (state.tool === 'grenade') { tryGrenade(); return; } // the grenade throws instead of firing
   if (state.tool !== 'rifle') return;
   const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
   if (!dir) return;
   session.send({ t: C2S.SHOOT, dx: dir.x, dy: dir.y, dz: dir.z });
   lastFireAt = performance.now(); // paces the hold-to-fire auto-repeat (see frameBody)
+}
+
+// HUNTER GRENADES (hunter tool #3): throw a grenade (LEFT-CLICK on PC / the fire button on mobile
+// while the grenade is selected). Like the rifle, we send ONLY the camera-forward AIM direction —
+// the HOST raycasts it, explodes at the first hit, and resolves all damage + the backfire /
+// redemption. NO COOLDOWN (balanced by risk), and it never auto-repeats on a held click (only the
+// rifle does — see frameBody), so one throw per press. The explosion flash arrives as a broadcast
+// kind:'grenade' event for everyone (see onEvent), so we don't draw anything optimistically here.
+function tryGrenade() {
+  if (state.role !== ROLE.HUNTER || !state.movable || state.paused || state.uiMode) return;
+  const dir = scene && scene.aimDirection ? scene.aimDirection() : null;
+  if (!dir) return;
+  if (scene && scene.unlockAudio) scene.unlockAudio(); // iOS: keep audio warm in the gesture
+  session.send({ t: C2S.GRENADE, dx: dir.x, dy: dir.y, dz: dir.z });
 }
 
 // PROP FINDER cooldown (ms) — the SAME per-hunter cooldown the host enforces (rules.finderCooldownSeconds).
@@ -709,7 +725,7 @@ function handleGameMessage(msg) {
       ui.setRole(msg.role);
       applyRoleView(); // hunters go first-person (no own body); props stay third-person
       applyToolView(); // show the hunter tool bar + held tool (or hide for a prop)
-      if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Pick a tool (1–2), then hunt with the rifle.', 3500);
+      if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Pick a tool (1–3: rifle · finder · grenade), then hunt.', 3500);
       else ui.banner('You are a PROP. Look at an object and press E to disguise.', 3500);
       break;
 
@@ -957,6 +973,21 @@ function onEvent(msg) {
       // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
       // (o*) to the confirmed impact point (i*). Guarded so a missing method can't throw.
       if (scene && scene.spawnTracer) scene.spawnTracer(msg.ox, msg.oy, msg.oz, msg.ix, msg.iy, msg.iz);
+      break;
+    case 'grenade':
+      // HUNTER GRENADES: the host-computed blast exploded at (x,y,z). Everyone sees the 3D
+      // explosion flash there; a nearby local player also gets a brief screen flash. Per-target
+      // damage rides the normal 'hurt'/'eliminated' events + the health snapshot. Feedback for
+      // the thrower: redeemed (a prop-kill healed them to full) or the backfire they soaked.
+      if (scene && scene.spawnExplosion) scene.spawnExplosion(msg.x, msg.y, msg.z);
+      if (scene && scene.blastFlashAt) {
+        const flash = scene.blastFlashAt(msg.x, msg.y, msg.z); // 0..1 by camera distance
+        if (flash > 0) ui.flashScreen(flash);
+      }
+      if (msg.by === state.selfId) {
+        if (msg.redeemed) ui.feed('Grenade kill — redeemed to full health!');
+        else if (msg.backfire > 0) ui.feed(`Grenade backfire off decoys! −${msg.backfire}%`);
+      }
       break;
     case 'hurt':
       // Light feedback for the local player (health itself rides the snapshot HUD).

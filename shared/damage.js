@@ -74,3 +74,45 @@ export function damageForPlayerHit(disguiseType, catalog, cfg) {
 export function wrongGuessPenalty(cfg) {
   return resolveDamageCfg(cfg).base;
 }
+
+// ---- HUNTER GRENADES (2026-07-17, VRmike) ---------------------------------
+// PURE grenade tuning + falloff math, shared by the host referee (applyGrenade) and the
+// offline guard (tools/check-grenade.mjs) so both run the EXACT same numbers.
+//
+// Fill in defaults for a partial/absent rules.grenade block. Kept in sync with the
+// documented block in shared/config/rules.json.
+//   baseDamage      : FRACTION of full health (0.45 = 45%). The referee scales by startHealth.
+//   fullDamageRadius: metres of MAX damage (d <= this => full).
+//   falloffDistance : metres ADDED past fullDamageRadius over which damage lerps to ~0.
+// Authored as fullDamageRadius + falloffDistance (1 + 2), NEVER as an outer radius of 3 —
+// VRmike wants the two knobs editable independently without doing the 1+2 math by hand.
+export function resolveGrenadeCfg(g) {
+  const c = g || {};
+  const num = (v, dflt) => (Number.isFinite(v) ? v : dflt);
+  return {
+    baseDamage: num(c.baseDamage, 0.45),
+    fullDamageRadius: num(c.fullDamageRadius, 1),
+    falloffDistance: num(c.falloffDistance, 2),
+  };
+}
+
+// Total outer radius of a blast (metres) = fullDamageRadius + falloffDistance. Derived, never
+// stored — so editing either knob moves the edge with no second number to keep in sync.
+export function grenadeOuterRadius(cfg) {
+  const c = resolveGrenadeCfg(cfg);
+  return c.fullDamageRadius + c.falloffDistance;
+}
+
+// Distance falloff multiplier (0..1) for a target `d` metres from the blast CENTRE:
+//   d <= fullDamageRadius            => 1                       (full)
+//   fullDamageRadius < d < outer     => 1 - (d - fullDamageRadius) / falloffDistance  (lerp)
+//   d >= outer (= full + falloff)    => 0                       (out of range)
+// With the shipping 1 + 2: d=1 => 1, d=2 => 0.5, d=2.99 => ~0.005, d>=3 => 0. Applied to BOTH
+// the prop-player damage and the hunter backfire. Pure so the guard asserts the exact curve.
+export function grenadeFalloff(d, cfg) {
+  const c = resolveGrenadeCfg(cfg);
+  const outer = c.fullDamageRadius + c.falloffDistance;
+  if (!(d > c.fullDamageRadius)) return 1; // within the full-damage radius (incl. d <= 0)
+  if (d >= outer) return 0; // past the outer edge — no damage
+  return 1 - (d - c.fullDamageRadius) / c.falloffDistance;
+}

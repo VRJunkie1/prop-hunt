@@ -48,5 +48,11 @@
     "largeMult": 0.34,
     "defaultMult": 1.0,
     "selfScalesWithSize": false
+  },
+  "_grenadeComment": "HUNTER GRENADES — the hunter's THIRD selectable tool (2026-07-17, VRmike). LEFT-CLICK (PC) / the fire button (mobile) while the grenade is selected fires a RAYCAST from the aim point into the world; the grenade explodes INSTANTLY at the first hit point (no arc/travel/fuse/cooldown). All three knobs are HOT-TUNABLE (no rebuild). baseDamage is a FRACTION of full health (0.45 = 45%); the referee multiplies it by startHealth to get HP, then by the SAME prop-size multiplier the rifle uses (so tiny burger props take proportionally more and die — the whole point). RADIUS + FALLOFF are authored as 1 + 2, NOT as an outer radius of 3, exactly as VRmike asked (less error-prone to edit): fullDamageRadius = the metres of MAX damage; falloffDistance = the metres ADDED past it over which damage lerps to ~0, so total range = fullDamageRadius + falloffDistance = 1 + 2 = 3. d<=1m => full (base×sizeMult); 1m<d<3m => base×sizeMult×(1-(d-1)/2); d>=3m => 0. BACKFIRE: the blast also hurts the THROWING hunter through non-player decoy props (the same 'could be a player but isn't' objects the rifle backfires on) — flat baseDamage×falloff, NO size multiplier, so ~3 direct decoy hits (0.45×3=1.35 of full HP) are lethal WITHOUT hardcoding '3'. NO friendly fire, NO direct self-damage. REDEMPTION: if the blast kills >=1 prop PLAYER the thrower is restored to FULL HP even when backfire would have been lethal (host resolves prop-player damage first, then decides backfire). Host-authoritative — the client only sends its aim origin/direction; the host recomputes the blast point. See shared/damage.js grenadeFalloff + shared/referee.js applyGrenade + notes/hunter-grenades.md.",
+  "grenade": {
+    "baseDamage": 0.45,
+    "fullDamageRadius": 1,
+    "falloffDistance": 2
   }
 }

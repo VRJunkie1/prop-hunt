@@ -16,7 +16,7 @@
 import { C2S, S2C, PHASE, ROLE } from './protocol.js';
 import { loadRapier, PhysicsWorld, isFixedBodyEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
-import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty } from './damage.js';
+import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius } from './damage.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -296,6 +296,9 @@ export class Referee {
         break;
       case C2S.FIND:
         this.applyFind(player);
+        break;
+      case C2S.GRENADE:
+        this.applyGrenade(player, msg);
         break;
       case C2S.DEBUG:
         this.handleDebug(player, msg);
@@ -700,6 +703,133 @@ export class Referee {
       }
     }
     send(hunter, { t: S2C.EVENT, kind: 'find', ok: true, cooldownMs: cd, hits });
+  }
+
+  // ---- HUNTER GRENADES (hunter tool #3, host-authoritative) ---------------
+  // Throw a grenade. The client sends ONLY its aim direction (dx,dy,dz — the same camera-forward
+  // the rifle sends); it NEVER sends a hit point. The HOST is the authority: it raycasts that aim
+  // through its OWN world (reusing the rifle's raycastShot) and explodes INSTANTLY at the first hit
+  // (no arc/travel/fuse). NO COOLDOWN — grenades are balanced by risk (the backfire), not a timer.
+  // Then _resolveGrenadeBlast does all the damage + the redemption rule. A hacked client can aim
+  // anywhere (legal) but can never move the blast to fake a kill or dodge backfire, and with no
+  // physics world yet (2D fallback) the blast simply centres on the aim ray end (nothing to hit).
+  applyGrenade(hunter, msg) {
+    if (!hunter || hunter.role !== ROLE.HUNTER || !hunter.alive) return;
+    if (this.phase !== PHASE.HUNTING) return; // hunters act only during HUNTING (frozen in HIDING)
+
+    // Aim direction: trust the client's camera-forward; fall back to yaw/pitch if absent. Same
+    // normalisation applyShot uses (a client can always aim; only the WORLD is host-judged).
+    let dx = Number(msg && msg.dx), dy = Number(msg && msg.dy), dz = Number(msg && msg.dz);
+    let len = Math.hypot(dx, dy, dz);
+    if (!(len > 1e-6) || !Number.isFinite(len)) {
+      const cp = Math.cos(hunter.pitch || 0);
+      dx = -Math.sin(hunter.yaw) * cp;
+      dy = Math.sin(hunter.pitch || 0);
+      dz = -Math.cos(hunter.yaw) * cp;
+      len = 1;
+    }
+    dx /= len; dy /= len; dz /= len;
+
+    const EYE = 1.5; // eye height above the foot (matches applyShot)
+    const eye = { x: hunter.pos.x, y: (hunter.pos.y || 0) + EYE, z: hunter.pos.z };
+    const range = this.rules.shootRange != null ? this.rules.shootRange : 120;
+
+    // HOST recomputes the blast centre — the first thing the aim ray touches (never a client point).
+    let center = { x: eye.x + dx * range, y: eye.y + dy * range, z: eye.z + dz * range };
+    if (this.physics && this.physics.raycastShot) {
+      const r = this.physics.raycastShot(hunter.id, eye, { x: dx, y: dy, z: dz }, range);
+      if (r) center = r.point;
+    }
+
+    this._resolveGrenadeBlast(hunter, center);
+  }
+
+  // Resolve a grenade blast at `center` (host-authoritative). Split from applyGrenade so the
+  // offline guard (tools/check-grenade.mjs) can drive it with a synthetic centre + no Rapier.
+  // ORDERING IS LOAD-BEARING (the redemption rule):
+  //   1. compute EVERY prop-PLAYER's damage (base×size-multiplier×falloff) AND the total hunter
+  //      BACKFIRE (flat base×falloff off non-player decoy props) for this blast — WITHOUT applying
+  //      anything yet;
+  //   2. apply the prop-player damage and note whether any prop player DIED as a result;
+  //   3. if a prop player died => the thrower is REDEEMED to FULL HP and the backfire is forgiven
+  //      (never applied); if nobody died => apply the backfire, which may kill the hunter.
+  // So the backfire can NEVER kill the hunter before we've checked whether a prop-kill redeemed
+  // them. NO friendly fire (other hunters are never targeted) and NO direct self-damage (the blast
+  // only reaches the thrower THROUGH decoy props). Broadcasts the explosion for everyone's flash.
+  _resolveGrenadeBlast(hunter, center) {
+    const g = resolveGrenadeCfg(this.rules.grenade);
+    const startHealth = this._startHealth();
+    const baseHP = g.baseDamage * startHealth; // fraction of full health -> HP (0.45*100 = 45)
+    const outer = grenadeOuterRadius(g); // = fullDamageRadius + falloffDistance (1 + 2), derived
+    const catalog = this._combatCatalog();
+
+    // (1a) Prop-PLAYER damage: base × their disguise SIZE multiplier (the same curve the rifle
+    // uses, so tiny burger props take proportionally more) × distance falloff. Computed first,
+    // applied in (2). Other hunters are never in this list (props only) => no friendly fire.
+    const playerHits = [];
+    for (const p of this.players.values()) {
+      if (p.role !== ROLE.PROP || !p.alive) continue;
+      const d = dist3(center, p.pos);
+      if (d >= outer) continue;
+      const f = grenadeFalloff(d, g);
+      if (f <= 0) continue;
+      const mult = multiplierForDisguise(p.disguise, catalog, this.rules.damage);
+      const dmg = baseHP * mult * f;
+      if (dmg > 0) playerHits.push({ player: p, dmg });
+    }
+
+    // (1b) BACKFIRE: flat base × falloff (NO size multiplier — a burger decoy and a table decoy
+    // cost the thrower the same, so ~3 direct decoy hits = lethal without hardcoding "3") summed
+    // over every non-player DECOY prop in range — the same "could be a player but isn't" objects
+    // the rifle backfires on (a disguisable, non-architecture prop instance). Architecture and
+    // non-disguisable knockables never backfire.
+    let backfire = 0;
+    for (const prop of this.props) {
+      if (prop.disguisable === false) continue; // not a "could-be-a-player" decoy
+      const c = catalog[prop.type];
+      if (!c || isArchEntry(c)) continue; // architecture (walls/floors) never backfires
+      const pos = this._propBlastPos(prop);
+      const d = dist3(center, pos);
+      if (d >= outer) continue;
+      const f = grenadeFalloff(d, g);
+      if (f > 0) backfire += baseHP * f;
+    }
+
+    // (2) Apply the prop-player damage; track whether any prop player died from THIS blast.
+    let killedProp = false;
+    for (const h of playerHits) {
+      const wasAlive = h.player.alive;
+      this._damagePlayer(hunter, h.player, h.dmg, false);
+      if (wasAlive && !h.player.alive) killedProp = true;
+    }
+
+    // (3) Redemption vs backfire. A prop-player kill restores the thrower to FULL HP (explicit,
+    // even though _damagePlayer's kill-refill already did it) and the backfire is forgiven. Only
+    // if NOBODY died does the backfire land — possibly fatally.
+    let redeemed = false;
+    if (killedProp) {
+      if (hunter.alive) hunter.health = startHealth; // redeemed to full (backfire never applied)
+      redeemed = true;
+    } else if (backfire > 0) {
+      this._damagePlayer(hunter, hunter, backfire, true); // self-inflicted via decoys; may be lethal
+    }
+
+    this.broadcast({
+      t: S2C.EVENT, kind: 'grenade', by: hunter.id,
+      x: round2(center.x), y: round2(center.y), z: round2(center.z),
+      hits: playerHits.filter((h) => !h.player.alive).length,
+      backfire: round2(redeemed ? 0 : backfire), redeemed,
+    });
+  }
+
+  // Best-known world position of a decoy prop for blast-distance: its LIVE shoved x/z (propLive,
+  // updated each tick from awake transforms) when the physics world is up, else its spawn x/z;
+  // y comes from the prop's rest offset (props sit on surfaces near their authored height). Used
+  // by _resolveGrenadeBlast; falls back cleanly to the spawn entry when there's no physics (the
+  // offline guard sets prop.x/y/z directly).
+  _propBlastPos(prop) {
+    const l = this.propLive && this.propLive.get(prop.id);
+    return { x: l ? l.x : prop.x, y: prop.y || 0, z: l ? l.z : prop.z };
   }
 
   // ---- lobby settings -----------------------------------------------------
@@ -1392,6 +1522,9 @@ function shuffle(arr) {
   }
 }
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+// 3D distance between two {x,y,z} points — grenade blast falloff is spherical (a prop 1 m away
+// in any direction is at full damage), so distance is measured in all three axes.
+const dist3 = (a, b) => Math.hypot((a.x || 0) - (b.x || 0), (a.y || 0) - (b.y || 0), (a.z || 0) - (b.z || 0));
 const round2 = (v) => Math.round(v * 100) / 100;
 const round3 = (v) => Math.round(v * 1000) / 1000;
 // Wrap an angle delta into [-π, π] so continuous disguise rotation always turns the
