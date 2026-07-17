@@ -544,16 +544,21 @@ export class PhysicsWorld {
         if (bodyDesc.setCcdEnabled) bodyDesc.setCcdEnabled(true);
         const body = this.world.createRigidBody(bodyDesc);
         const col = this.world.createCollider(desc.setFriction(0.8).setRestitution(this.feel.restitution).setDensity(dens), body);
-        // SPAWN AT REST, ASLEEP (floating-fixed-props round 4, 2026-07-17). A fresh-match prop is
-        // SEATED on the collider beneath it (seatMapData), so it spawns in a valid resting pose — put
-        // it straight to sleep so the dense restaurant map is QUIET at match start (phone budget: a
-        // sleeping body costs nothing) instead of every plate/pot settling at once. It wakes the
-        // instant a player, a shot, or a shoved neighbour touches it — so it is fully dynamic and
-        // shovable, it just doesn't spontaneously tumble off a slightly-domed hull before anyone
-        // interacts. This is what makes "everything dynamic" phone-safe AND stops the newly-dynamic
-        // clutter from LOOKING fixed-yet-floating (it reacts the moment it is touched). A mid-round
-        // joiner's already-moving props (`moved`) keep their broadcast motion — only fresh spawns sleep.
-        if (!moved && body.sleep) body.sleep();
+        // SPAWN AWAKE, LET IT SETTLE (physics settle round 5, 2026-07-17, VRmike). Round 4 put every
+        // fresh prop straight to SLEEP for a quiet-at-spawn phone budget — but a sleeping rigid body
+        // takes NO gravity step until a collision wakes it, so any prop authored even a hair above its
+        // true support (grounding.js leaves anything within GROUND_TOL=0.12 m as authored, and several
+        // items sit ~0.1–0.8 m proud of the mesh top beneath them) HUNG IN THE AIR forever. That is
+        // VRmike's "they fall, but ONLY after I jump into them": the player body slamming in is the wake
+        // event. It also broke wake-propagation — a bottle never in contact with its table can't be
+        // woken by shoving that table away. THE FIX per VRmike's approved plan: do NOT force-sleep; let
+        // the prop fall under gravity and come to rest ON its support in the first ~1–2 s of the match
+        // (Rapier auto-sleeps it once its velocity stays near zero, so steady state is still quiet — only
+        // the match-start settle is busy, a brief hitch VRmike pre-approved as worth the correctness).
+        // Nothing spawns interpenetrating (seatMapData already seated embeds onto their hull tops), so
+        // there is no launch — bodies simply drop the small spawn gap and settle in real contact, which
+        // is exactly what makes a later "shove the table" propagate a wake to the items that rested on it.
+        // A mid-round joiner's already-moving props (`moved`) carry a live transform and are left alone.
         this._propHandles.add(col.handle);
         this._propHandleToId.set(col.handle, p.id);
         // Keep the spawn transform so the failsafe can respawn a prop that escapes the

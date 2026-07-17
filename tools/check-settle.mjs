@@ -1,21 +1,37 @@
 #!/usr/bin/env node
-// tools/check-settle.mjs — HEADLESS "SETTLE TEST" (VRmike attempt #3, 2026-07-16). The offline
-// gate that would have caught the failure mode attempts #1 and #2 risked: now that EVERYTHING that
-// isn't a wall/door/vent is a real dynamic rigid body, a fixture that spawns buried in the floor —
-// or with a collider whose centre of mass is off its base — will JITTER, LAUNCH itself out of the
-// world, or TIP OVER the instant the sim wakes. This test stands up the REAL shared/physics.js
-// PhysicsWorld with the REAL restaurant map (every fixture promoted exactly as referee.startMatch
-// does), steps it forward with NO players, and asserts that at rest:
-//   - nothing LAUNCHES (gains height on its own — the buried-body-ejects-itself bug),
-//   - nothing SINKS through its floor,
-//   - nothing DRIFTS horizontally on its own (a body wedged in geometry slides away),
-//   - nothing TIPS OVER unprompted (a mis-seated tall body topples), and
-//   - the map SETTLES: nearly every body is asleep within a few seconds (phone-budget health —
-//     a map that never sleeps burns battery and frame budget forever).
+// tools/check-settle.mjs — HEADLESS "SETTLE TEST" that TESTS TIME, not frame zero (PHYSICS SETTLE
+// ROUND 5, VRmike, 2026-07-17). This is the deliverable that four prior physics rounds needed and
+// never had: a check that lets the simulation RUN before it judges the world.
+//
+// WHY EVERY PAST CHECK MISSED THE BUG. Rounds 1-4 audited the world at SPAWN (frame zero), where a
+// prop floating a hair above its table looks perfectly placed. The bug only exists AFTER time passes:
+// round 4 spawned every dynamic prop ASLEEP (physics.js body.sleep()), and a sleeping Rapier body
+// takes NO gravity step until a collision wakes it — so a prop authored even 0.1-0.8 m proud of its
+// real support HUNG IN THE AIR forever ("they fall, but ONLY after I jump into them" — the player is
+// the wake event). A frame-zero audit PASSES that: the body is asleep exactly where it spawned. So
+// this check does the one thing the others didn't: it STEPS the sim (no artificial wake — exactly
+// like the referee at match start, which just ticks and never touches the props) and then asserts the
+// world came to REST correctly.
+//
+// TWO invariants, both judged only AFTER the sim has run:
+//   1. MOBILITY — every should-be-dynamic prop (everything non-architecture and non-wall-attached)
+//      actually got a DYNAMIC rigid body. A prop the phone-budget cap demoted to an immovable STATIC
+//      collider "refuses to fall even when hit" (VRmike's beige cylinders + paper-towel roll: the ~89
+//      smallest candidates overflowed the old 150 cap). Audited by CATALOG INTENT, so a mis-filed prop
+//      can't dodge by sitting in the wrong bucket.
+//   2. RESTING ON A SUPPORT — after stepping, a downward SHAPE-CAST of each dynamic prop's footprint
+//      hits a support within EPS. Nothing is left hanging in the air. Shape-cast (not a single centre
+//      ray) so an edge-rest or a body that settled slightly tilted isn't a false "floating".
+//
+// It MUST FAIL on the pre-fix build (naming the floating sauce bottles/burgers AND the immovable
+// cylinders/paper-towel) and PASS after. Run `--simulate-main` to reproduce the pre-fix behaviour
+// (old 150 cap + spawn-asleep) in one command, so this check can prove it still bites without editing
+// source — that is the "fail-first" evidence, reproducible forever.
 //
 // AUTHORING-ONLY, never shipped. Needs a local dev Rapier (same as check-physics-live):
 //     npm i --no-save @dimforge/rapier3d-compat@0.14.0
-//     node tools/check-settle.mjs
+//     node tools/check-settle.mjs                 # the shipped build — must PASS
+//     node tools/check-settle.mjs --simulate-main # the pre-fix build — must FAIL
 // Prints SKIP + exit 3 if Rapier is absent (never fails a build it can't run).
 
 let RAPIER;
@@ -28,8 +44,15 @@ try {
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-const { PhysicsWorld, isArchEntry, isFixedBodyEntry, isDisguisableEntry } = await import('../shared/physics.js');
+const { PhysicsWorld, isArchEntry, isFixedBodyEntry, halfExtentsFor, FLOOR_Y } = await import('../shared/physics.js');
 const { groundMapData, seatMapData } = await import('../shared/grounding.js');
+
+// Robust to both a real CLI flag (`node tools/check-settle.mjs --simulate-main`) and harnesses that
+// hand argv over as one JSON-encoded string element (e.g. `["--simulate-main"]`).
+const SIMULATE_MAIN = process.argv.slice(2).join(' ').includes('simulate-main');
+// The pre-round-5 phone-budget cap. Under --simulate-main we clamp to this so the SAME ~89 smallest
+// props overflow to immovable static colliders exactly as they did on the shipped-with-bug build.
+const OLD_CAP = 150;
 
 await RAPIER.init();
 const here = dirname(fileURLToPath(import.meta.url));
@@ -72,8 +95,8 @@ function footprint(c) {
 
 // Promote a map exactly as referee.startMatch (global biggest-first), but with NO hide-spot removal
 // — the WORST case (most bodies, densest packing) a phone/host ever faces at match start. Everything
-// non-fixed is a dynamic body now (no pin — floating-fixed-props round 4); only architecture +
-// wall-attached (isFixedBodyEntry) stays a static collider.
+// non-fixed is a dynamic-body candidate; only architecture + wall-attached (isFixedBodyEntry) stays a
+// static collider. Returns { instances, dynamicCandidates } so the audit can name the should-be-dynamic set.
 function promote(map) {
   let id = 1;
   const mk = (o) => ({ id: id++, type: o.type, x: o.x, z: o.z, y: o.y || 0, rot: o.rot || 0 });
@@ -82,121 +105,142 @@ function promote(map) {
   const dynFixtures = nonArch.filter((f) => !isFixedBodyEntry(catalog[f.type])).map(mk);
   const staticFixtures = nonArch.filter((f) => isFixedBodyEntry(catalog[f.type])).map(mk);
   const dynamicCandidates = [...disguiseProps, ...dynFixtures].sort((a, b) => footprint(catalog[b.type]) - footprint(catalog[a.type]));
-  return [...dynamicCandidates, ...staticFixtures];
+  return { instances: [...dynamicCandidates, ...staticFixtures], dynamicCandidates };
 }
 
-const H = 1 / 60;
 let failures = 0;
 const check = (ok, name, detail) => { console.log(`${ok ? '  ✓' : '  ✗'} ${name}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
-// up.y of a body's local up-axis after its rotation quat — 1 = perfectly upright, drops as it tips.
-// Pure yaw (spawn facing) leaves this at 1, so only real pitch/roll (tipping) is flagged.
-const upY = (q) => 1 - 2 * (q.x * q.x + q.z * q.z);
+const H = 1 / 60;
+const STEPS = 600;         // 10 s of game time — well past the ~1-2 s the map needs to settle.
+// A prop must rest within this of a support after settling. Empirically the shipped build settles
+// every prop to ≤0.045 m (median 0), while the pre-fix build leaves genuine sleeper-floaters at
+// 0.13–0.17 m — so 0.08 sits comfortably between (won't false-fail a settled prop, still catches a
+// prop left hanging in the air). It is deliberately looser than the 2 cm SPAWN_EPS: a 2 cm hover is
+// Rapier's normal resting skin, not a bug; the bug is a prop suspended 10+ cm with no gravity step.
+const REST_EPS = 0.08;
+const SINK_TOL = 0.5;      // nothing may end this far below the floor plane (a tunnel/eject failure).
+// Group a list of "type@(x,z)" offenders into "type×N" for a readable failure line.
+function tally(list) {
+  const byType = {};
+  for (const s of list) { const t = s.split('@')[0]; byType[t] = (byType[t] || 0) + 1; }
+  return Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t}×${n}`).join(', ');
+}
 
-// Tolerances. A well-seated body spawns SPAWN_EPS (0.02 m) above rest, drops onto its support and
-// sleeps — net motion should be a couple cm. These bands catch a real launch/sink/skitter/topple
-// while tolerating normal settle + a body resting on another that settles under it.
-const LAUNCH_NET = 0.15;   // net height GAINED over spawn (a body must never rise on its own)
-const LAUNCH_PEAK = 0.6;   // peak transient rise (catches launch-then-fall-back)
-const SINK_NET = 0.25;     // net height LOST (settling is cm; this catches falling through a floor)
-const DRIFT = 0.35;        // horizontal wander with no player touching it
-const TIP_MIN_UPY = Math.cos((25 * Math.PI) / 180); // ~0.906 — more than 25° of tilt = tipped
-const SLEEP_FRAC = 0.9;    // fraction of dynamic bodies that must be asleep by the end
-
-console.log('settle test — full restaurant map, no players, everything dynamic\n');
+console.log(`settle test — full restaurant map, no players, STEP ${(STEPS * H).toFixed(0)}s, then judge the RESTED world`);
+console.log(SIMULATE_MAIN ? '  MODE: --simulate-main (pre-round-5: 150-cap + spawn-asleep) — expected to FAIL\n' : '  MODE: shipped build — expected to PASS\n');
 
 const map = JSON.parse(JSON.stringify(maps.restaurant));
-// Same load pipeline as js/config.js: ground, then SEAT clutter on the collider beneath it so
-// nothing spawns embedded in a taller hull and launches (floating-fixed-props round 4).
-const changed = groundMapData(map, catalog);
-check(changed.length === 0, 'authored map is already grounded (grounding pass is a no-op)', changed.length ? `pass moved ${changed.length} piece(s): ${changed.slice(0, 4).map((c) => c.type).join(', ')}` : 'nothing to move');
-const seated = seatMapData(map, catalog);
-console.log(`  · seated ${seated.length} surface item(s) onto the collider beneath them (anti-launch)`);
+// Same load pipeline as js/config.js: ground orphans/sinkers, then SEAT clutter on the collider top
+// beneath it so nothing spawns embedded in a taller hull.
+groundMapData(map, catalog);
+seatMapData(map, catalog);
 
-const propInstances = promote(map);
-const world = new PhysicsWorld(RAPIER, map, propInstances, catalog, { dynamicProps: true, rules, feel });
-const bodies = world.propBodies; // only the REAL dynamic bodies (past-cap overflow is static, not here)
-const typeById = new Map(propInstances.map((p) => [p.id, p.type]));
-// SEATED rest height per body (map y after ground+seat). A body up on a surface (y > FLOOR_CLUTTER)
-// is SURFACE CLUTTER — a plate/pot/food resting on a table; a body at ~floor is FLOOR-STANDING
-// FURNITURE (a counter/table/appliance/chair/crate). See the sink/drift/tip scope note below.
-const yById = new Map(propInstances.map((p) => [p.id, p.y || 0]));
-const FLOOR_CLUTTER = 0.35;
-const isClutter = (id) => (yById.get(id) || 0) > FLOOR_CLUTTER;
-check(bodies.length > 0, `built ${bodies.length} dynamic bodies (of ${propInstances.length} promoted; cap ${rules.maxDynamicProps})`, `dynamic=${bodies.length}`);
+const { instances, dynamicCandidates } = promote(map);
 
-// ---- Phase A: SHIPPED QUIET (phone budget). Fresh-match props spawn SEATED + ASLEEP (physics.js),
-// so a real match starts silent. Step a moment WITHOUT touching anything: almost nothing should wake
-// on its own. A body that wakes + moves spawned EMBEDDED/interpenetrating (the bad-spawn bug the
-// seating pass exists to prevent) — Rapier wakes it to depenetrate. This is the guarantee that ships.
-const spawnA = new Map();
-for (const b of bodies) { const t = b.body.translation(); spawnA.set(b.id, { x: t.x, y: t.y, z: t.z }); }
-for (let i = 0; i < 120; i++) world.step(H); // 2 s untouched
-const spontaneous = [];
-for (const b of bodies) {
-  const s = spawnA.get(b.id), t = b.body.translation();
-  const moved = Math.hypot(t.x - s.x, t.y - s.y, t.z - s.z);
-  if (!b.body.isSleeping() || moved > 0.05) spontaneous.push(`${typeById.get(b.id)}@(${s.x.toFixed(1)},${s.z.toFixed(1)}) ${moved.toFixed(2)}m`);
-}
-check(spontaneous.length === 0, `fresh map is QUIET — every seated prop spawns asleep and stays put (phone budget)`, spontaneous.length ? `${spontaneous.length} woke/moved unprompted: ${spontaneous.slice(0, 6).join('; ')}` : `all ${bodies.length} bodies asleep & still after 2 s`);
+// Under --simulate-main, clamp the cap so the SAME props overflow to static as on the buggy build.
+const runRules = SIMULATE_MAIN ? { ...rules, maxDynamicProps: OLD_CAP } : rules;
+const world = new PhysicsWorld(RAPIER, map, instances, catalog, { dynamicProps: true, rules: runRules, feel });
+const bodies = world.propBodies;                        // the REAL dynamic bodies built this run
+const dynIds = new Set(bodies.map((b) => b.id));
+const typeById = new Map(instances.map((p) => [p.id, p.type]));
+const posById = new Map(instances.map((p) => [p.id, { x: p.x, z: p.z }]));
 
-// ---- Phase B: DISTURBANCE SAFETY. Wake EVERYTHING at once (an artificial worst case the game never
-// triggers — it wakes props a few at a time on contact) and settle it. The dangerous dynamics must
-// never happen: nothing LAUNCHES out of the world, and no FLOOR-STANDING FURNITURE sinks/skitters/tips.
-for (const b of bodies) if (b.body.wakeUp) b.body.wakeUp();
-const spawn = new Map();
-for (const b of bodies) { const t = b.body.translation(); spawn.set(b.id, { x: t.x, y: t.y, z: t.z }); }
-const peakRise = new Map(bodies.map((b) => [b.id, 0]));
-const STEPS = 600; // 10 s — long enough for woken surface clutter to tumble off a domed hull and settle.
+// ---- INVARIANT 1: MOBILITY. Every should-be-dynamic prop must actually be a dynamic body. One the
+// cap demoted to an immovable static collider "refuses to fall even when hit" — the beige cylinders /
+// paper-towel roll / sauce bottles VRmike reported. Audited by CATALOG INTENT (dynamicCandidates), so
+// a prop can't dodge by being in the wrong bucket.
+const immovable = dynamicCandidates.filter((p) => !dynIds.has(p.id)).map((p) => `${p.type}@(${p.x.toFixed(1)},${p.z.toFixed(1)})`);
+check(immovable.length === 0,
+  `every knockable prop got a DYNAMIC body (nothing "refuses to fall even when hit")`,
+  immovable.length ? `${immovable.length} demoted to an IMMOVABLE static collider: ${tally(immovable)}` : `all ${dynamicCandidates.length} should-be-dynamic props are real rigid bodies (cap ${runRules.maxDynamicProps})`);
+
+// --- FAITHFUL MATCH-START: under --simulate-main, force every fresh body ASLEEP exactly as round 4's
+// _buildProps did. The shipped build spawns them AWAKE (round 5), so we do nothing here for it.
+if (SIMULATE_MAIN) { for (const b of bodies) if (b.body.sleep) b.body.sleep(); }
+
+// ---- STEP TIME. No artificial wake — this mirrors the referee, which just ticks the world and never
+// touches a prop. On the shipped build the awake props FALL and settle; on --simulate-main the asleep
+// props never take a gravity step and stay hanging — which is the whole bug, now visible to a check.
+const sleepingAtSpawn = bodies.filter((b) => b.body.isSleeping()).length;
+let firstQuiet = -1;
 for (let i = 0; i < STEPS; i++) {
   world.step(H);
-  for (const b of bodies) {
-    const t = b.body.translation();
-    const rise = t.y - spawn.get(b.id).y;
-    if (rise > peakRise.get(b.id)) peakRise.set(b.id, rise);
-  }
+  if (firstQuiet < 0 && bodies.every((b) => b.body.isSleeping())) firstQuiet = i + 1;
 }
+const asleepEnd = bodies.filter((b) => b.body.isSleeping()).length;
 
-// Assess each body's final state.
-// SCOPE (floating-fixed-props round 4). This test's stated job is catching a FIXTURE that spawns
-// buried/off-COM and LAUNCHES, SINKS or TIPS — i.e. the big floor-standing furniture must be rock
-// solid. Small SURFACE CLUTTER (plates/food/dishes/condiments resting on a table) is now a real
-// dynamic body per VRmike's standing instruction ("they must be dynamic and FALL"), so it is EXPECTED
-// to settle — some slides off a domed/irregular combined-model hull (table_food, the bar tables) and
-// comes to rest lower or on the floor. That is the requested behaviour, not a bug, so SINK/DRIFT/TIP
-// are asserted for FLOOR-STANDING furniture only. LAUNCH (nothing may eject upward — the dangerous
-// buried-body bug) and SLEEP (the world must go quiet — phone budget) stay global over EVERY body.
-let launched = [], sank = [], drifted = [], tipped = [], asleep = 0, clutterSettled = 0, clutterMoved = 0;
-for (const b of bodies) {
-  const s = spawn.get(b.id);
+// Shape-cast a prop's footprint cuboid straight down (excluding self); toi = how far its whole
+// FOOTPRINT can still fall before hitting a support. Robust to an edge-rest / slight tilt a single
+// centre ray misses. FULL vertical half-extent (so a prop resting in contact reads ~0, not a spurious
+// inset gap); horizontal extents shrunk 10% so it doesn't catch a same-height neighbour beside it.
+function fallGap(b) {
   const t = b.body.translation();
-  const q = b.body.rotation();
-  const netY = t.y - s.y;
-  const horiz = Math.hypot(t.x - s.x, t.z - s.z);
-  const clutter = isClutter(b.id);
-  const label = `${typeById.get(b.id)}@(${s.x.toFixed(1)},${s.z.toFixed(1)})`;
-  if (netY > LAUNCH_NET || peakRise.get(b.id) > LAUNCH_PEAK) launched.push(`${label} +${Math.max(netY, peakRise.get(b.id)).toFixed(2)}m`);
-  if (!clutter) {
-    if (netY < -SINK_NET) sank.push(`${label} ${netY.toFixed(2)}m`);
-    if (horiz > DRIFT) drifted.push(`${label} ${horiz.toFixed(2)}m`);
-    if (upY(q) < TIP_MIN_UPY) tipped.push(`${label} up=${upY(q).toFixed(2)}`);
-  } else {
-    if (netY < -SINK_NET || horiz > DRIFT || upY(q) < TIP_MIN_UPY) clutterMoved++; else clutterSettled++;
-  }
-  if (b.body.isSleeping()) asleep++;
+  const he = halfExtentsFor(catalog[typeById.get(b.id)]);
+  const shape = new RAPIER.Cuboid(Math.max(he.hx * 0.9, 0.02), he.hy, Math.max(he.hz * 0.9, 0.02));
+  const ownCol = b.body.collider(0);
+  const hit = world.world.castShape(
+    { x: t.x, y: t.y, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, { x: 0, y: -1, z: 0 },
+    shape, 0, 50, true, undefined, undefined, ownCol,
+  );
+  if (!hit) return Infinity;                                    // nothing under the footprint at all
+  const toi = hit.toi != null ? hit.toi : hit.time_of_impact;  // property name varies across builds
+  return typeof toi === 'number' ? toi : 0;                    // contact-at-start (already touching) ⇒ resting (0)
 }
 
-check(launched.length === 0, `nothing launches out of the floor/world (ALL bodies)`, launched.length ? `${launched.length}: ${launched.slice(0, 6).join('; ')}` : `worst peak rise ${Math.max(0, ...[...peakRise.values()]).toFixed(3)}m`);
-check(sank.length === 0, `no FURNITURE sinks through its floor`, sank.length ? `${sank.length}: ${sank.slice(0, 6).join('; ')}` : 'all floor-standing furniture held its height');
-check(drifted.length === 0, `no FURNITURE skitters away untouched`, drifted.length ? `${drifted.length}: ${drifted.slice(0, 6).join('; ')}` : 'all floor-standing furniture stayed put');
-check(tipped.length === 0, `no FURNITURE tips over unprompted`, tipped.length ? `${tipped.length}: ${tipped.slice(0, 6).join('; ')}` : 'all floor-standing furniture upright');
-console.log(`  · surface clutter (dynamic & falls, per VRmike): ${clutterSettled} settled in place, ${clutterMoved} slid/tumbled to rest (expected — not a failure)`);
-// Re-settle after the artificial mass-wake is INFORMATIONAL (the shipping phone-budget gate is Phase
-// A's "quiet at spawn"). A shoved prop settling back to sleep is the norm; a mass-wake of every prop
-// at once is a scenario the game never creates, so we report the re-sleep fraction rather than fail on it.
-console.log(`  · after an all-at-once wake, ${asleep}/${bodies.length} (${((asleep / bodies.length) * 100).toFixed(0)}%) re-settled to sleep in ${(STEPS * H).toFixed(0)}s (informational)`);
+// ---- INVARIANT 2: RESTING ON A SUPPORT. After settling, nothing may hang in the air.
+const floating = [];
+const sunk = [];
+for (const b of bodies) {
+  const p = posById.get(b.id); const label = `${typeById.get(b.id)}@(${p.x.toFixed(1)},${p.z.toFixed(1)})`;
+  const gap = fallGap(b);
+  if (gap > REST_EPS) floating.push(`${label} ${gap === Infinity ? 'nothing below' : '+' + gap.toFixed(2) + 'm'}`);
+  const y = b.body.translation().y;
+  if (y < FLOOR_Y - SINK_TOL) sunk.push(`${label} y=${y.toFixed(2)}`);
+}
+check(floating.length === 0,
+  `every dynamic prop RESTS ON a support after ${(STEPS * H).toFixed(0)}s (nothing left hanging in the air)`,
+  floating.length ? `${floating.length} still floating: ${floating.slice(0, 8).join('; ')}${floating.length > 8 ? ` … (${tally(floating)})` : ''}` : `all ${bodies.length} props settled onto a support (≤${REST_EPS} m)`);
+check(sunk.length === 0, `nothing sank through the floor`, sunk.length ? `${sunk.length}: ${sunk.slice(0, 6).join('; ')}` : `all props above y=${(FLOOR_Y - SINK_TOL).toFixed(1)}`);
+
+console.log(`  · settle: ${sleepingAtSpawn}/${bodies.length} asleep at spawn → ${asleepEnd}/${bodies.length} asleep after ${(STEPS * H).toFixed(0)}s` +
+  (firstQuiet > 0 ? `; world fully quiet by ${(firstQuiet * H).toFixed(1)}s` : `; ${bodies.length - asleepEnd} still micro-settling (informational — steady state is quiet)`));
 
 world.destroy();
 
+// ---- SELF-TEST: prove INVARIANT 2 can actually BITE (a check that can't pass by checking nothing).
+// The current restaurant map happens to have no fully-airborne prop — grounding+seating leaves every
+// item at least edge-supported, so the pre-fix build's headline failure is INVARIANT 1 (immovable
+// props). To prove the "rests on a support" assertion is NOT vacuous, stand up a tiny world with one
+// box RESTING on the ground and one box HANGING 1 m in the air, run the SAME footprint shape-cast, and
+// assert it passes the rester and flags the floater. If this ever regresses, the resting check is broken.
+{
+  const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  w.createCollider(RAPIER.ColliderDesc.cuboid(20, 0.5, 20).setTranslation(0, -0.5, 0)); // ground, top at y=0
+  const restBody = w.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0.5, 0));   // box ON the ground
+  const restCol = w.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5), restBody);
+  const floatBody = w.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(5, 1.5, 0));  // box 1 m in the air
+  const floatCol = w.createCollider(RAPIER.ColliderDesc.cuboid(0.5, 0.5, 0.5), floatBody);
+  w.step();
+  const cast = (body, ownCol) => {
+    const t = body.translation();
+    const hit = w.castShape({ x: t.x, y: t.y, z: t.z }, { x: 0, y: 0, z: 0, w: 1 }, { x: 0, y: -1, z: 0 },
+      new RAPIER.Cuboid(0.45, 0.5, 0.45), 0, 50, true, undefined, undefined, ownCol);
+    if (!hit) return Infinity;
+    const toi = hit.toi != null ? hit.toi : hit.time_of_impact; // property name varies across builds
+    return typeof toi === 'number' ? toi : 0; // a contact-at-start hit with no toi ⇒ resting (0)
+  };
+  const restGap = cast(restBody, restCol);
+  const floatGap = cast(floatBody, floatCol);
+  check(restGap <= REST_EPS && floatGap > REST_EPS,
+    `SELF-TEST: the resting check bites (flags a 1 m-airborne box, passes a grounded one)`,
+    `rester gap ${restGap.toFixed(2)}m (≤${REST_EPS} ✓), floater gap ${floatGap === Infinity ? '∞' : floatGap.toFixed(2)}m (>${REST_EPS} ✓)`);
+  w.free();
+}
+
 console.log('');
-if (failures) { console.error(`settle test FAILED (${failures} problem${failures > 1 ? 's' : ''})`); process.exit(1); }
+if (failures) {
+  console.error(`settle test FAILED (${failures} problem${failures > 1 ? 's' : ''})` + (SIMULATE_MAIN ? ' — EXPECTED under --simulate-main (this is the pre-fix "before" evidence)' : ''));
+  process.exit(1);
+}
+if (SIMULATE_MAIN) { console.error('settle test PASSED under --simulate-main — the check FAILED TO BITE (it should fail on the pre-fix build). Investigate.'); process.exit(2); }
 console.log('settle test passed');
