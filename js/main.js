@@ -12,6 +12,7 @@ import { Session } from './net.js';
 import { Input } from './input.js';
 import { UI } from './ui.js';
 import { TauntLibrary } from './taunts.js';
+import { HudTimer } from './hud-timer.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 // Physics is imported LAZILY (loadRapier pulls WASM from a CDN) — only referenced
 // inside buildPredict(), which runs at match start, so a bare landing page still
@@ -19,6 +20,13 @@ import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 import { loadRapier, PhysicsWorld } from '/shared/physics.js';
 
 const ui = new UI();
+
+// GAME TIMER DESYNC FIX (2026-07-18, VRmike). The HUD countdown is TICKED LOCALLY off this
+// anchor and re-synced on every snapshot / phase event, so a snapshot stall can never freeze
+// or drift the displayed clock more than one snapshot interval. Round END stays host-
+// authoritative — the ticker clamps at 0 and waits for the host's phase/roundOver event. See
+// js/hud-timer.js. nowMs() (below) is the shared performance.now() clock the frame loop uses.
+const hudTimer = new HudTimer();
 
 // HUNTER-TOOLS v1 — the hunter tool bar. Built for 4+ tools; two ship now. `id` is the
 // internal tool key, `name` the label, `key` the on-screen/number-key hint. The rifle is
@@ -344,6 +352,21 @@ function applyRoleView() {
   ui.el.crosshair.classList.toggle('prop-aim', isProp);
 }
 
+// ROLE — authoritative-and-acknowledged (2026-07-18, VRmike). ONE place that applies "you are
+// a hunter/prop" to the local client: the HUD role pill, the role-driven view (first-person
+// hunter / third-person prop), and the tool bar / viewmodel. Called from BOTH rails that carry
+// the role now: the private S2C.ROLE announcement (below) AND the per-snapshot self-heal in
+// onSnapshot (which converges to the host's `hunter` flag if the one-time ROLE message was ever
+// missed or applied at the wrong moment during a round flip / team switch / mid-join). Does NOT
+// touch state.alive — alive is owned by the snapshot (ROLE's caller sets it explicitly on a
+// fresh spawn). Idempotent, so re-applying the same role is a cheap no-op.
+function applyRole(role) {
+  state.role = role;
+  ui.setRole(role);
+  applyRoleView(); // hunters go first-person (own body hidden); props stay third-person
+  applyToolView(); // hunter tool bar + held tool, or hidden for a prop; also refreshes the taunt button
+}
+
 // Ctrl+E: toggle the in-game level editor (desktop debug tool). Available only in
 // solo/local play — never mid-multiplayer (see canEnterEditor). Entering steps the
 // client OUT of the game loop into a client-local sandbox that loads the map fresh;
@@ -635,6 +658,7 @@ function handleGameMessage(msg) {
         if (wasInGame) {
           input.exitGame();
           releaseWakeLock();
+          hudTimer.stop(); // no HUD countdown in the lobby; a stale anchor mustn't paint
           state.paused = false;
           state.hasLocked = false;
           state.uiMode = false; // never carry the free-mouse state across rounds
@@ -723,11 +747,8 @@ function handleGameMessage(msg) {
     }
 
     case S2C.ROLE:
-      state.role = msg.role;
-      state.alive = true; // fresh role => alive; tool bar/viewmodel follow
-      ui.setRole(msg.role);
-      applyRoleView(); // hunters go first-person (no own body); props stay third-person
-      applyToolView(); // show the hunter tool bar + held tool (or hide for a prop)
+      state.alive = true; // a private ROLE always accompanies a fresh spawn => alive
+      applyRole(msg.role); // ONE role-application path (shared with the snapshot self-heal)
       if (msg.role === ROLE.HUNTER) ui.banner('You are a HUNTER. Pick a tool (1–3: rifle · finder · grenade), then hunt.', 3500);
       else ui.banner('You are a PROP. Look at an object and press E to disguise.', 3500);
       break;
@@ -778,6 +799,7 @@ function backToMenu(msg) {
   state.spawned = false;
   input.exitGame();
   releaseWakeLock();
+  hudTimer.stop(); // drop the HUD countdown on the way back to the menu
   destroyPredict();
   resetReadyButton();
   state.paused = false;
@@ -852,6 +874,10 @@ function updateBlindfold(seconds) {
 
 function onSnapshot(msg) {
   state.phase = msg.phase;
+  // GAME TIMER DESYNC FIX: re-anchor the local countdown to the host's authoritative
+  // time-remaining. The frame loop ticks it down smoothly between snapshots, so a snapshot
+  // stall can't freeze the HUD clock (Jie's "5s left" while the host hit 0). See hudTimer.
+  hudTimer.anchor(msg.timeLeft, nowMs());
   ui.setHud(msg);
   updateBlindfold(msg.timeLeft);
   // Newest roster for the pause scoreboard; refresh it live if the pause menu is open (the
@@ -873,6 +899,19 @@ function onSnapshot(msg) {
   }
   const me = msg.players.find((p) => p.id === state.selfId);
   if (me) {
+    // ROLE CONVERGENCE (2026-07-18, VRmike). Role now rides EVERY snapshot as our own entry's
+    // `hunter` flag — present in all three snapshot variants the host may send us (full /
+    // blindfolded-hunter / hunter-safe), because a recipient always sees themselves. The private
+    // S2C.ROLE message is a one-time announcement; if it's ever missed or applied at the wrong
+    // moment during a round flip / team switch / mid-join, THIS self-heals: we converge to the
+    // host's authoritative role within one snapshot, so a client can never stay stuck rendering /
+    // behaving as the wrong role (the bug where a player saw themselves as a HUNTER while the host
+    // had them as a PROP and a real hunter could kill them). No-op in the common case (roles agree).
+    const serverRole = me.hunter ? ROLE.HUNTER : ROLE.PROP;
+    if (serverRole !== state.role) {
+      applyRole(serverRole);
+      ui.feed(`Role re-synced to ${serverRole === ROLE.HUNTER ? 'HUNTER' : 'PROP'} (host authority).`);
+    }
     // HUNTER-TOOLS v1: own health on the HUD; track alive to drive the tool bar/viewmodel
     // and the dead-player spectator banner (hunters do NOT respawn).
     ui.setHealth(me.health);
@@ -945,6 +984,10 @@ function onEvent(msg) {
       // (and look unfreezes) the instant the host flips HIDING→HUNTING — without waiting
       // for the next snapshot. state.phase is authoritative from the event here.
       state.phase = msg.phase;
+      // Re-anchor the local HUD countdown to the new phase's authoritative duration the instant
+      // the host flips phases (HIDING→HUNTING→ENDING), so the clock resyncs without waiting for
+      // the next snapshot. Round END is still host-driven — this only sets what the ticker counts.
+      hudTimer.anchor(msg.seconds, nowMs());
       updateBlindfold(msg.seconds);
       if (msg.phase === PHASE.HIDING) ui.banner('HIDING PHASE — props, disguise now!', 2500);
       if (msg.phase === PHASE.HUNTING) ui.banner('HUNT! Hunters are loose.', 2500);
@@ -1179,6 +1222,12 @@ function frameBody(now) {
     if (editor) editor.frame(dt);
     return;
   }
+
+  // GAME TIMER DESYNC FIX: tick the HUD countdown LOCALLY every frame off the anchor set on
+  // the last snapshot / phase event. This is what keeps the clock moving (and correct) between
+  // snapshots and through a network stall; it re-syncs the instant a fresh snapshot arrives.
+  // Clamped at 0 by HudTimer — the round's real end stays host-authoritative.
+  if (hudTimer.active) ui.setTimer(hudTimer.remaining(now));
 
   // RAPID FIRE: while the primary is HELD, auto-repeat the rifle at the configured RPM for a
   // live hunter. The host still enforces its own rate cap, so this only paces client sends.

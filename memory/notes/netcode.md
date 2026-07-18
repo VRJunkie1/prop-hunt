@@ -1,5 +1,41 @@
 # netcode
 
+## 2026-07-18 SYNC BUGS: ROLE DESYNC + GAME TIMER DESYNC (B1, VRmike)
+Two playtest-reported sync-integrity bugs. Both fixed CLIENT-SIDE (no protocol change — the data
+was already on the wire); guard: `tools/check-sync-convergence.mjs`.
+
+**1) ROLE DESYNC — a player saw THEMSELVES as a HUNTER while the host had them a PROP (and a real
+hunter killed them).** Root cause: the client's OWN role came ONLY from the one-time private
+`S2C.ROLE` message. Round start, flipped rounds (`startFlippedRound`), team switch (`applySwitchTeam`
+→ `_spawnOnTeam`) and mid-join (`admitMidGame` → `_spawnOnTeam`) each fire a fresh ROLE, but if that
+single announcement is ever missed/mis-applied during the flip/switch churn, the client stays the
+WRONG role forever — rendering + behaving (view, tool bar, blindfold, disguise) as the opposite team
+while the host (and hunters) treat it as the real, opposite role.
+- **Fix — role is authoritative-and-ACKNOWLEDGED, not announce-once.** Role already rides EVERY
+  snapshot as each player's own `hunter` flag (`broadcastSnapshot`: `hunter: p.role===HUNTER`), and a
+  recipient is ALWAYS present in its own snapshot — in ALL three variants: `full`, `blindHunterSnapshot`
+  (keeps hunters ⇒ a blindfolded hunter still sees itself), `hunterSafeSnapshot` (keeps everyone). So
+  `js/main.js onSnapshot` now derives `serverRole = me.hunter ? HUNTER : PROP` and, on any mismatch with
+  `state.role`, self-heals via the ONE `applyRole()` path (HUD pill + role view + tool bar). Converges
+  within one snapshot (~1/`snapshotRate` = 66 ms). The private `S2C.ROLE` rail stays (belt-and-
+  suspenders) but is no longer load-bearing. `applyRole()` is shared by the ROLE handler + the snapshot
+  self-heal; it does NOT touch `state.alive` (alive is snapshot-owned; the ROLE handler still sets it on
+  a fresh spawn). The blindfold's role-based data withholding rides the SAME now-self-healing role, so
+  it keys correctly.
+
+**2) GAME TIMER DESYNC (~4s; Jie saw 5s left while the host hit 0 and ended the round).** Root cause:
+the HUD rendered each snapshot's `timeLeft` DIRECTLY (`ui.setHud`), so the countdown only moved when a
+snapshot arrived — a snapshot stall FROZE it and it could drift seconds.
+- **Fix — local tick between snapshots.** New PURE `js/hud-timer.js` (`HudTimer` + `formatClock`, no
+  DOM/imports). On every snapshot AND every phase event the client re-anchors `endsAt = nowMs +
+  timeLeft*1000` (`hudTimer.anchor`); the frame loop ticks `ui.setTimer(hudTimer.remaining(now))` each
+  frame. Display can't freeze and can't drift more than one snapshot interval; re-syncs on every fresh
+  anchor. **Round END stays host-authoritative:** `remaining()` clamps at 0 — the ticker waits at 0:00
+  for the host's phase/`roundOver` event; no client ends a round on its own clock. `hudTimer.stop()` on
+  the lobby + menu transitions so a stale anchor can't paint the HUD. `ui.setHud`/`ui.setTimer` both
+  format via `formatClock` (one source of truth). `nowMs()` is the shared `performance.now()` clock the
+  frame loop already uses, so anchor + tick are in one time domain.
+
 ## 2026-07-17 HOST-AUTHORITATIVE OBJECT SYNC + WORLD SNAPSHOT ON RELEASE/JOIN (VRmike)
 **Symptom:** one player knocks an object over; others — ESPECIALLY hunters spawning in after the
 hide phase — still see it UPRIGHT.

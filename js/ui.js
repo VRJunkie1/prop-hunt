@@ -1,6 +1,7 @@
 // DOM glue: screen switching, lobby list, HUD, and the kill/event feed.
 // Holds no game logic — main.js drives it from server messages.
 import { prefersTouchControls } from './input.js';
+import { formatClock } from './hud-timer.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -284,10 +285,18 @@ export class UI {
     this.el.hudRole.className = 'pill ' + role;
   }
 
-  setHud({ phase, timeLeft, propsAlive, propsTotal }) {
-    const t = Math.max(0, Math.ceil(timeLeft));
-    this.el.hudTimer.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  setHud({ timeLeft, propsAlive, propsTotal }) {
+    this.setTimer(timeLeft); // immediate render on a snapshot; the frame loop keeps it ticking
     this.el.hudProps.textContent = `Props: ${propsAlive}/${propsTotal}`;
+  }
+
+  // GAME TIMER DESYNC FIX (2026-07-18): the countdown is TICKED LOCALLY every frame from a
+  // client-side anchor (HudTimer), re-synced on each snapshot — so a snapshot stall can't
+  // freeze it. main.js's frame loop calls this with the locally-computed seconds remaining;
+  // setHud calls it too for an immediate render on each snapshot. formatClock clamps at 0:00
+  // (round END stays host-authoritative — the display just waits at 0 for the host's event).
+  setTimer(seconds) {
+    this.el.hudTimer.textContent = formatClock(seconds);
   }
 
   // HUNTER-TOOLS v1: own health as a filled BAR on the HUD (main.js passes the local player's

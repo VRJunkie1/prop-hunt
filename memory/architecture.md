@@ -173,7 +173,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   bind-pose sphere, and a disguise clone whose bounds lag its runtime rescale. WORLD
   props/scenery keep normal culling (surgical — only the handful of player objects opt
   out). Guarded by `tools/check-flicker.mjs`. Detail: `memory/notes/flicker-culling.md`.
-- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The HUD **health
+- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The **HUD countdown
+  timer is TICKED LOCALLY (2026-07-18, B1):** `setHud`/`setTimer` render via `formatClock` from
+  the PURE `js/hud-timer.js` (`HudTimer`), which `main.js` re-anchors on every snapshot + phase
+  event and ticks each frame — so a snapshot stall can't freeze/drift the clock (Jie's "5s left"
+  while the host hit 0). Clamps at 0:00; round END stays host-authoritative. The HUD **health
   readout is a filled BAR** (2026-07-12, `#hudHealth` = `.health-fill` + centred `.health-label`;
   green→amber→red): `.hud-top` spans the row and `flex-wrap`s so the bar fills the spare width on
   PC and drops to its own full-width row on mobile portrait — two fixed CSS layouts, no runtime
@@ -635,7 +639,14 @@ is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancella
 
 Snapshots expose `hunter: bool` (seekers are meant to be visible) and `disguise`
 (the prop type a prop chose). They never expose which players are undisguised
-props **to guests**. Own role comes via a private `ROLE` message. Two caveats,
+props **to guests**. Own role comes via a private `ROLE` message — but as of the
+**ROLE-CONVERGENCE fix (2026-07-18, B1)** that message is no longer load-bearing:
+the client also derives its OWN role from its snapshot entry's `hunter` flag every
+snapshot and self-heals to the host on any mismatch (`applyRole()` in `js/main.js`),
+so a missed/mis-ordered ROLE across a flip / team switch / mid-join converges within
+one snapshot instead of stranding the player as the wrong role. A recipient is always
+present in its own snapshot (incl. the blindfolded-hunter + hunter-safe variants).
+Guard: `tools/check-sync-convergence.mjs`. Two caveats,
 both by design now: (1) the **host** holds the full state in its own tab, so it
 can see undisguised props — an accepted cost of host authority; (2) an
 undisguised prop still renders as a neutral capsule and so is visible while
