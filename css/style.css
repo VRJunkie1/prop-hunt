@@ -617,7 +617,12 @@ button.ghost:hover { background: #3d2a66; }
   mix-blend-mode: screen;
 }
 
-/* Dead-player spectator banner. Non-interactive; sits over the (still-rendering) world. */
+/* Dead-player spectator banner. Non-interactive; sits over the (still-rendering) world.
+   B3 BALANCE (2026-07-18, VRmike): death vignette darkened from a faint edge tint (clear
+   until 40% radius, #00000066 corner) to a clearly-darker "you're dead" vignette — the tint
+   now begins at 25% radius and reaches ~60% black (#00000099) at the edges, roughly tripling
+   the screen darkening (~10% -> ~30% perceived). Centre stays clear so the spectator view is
+   never hidden. Playtest value, HOT-TUNABLE. */
 .spectate {
   position: absolute;
   inset: 0;
@@ -629,7 +634,7 @@ button.ghost:hover { background: #3d2a66; }
   text-align: center;
   pointer-events: none;
   z-index: 11;
-  background: radial-gradient(circle at center, #00000000 40%, #00000066 100%);
+  background: radial-gradient(circle at center, #00000000 25%, #00000099 100%);
 }
 .spectate.hidden { display: none; }
 .spectate-title { font-size: 34px; font-weight: 800; color: #ff6b6b; text-shadow: 0 0 8px #000; }

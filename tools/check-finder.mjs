@@ -49,8 +49,9 @@ const manifest = readJSON('assets', 'taunts', 'manifest.json');
 // A) CONFIG knobs.
 // ---------------------------------------------------------------------------
 console.log('\nA) config knobs exist + sane (hot-tunable radius + cooldown)');
+// HOT-TUNABLE knobs — assert shape/relationships, NOT a frozen literal, so playtest tuning
+// (e.g. B3 2026-07-18: finderRadius 8 -> 13.6) never has to touch this check.
 ok(Number.isFinite(rules.finderRadius) && rules.finderRadius > 0, `rules.finderRadius is a positive number (${rules.finderRadius})`);
-ok(rules.finderRadius === 8, 'rules.finderRadius is 8 m (the spec default)');
 ok(Number.isFinite(rules.finderCooldownSeconds) && rules.finderCooldownSeconds >= 0, `rules.finderCooldownSeconds is a non-negative number (${rules.finderCooldownSeconds})`);
 ok(rules.finderCooldownSeconds === 20, 'rules.finderCooldownSeconds is 20 s (the spec default)');
 
@@ -87,15 +88,18 @@ console.log('\nB) forced-taunt targets = exactly the props inside finderRadius (
   // ignored, one dead, plus a second hunter (never a target).
   for (const id of ['IN1', 'IN2', 'HIGH', 'EDGE', 'OUT1', 'OUT2', 'DEAD', 'HUNT2']) t.add(id, id);
   t.ref.phase = PHASE.HUNTING;
+  // Positions are authored RELATIVE to the configured radius R so this check follows the
+  // hot-tunable knob (B3 2026-07-18: R 8 -> 13.6) instead of re-hardcoding boundary distances.
+  const R = rules.finderRadius;
   t.setPlayer('HUNT', ROLE.HUNTER, 0, 0);
-  t.setPlayer('IN1', ROLE.PROP, 3, 0);          // dist 3  -> in
-  t.setPlayer('IN2', ROLE.PROP, 0, 7.9);        // dist 7.9 -> in
-  t.setPlayer('HIGH', ROLE.PROP, 5, 5, 50);     // 2D dist ~7.07 (y=50 ignored) -> in
-  t.setPlayer('EDGE', ROLE.PROP, 8, 0);         // dist 8 exactly -> in (radius is inclusive)
-  t.setPlayer('OUT1', ROLE.PROP, 8.5, 0);       // dist 8.5 -> out
-  t.setPlayer('OUT2', ROLE.PROP, 6, 6);         // 2D dist ~8.49 -> out
-  t.setPlayer('DEAD', ROLE.PROP, 1, 0, 0, false); // inside but DEAD -> not targeted
-  t.setPlayer('HUNT2', ROLE.HUNTER, 1, 1);      // a hunter, never a finder target
+  t.setPlayer('IN1', ROLE.PROP, R * 0.375, 0);       // dist 0.375R -> in
+  t.setPlayer('IN2', ROLE.PROP, 0, R * 0.9875);      // dist 0.9875R -> in (just inside)
+  t.setPlayer('HIGH', ROLE.PROP, R * 0.5, R * 0.5, 50); // 2D dist ~0.707R (y=50 ignored) -> in
+  t.setPlayer('EDGE', ROLE.PROP, R, 0);              // dist R exactly -> in (radius is inclusive)
+  t.setPlayer('OUT1', ROLE.PROP, R * 1.0625, 0);     // dist 1.0625R -> out
+  t.setPlayer('OUT2', ROLE.PROP, R * 0.75, R * 0.75); // 2D dist ~1.06R -> out
+  t.setPlayer('DEAD', ROLE.PROP, R * 0.125, 0, 0, false); // inside but DEAD -> not targeted
+  t.setPlayer('HUNT2', ROLE.HUNTER, R * 0.125, R * 0.125); // a hunter, never a finder target
 
   t.clear();
   t.ref.handleMessage('HUNT', { t: C2S.FIND });

@@ -1,5 +1,12 @@
 # Hunter Grenades — hunter tool #3 (2026-07-17, VRmike)
 
+> **B3 BALANCE UPDATE (2026-07-18):** both blast radii were scaled **×0.6** (playtest nerf — the
+> grenade was OP): `fullDamageRadius` 1 → **0.6 m**, `falloffDistance` 2 → **1.2 m**, so the
+> derived outer range is **1.8 m** (was 3 m). The "1 + 2 = 3" figures below are the ORIGINAL
+> defaults; the authoring style (two separate knobs, not a stored outer) is unchanged, and
+> `grenadeFalloff` scales entirely off config. baseDamage / size-mult / backfire / redemption are
+> untouched. Live values in `shared/config/rules.json`; see `notes/balance-tuning.md`.
+
 The hunter's THIRD selectable tool, alongside the rifle and the prop finder. Built on top of the
 prop-finder's tool-selection infrastructure (three slots now: rifle · finder · grenade). Purpose:
 a high-risk area weapon that punishes tiny hard-to-hit props (the size multiplier makes small

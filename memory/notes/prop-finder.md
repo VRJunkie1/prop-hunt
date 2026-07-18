@@ -1,5 +1,10 @@
 # Prop Finder — hunter tool #2 (2026-07-17, VRmike)
 
+> **B3 BALANCE UPDATE (2026-07-18):** `finderRadius` was tuned **8 → 13.6 m** (+70%, playtest
+> range buff). The "8 m" figures below are the ORIGINAL default — the live value is in
+> `shared/config/rules.json`. All mechanics are identical; only the radius grew. See
+> `notes/balance-tuning.md`. (WATCH: may be too strong in the restaurant's tight rooms.)
+
 The hunter's second selectable tool alongside the rifle (grenades come later, not this build).
 Purpose: help hunters LOCATE hiding props — currently too hard — by forcing every prop in an AOE
 to taunt (self-snitch through the existing 3D taunt audio).

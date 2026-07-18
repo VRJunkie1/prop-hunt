@@ -8,9 +8,11 @@
 // plus tunable config plus pure falloff math — none of which a headless page boot exercises (no peers,
 // no Rapier, no THREE). So this drives the REAL shared code paths directly and asserts the OUTPUTS the
 // spec names, plus source assertions for the client pieces:
-//   A) CONFIG knobs exist + sane (baseDamage=0.45, fullDamageRadius=1, falloffDistance=2), authored as
-//      1 + 2 (NOT an outer radius of 3), and the referee reads them.
-//   B) FALLOFF math: full at 1 m, half at 2 m, ~0 at 2.99 m, 0 at 3 m+; outer = full + falloff.
+//   A) CONFIG knobs exist + sane (baseDamage=0.45; fullDamageRadius + falloffDistance both > 0), authored
+//      as full + falloff (NOT a single stored outer radius), and the referee reads them. The radii are
+//      HOT-TUNABLE (B3 2026-07-18: scaled ×0.6 => 0.6 + 1.2), so this check reads them from config.
+//   B) FALLOFF math (relative to the configured radii): full at R m, half at R+F/2 m, ~0 just inside the
+//      outer edge, 0 at R+F m+; outer = full + falloff.
 //   C) PROP-PLAYER damage = base × disguise SIZE multiplier × falloff (tiny props take proportionally
 //      more; falloff scales it by distance).
 //   D) BACKFIRE hits ONLY non-player DECOY props (disguisable, non-architecture), FLAT base × falloff
@@ -60,6 +62,14 @@ const gcfg = resolveGrenadeCfg(rules.grenade);
 const startHealth = rules.startHealth != null ? rules.startHealth : 100;
 const baseHP = gcfg.baseDamage * startHealth; // fraction of full health -> HP (0.45 * 100 = 45)
 
+// HOT-TUNABLE blast geometry — read from config, NOT re-hardcoded, so playtest tuning (B3
+// 2026-07-18, VRmike: both knobs ×0.6 => 0.6 + 1.2 = 1.8, was 1 + 2 = 3) never breaks this check.
+// Test distances below are derived from these so the falloff assertions hold at any radius.
+const R = gcfg.fullDamageRadius;      // full-damage radius (m)
+const F = gcfg.falloffDistance;       // metres of falloff added past R
+const OUTER = R + F;                  // outer edge (0 damage at/after this)
+const HALF = R + F / 2;              // distance where falloff == 0.5 (exactly half)
+
 // Shared harness: a referee with a captured mailbox per player, positions/roles set directly (like
 // check-finder/check-combat) so we exercise the blast resolver without standing up a physics match.
 function makeTable() {
@@ -84,29 +94,31 @@ function makeTable() {
 // ---------------------------------------------------------------------------
 // A) CONFIG knobs exist + sane, authored as 1 + 2 (not an outer radius of 3).
 // ---------------------------------------------------------------------------
-console.log('\nA) config knobs (baseDamage 0.45, fullDamageRadius 1, falloffDistance 2 — authored 1+2)');
+console.log('\nA) config knobs (baseDamage 0.45; fullDamageRadius + falloffDistance authored separately, both > 0)');
 ok(rules.grenade && typeof rules.grenade === 'object', 'rules.grenade block exists');
 ok(near(rules.grenade.baseDamage, 0.45), `rules.grenade.baseDamage is 0.45 (45% of full health) — got ${rules.grenade.baseDamage}`);
-ok(rules.grenade.fullDamageRadius === 1, `rules.grenade.fullDamageRadius is 1 m — got ${rules.grenade.fullDamageRadius}`);
-ok(rules.grenade.falloffDistance === 2, `rules.grenade.falloffDistance is 2 m ADDED past full — got ${rules.grenade.falloffDistance}`);
+// HOT-TUNABLE radii — assert positivity + the authoring style, NOT frozen literals (B3 tuned 1->0.6, 2->1.2).
+ok(Number.isFinite(rules.grenade.fullDamageRadius) && rules.grenade.fullDamageRadius > 0, `rules.grenade.fullDamageRadius is a positive number — got ${rules.grenade.fullDamageRadius}`);
+ok(Number.isFinite(rules.grenade.falloffDistance) && rules.grenade.falloffDistance > 0, `rules.grenade.falloffDistance is a positive number ADDED past full — got ${rules.grenade.falloffDistance}`);
 ok(!('outerRadius' in rules.grenade) && !('radius' in rules.grenade),
-  'the blast is authored as fullDamageRadius + falloffDistance, NOT a stored outer radius of 3');
-ok(grenadeOuterRadius(gcfg) === 3, `outer radius is derived as 1 + 2 = 3 (${grenadeOuterRadius(gcfg)})`);
+  'the blast is authored as fullDamageRadius + falloffDistance, NOT a stored outer radius');
+ok(near(grenadeOuterRadius(gcfg), R + F), `outer radius is derived as fullDamageRadius + falloffDistance = ${R} + ${F} = ${(R + F)} (${grenadeOuterRadius(gcfg)})`);
 ok(baseHP === 45, `base damage resolves to ${baseHP} HP (0.45 × startHealth ${startHealth})`);
 
 // ---------------------------------------------------------------------------
 // B) FALLOFF math — full at 1 m, half at 2 m, ~0 at 2.99 m, 0 at 3 m+.
 // ---------------------------------------------------------------------------
-console.log('\nB) falloff curve (full@1m, half@2m, ~0@2.99m, 0@3m+)');
+console.log(`\nB) falloff curve (full@${R}m, half@${HALF}m, ~0 just inside ${OUTER}m, 0 at ${OUTER}m+)`);
+const nearOuter = OUTER - F * 0.005; // 0.5% of the falloff band short of the edge => ~0
 ok(grenadeFalloff(0, gcfg) === 1, 'point-blank (d=0) => full (1.0)');
-ok(grenadeFalloff(1, gcfg) === 1, 'd=1 m (full-damage radius edge) => full (1.0)');
-ok(near(grenadeFalloff(2, gcfg), 0.5), `d=2 m => half (0.5) — got ${grenadeFalloff(2, gcfg)}`);
-ok(grenadeFalloff(2.99, gcfg) > 0 && grenadeFalloff(2.99, gcfg) < 0.02, `d=2.99 m => ~0 (${grenadeFalloff(2.99, gcfg).toFixed(4)})`);
-ok(grenadeFalloff(3, gcfg) === 0, 'd=3 m (outer edge) => 0');
-ok(grenadeFalloff(5, gcfg) === 0, 'd=5 m (past the edge) => 0');
+ok(grenadeFalloff(R, gcfg) === 1, `d=${R} m (full-damage radius edge) => full (1.0)`);
+ok(near(grenadeFalloff(HALF, gcfg), 0.5), `d=${HALF} m (mid-falloff) => half (0.5) — got ${grenadeFalloff(HALF, gcfg)}`);
+ok(grenadeFalloff(nearOuter, gcfg) > 0 && grenadeFalloff(nearOuter, gcfg) < 0.02, `d just inside the outer edge => ~0 (${grenadeFalloff(nearOuter, gcfg).toFixed(4)})`);
+ok(grenadeFalloff(OUTER, gcfg) === 0, `d=${OUTER} m (outer edge) => 0`);
+ok(grenadeFalloff(OUTER + 2, gcfg) === 0, `d=${OUTER + 2} m (past the edge) => 0`);
 // Monotonic non-increasing across the full range.
 let mono = true, prev = Infinity;
-for (let d = 0; d <= 3.5 + 1e-9; d += 0.1) { const f = grenadeFalloff(d, gcfg); if (f > prev + 1e-9) mono = false; prev = f; }
+for (let d = 0; d <= OUTER + 0.5 + 1e-9; d += 0.1) { const f = grenadeFalloff(d, gcfg); if (f > prev + 1e-9) mono = false; prev = f; }
 ok(mono, 'falloff is monotonically non-increasing as distance grows');
 
 // ---------------------------------------------------------------------------
@@ -136,13 +148,13 @@ console.log('\nC) prop-player damage = base × disguise size multiplier × fallo
   t.ref.destroy();
 }
 {
-  // Falloff applied to a prop player: an undisguised prop 2 m away takes half.
+  // Falloff applied to a prop player: an undisguised prop at the mid-falloff distance takes half.
   const t = makeTable();
   const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
-  const p = t.add('P', ROLE.PROP, 2, 0, 0, { disguise: null, health: 100000 });
+  const p = t.add('P', ROLE.PROP, HALF, 0, 0, { disguise: null, health: 100000 });
   t.ref.props = [];
   t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
-  ok(near(100000 - p.health, baseHP * 0.5), `a prop player 2 m away takes half base (${(100000 - p.health).toFixed(1)} = ${(baseHP * 0.5).toFixed(1)})`);
+  ok(near(100000 - p.health, baseHP * 0.5), `a prop player at mid-falloff (${HALF} m) takes half base (${(100000 - p.health).toFixed(1)} = ${(baseHP * 0.5).toFixed(1)})`);
   t.ref.destroy();
 }
 
@@ -156,10 +168,10 @@ const archType = Object.keys(fixtures).find((t) => isArchEntry(fixtures[t]));
   const H = t.add('H', ROLE.HUNTER, 40, 0, 0, { health: 100000 }); // huge HP so backfire never kills here
   // No prop PLAYERS (so nobody dies -> the backfire actually lands). A spread of DECOY prop instances:
   t.ref.props = [
-    { id: 1, type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },        // full  -> +base
-    { id: 2, type: 'kitchen_table', disguisable: true, x: 2, y: 0, z: 0 }, // 2 m   -> +base×0.5 (FLAT: size ignored)
-    { id: 3, type: 'crate', disguisable: false, x: 0, y: 0, z: 0 },        // non-decoy -> 0
-    { id: 4, type: 'burger', disguisable: true, x: 3.5, y: 0, z: 0 },      // beyond outer -> 0
+    { id: 1, type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },            // full  -> +base
+    { id: 2, type: 'kitchen_table', disguisable: true, x: HALF, y: 0, z: 0 },  // mid   -> +base×0.5 (FLAT: size ignored)
+    { id: 3, type: 'crate', disguisable: false, x: 0, y: 0, z: 0 },            // non-decoy -> 0
+    { id: 4, type: 'burger', disguisable: true, x: OUTER + 0.5, y: 0, z: 0 },  // beyond outer -> 0
   ];
   if (archType) t.ref.props.push({ id: 5, type: archType, disguisable: true, x: 0, y: 0, z: 0 }); // architecture -> 0
   t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
