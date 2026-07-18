@@ -1695,14 +1695,24 @@ export class Scene3D {
     try {
       sound = new THREE.PositionalAudio(listener);
       sound.setBuffer(buffer);
-      // Falloff tuned to the map (restaurant ≈ 36 units): audible across the room but clearly
-      // quieter with distance so a hunter can home in by ear. Linear model → gain reaches ~0 at
-      // maxDistance, giving a firm distance cue instead of an endless inverse tail.
+      // INVERSE-SQUARE falloff, tuned to the map (restaurant ≈ 36 units) (Jie, 2026-07-18).
+      // Web Audio has no literal "inverse-square" distanceModel, but the EXPONENTIAL model with a
+      // rolloffFactor of 2 IS exactly inverse-square: gain = (d / refDistance)^-rolloff. We pick
+      // refDistance so a taunt one full MAP WIDTH away lands at TAUNT_FALLOFF_TARGET of full volume:
+      //   (size / ref)^-EXP = target  →  ref = size * target^(1/EXP) = size * √0.03 ≈ 0.1732 * size
+      // (≈6.2 units on the 36-unit map). Full volume inside that radius, inverse-square beyond,
+      // exactly 3% at one map width. The two constants are the tuning knobs — one-line retunes after
+      // playtesting. maxDistance is deliberately NOT set: non-linear distance models IGNORE it, so
+      // leaving it in would only mislead the next reader.
+      // TRADEOFF (intentional, not a bug): inverse-square never reaches true zero — a taunt anywhere
+      // on the map stays faintly audible (~3%) instead of going fully silent like the old linear
+      // model. That's the realism Jie asked to try. See notes/audio-taunts.md.
+      const TAUNT_FALLOFF_TARGET = 0.03; // gain fraction at ONE MAP WIDTH away — retune knob
+      const TAUNT_FALLOFF_EXP = 2;       // distance exponent; 2 = true inverse-square (rolloffFactor)
       const size = opts.mapSize || (this._lastMap && this._lastMap.size) || 36;
-      sound.setDistanceModel('linear');
-      sound.setRefDistance(Math.max(2, size * 0.08)); // full volume out to ~3 units
-      sound.setMaxDistance(Math.max(12, size * 1.3)); // inaudible past ~map diagonal
-      sound.setRolloffFactor(1);
+      sound.setDistanceModel('exponential');
+      sound.setRefDistance(Math.max(2, size * Math.pow(TAUNT_FALLOFF_TARGET, 1 / TAUNT_FALLOFF_EXP)));
+      sound.setRolloffFactor(TAUNT_FALLOFF_EXP);
       // Per-source trim: emitters otherwise play at full 1.0 inside refDistance, so several props
       // taunting near you stack toward the ceiling. A modest 0.85 keeps each taunt loud while
       // leaving the master limiter as a safety net rather than the mixer. See notes/audio-limiter.md.

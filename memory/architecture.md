@@ -591,7 +591,9 @@ is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancella
   background `prefetch()` on menu-open; NEVER at join). `js/scene.js` holds the audio engine
   (`AudioListener` on the camera; one `PositionalAudio` emitter per taunter, keyed by id,
   repositioned each frame in `updateTauntEmitters`; per-emitter CUT-OFF — a prop's new taunt
-  stops its previous one, different props overlap; linear falloff tuned to `map.size`). `js/ui.js`
+  stops its previous one, different props overlap; INVERSE-SQUARE falloff tuned to `map.size` —
+  exponential model + rolloff 2, refDistance = `size*√0.03` → 3% at one map width, knobs in
+  `playTaunt`, never truly silent by design). `js/ui.js`
   owns the scrolling menu (STAYS OPEN across picks — spam is the feature) + taunt/stop buttons.
   Desktop `T` key / on-screen button open it (`state.tauntMenuOpen` frees the mouse like UI mode);
   iOS audio unlocked in the gesture (`scene.unlockAudio`). Guard: `tools/check-taunts.mjs`.

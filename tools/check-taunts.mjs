@@ -202,6 +202,36 @@ console.log('\nC) scene / client audio API present in source');
   for (const sym of ['playTaunt', 'stopTaunt', 'updateTauntEmitters', 'loadAudioBuffer', 'clearAllTaunts', 'PositionalAudio', 'AudioListener']) {
     ok(scene.includes(sym), `scene.js provides ${sym}`);
   }
+
+  // INVERSE-SQUARE TAUNT FALLOFF (Jie, 2026-07-18). The distance model must be the EXPONENTIAL
+  // model with rolloffFactor 2 — that combination IS real-world inverse-square (gain = (d/ref)^-2).
+  // refDistance is derived from the map size so a taunt one full map width away lands at the 3%
+  // target: ref = size * target^(1/exp) = size * √0.03. maxDistance must be GONE (non-linear models
+  // ignore it, so a lingering setMaxDistance would only mislead), and the old linear model retired.
+  const playTaunt = (scene.match(/playTaunt\s*\([^)]*\)\s*\{[\s\S]*?\n {2}\}/) || [''])[0];
+  ok(/setDistanceModel\(\s*['"]exponential['"]\s*\)/.test(playTaunt),
+    'playTaunt uses the exponential distance model (= inverse-square with rolloff 2)');
+  ok(!/setDistanceModel\(\s*['"]linear['"]\s*\)/.test(playTaunt),
+    'playTaunt no longer uses the old linear distance model');
+  ok(/TAUNT_FALLOFF_TARGET\s*=\s*0?\.03\b/.test(playTaunt),
+    'playTaunt exposes the 3% at-map-width target as a named knob (TAUNT_FALLOFF_TARGET = 0.03)');
+  ok(/TAUNT_FALLOFF_EXP\s*=\s*2\b/.test(playTaunt),
+    'playTaunt exposes the inverse-square exponent as a named knob (TAUNT_FALLOFF_EXP = 2)');
+  ok(/setRolloffFactor\(\s*TAUNT_FALLOFF_EXP\s*\)/.test(playTaunt),
+    'playTaunt drives rolloffFactor from the exponent knob (= 2, true inverse-square)');
+  ok(/setRefDistance\([^)]*size\s*\*\s*Math\.pow\(\s*TAUNT_FALLOFF_TARGET\s*,\s*1\s*\/\s*TAUNT_FALLOFF_EXP\s*\)/.test(playTaunt),
+    'playTaunt derives refDistance = size * target^(1/exp) so gain hits 3% at one map width');
+  ok(!/setMaxDistance/.test(playTaunt),
+    'playTaunt drops setMaxDistance (ignored by non-linear models — leaving it would mislead)');
+  // Verify the math numerically: refDistance ≈ 0.1732 * size, and the resulting gain at one map
+  // width is the 3% target. This is the property Jie specified, checked end to end.
+  {
+    const size = 36, TARGET = 0.03, EXP = 2;
+    const ref = size * Math.pow(TARGET, 1 / EXP);
+    const gainAtMapWidth = Math.pow(size / ref, -EXP); // exponential model: (d/ref)^-rolloff
+    ok(Math.abs(ref - 0.1732 * size) < 0.01 * size, `refDistance ≈ 0.1732 * mapWidth (got ${ref.toFixed(2)} on 36-unit map)`);
+    ok(Math.abs(gainAtMapWidth - TARGET) < 1e-9, `gain at one map width = ${gainAtMapWidth.toFixed(4)} ≈ 3% target`);
+  }
   const main = readText('js', 'main.js');
   ok(/case 'taunt'/.test(main), "main.js handles the 'taunt' event");
   ok(/case 'tauntStop'/.test(main), "main.js handles the 'tauntStop' event");

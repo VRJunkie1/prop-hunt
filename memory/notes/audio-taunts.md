@@ -60,9 +60,8 @@ close it. A STOP button appears while your own taunt plays and kills it for ever
     to the scene and repositioned every frame (`updateTauntEmitters`, called from the render loop) to
     that player's live mesh position — so the taunt FOLLOWS a moving prop.
   - `playTaunt(playerId, buffer, {mapSize})` — CUT-OFF: stops this player's previous emitter first
-    (one voice per prop); different players overlap. Linear distance model tuned to the map:
-    refDistance ≈ size*0.08, maxDistance ≈ size*1.3 (restaurant size ≈ 36 → audible across the room,
-    clearly quieter with distance). Never throws (audio must not break the game).
+    (one voice per prop); different players overlap. **INVERSE-SQUARE distance model** tuned to the
+    map (Jie, 2026-07-18) — see the falloff section below. Never throws (audio must not break the game).
   - `stopTaunt(id)` / `clearAllTaunts()` / `loadAudioBuffer(url)` (AudioLoader → AudioBuffer, null on
     fail, Safari-safe) / `unlockAudio()` (resume the shared ctx inside a gesture, for iOS).
   - **buildWorld cleanup uses `_stopAllTaunts()`, NOT `.clear()`** — a PositionalAudio's source is a
@@ -85,6 +84,28 @@ close it. A STOP button appears while your own taunt plays and kills it for ever
     player's emitter and hides our stop button.
   - `updateTauntUi()`: the taunt button shows for a living prop in an active phase; called from
     `applyToolView` (role/alive/scene rebuild) and the phase event. Full teardown in `backToMenu`.
+
+## Distance falloff — inverse-square (Jie, 2026-07-18)
+Replaced the old **linear** model (`refDistance ≈ size*0.08`, `maxDistance ≈ size*1.3`, rolloff 1)
+with realistic **inverse-square** decay. Web Audio has no literal "inverse-square" `distanceModel`, but
+the **exponential** model with `rolloffFactor = 2` IS exactly it: `gain = (d / refDistance)^-2`.
+- Config in `playTaunt`: `setDistanceModel('exponential')`, `setRolloffFactor(TAUNT_FALLOFF_EXP)` (=2),
+  `setRefDistance(size * TAUNT_FALLOFF_TARGET^(1/EXP))`. Two named knobs, one-line retunes:
+  - `TAUNT_FALLOFF_TARGET = 0.03` — gain (fraction of full volume) at ONE MAP WIDTH away.
+  - `TAUNT_FALLOFF_EXP = 2` — distance exponent; 2 = true inverse-square.
+- The refDistance math: solve `(size/ref)^-EXP = target` → `ref = size * target^(1/EXP) = size * √0.03
+  ≈ 0.1732 * size` (≈6.2 units on the 36-unit restaurant map). Full volume inside that radius,
+  inverse-square beyond, exactly **3% at one map width**. Derived from `mapSize` so it's per-map generic.
+- **`setMaxDistance` was REMOVED** — non-linear distance models silently IGNORE it, so leaving the old
+  `size*1.3` in place would only mislead the next reader. (The linear model needed it to reach ~0.)
+- **KNOWN TRADEOFF (intentional, not a bug to "fix"):** inverse-square never reaches true zero, so a
+  taunt anywhere on the map stays **faintly audible (~3%)** instead of going fully silent like the old
+  linear model did past maxDistance. That audible-everywhere realism is the whole point of the
+  experiment Jie asked to try. If it proves annoying (hunters echo-locating props by the faint tail),
+  the two knobs above dial it down cheaply, or revert to linear entirely.
+- Asserted in `tools/check-taunts.mjs` §C: exponential model, rolloff 2, the two knobs, the
+  `refDistance = size * target^(1/exp)` formula, `setMaxDistance` absent, and a numeric end-to-end
+  check that gain lands at 3% one map width out.
 
 ## Master audio limiter (stop the clipping)
 Every taunt emitter + `playUiSound` sums at THREE's shared `AudioListener` before the speakers, so
