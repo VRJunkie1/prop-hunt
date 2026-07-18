@@ -70,3 +70,30 @@ mouse. Full flow in `memory/notes/pause-menu.md`. Input-layer contract only, her
 - The overlay decision moved to `js/main.js` and is now STATE-DRIVEN off `state.uiMode`/`state.paused`
   (not the event that fired) — see the pause-menu note. `main.js` owns the `uiMode` flag; `input.js`
   only reports the key + the lock state.
+
+## Key auto-repeat guard — held toggle keys (2026-07-18, Jie)
+
+Bug: HOLDING a toggle key on PC (T = taunt menu, Esc = pause) fires the OS key auto-repeat, so the
+browser delivers a burst of `keydown` events. Each was treated as a fresh press, so the menu strobed
+open/closed. Fix is one CHOKE POINT at the top of `Input.onKeyDown`:
+```js
+if (e.repeat) { if (e.code === 'Space') e.preventDefault(); return; }
+```
+- `KeyboardEvent.repeat === true` marks an OS auto-repeat (well supported in all modern browsers). We
+  ignore ALL of them, so EVERY toggle / one-shot below the guard (editor Ctrl/Cmd+E, UI-mode `,
+  pause Esc, taunt T, disguise E, view V, tool-select 1..9) fires EXACTLY ONCE on the initial press.
+  A future toggle key added below the guard inherits the fix automatically — don't re-check per-key.
+- CONTINUOUS held inputs (WASD movement, Space jump) are UNAFFECTED: movement is read every frame off
+  `this.keys`, and jump off the `this.jump` flag — both set by the FIRST keydown and cleared on keyup,
+  so they never needed the repeats. The Space carve-out only keeps its page-scroll `preventDefault`
+  alive while held.
+- The Esc-while-LOCKED pause path is NOT a keydown — it fires from `pointerlockchange` after the
+  browser releases the lock — so auto-repeat can't reach it; only Esc-while-unlocked goes through the
+  guard. Both are fine.
+- The level editor (`js/editor.js#_onKey`) has its OWN separate window keydown listener; it got the
+  same `if (e.repeat) return;` guard so holding a number key can't spam-spawn props and holding `?`
+  can't strobe the help panel. (Side effect: hold-to-nudge on R / +/- now needs repeated presses —
+  intended; a stuck key no longer runs away.)
+- Headless guard: `tools/check-key-repeat.mjs` drives the real `Input` with a mocked DOM, asserts a
+  held T/Esc/V/number fires its toggle exactly once, and asserts held W keeps moving through the burst
+  (movement is NOT repeat-filtered). Run: `node tools/check-key-repeat.mjs`.

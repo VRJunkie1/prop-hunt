@@ -395,6 +395,20 @@ export class Input {
   }
 
   onKeyDown(e) {
+    // AUTO-REPEAT GUARD (Jie, 2026-07-18 — HELD T/ESC strobed the taunt/pause menus).
+    // When a key is HELD DOWN the OS fires keydown over and over with event.repeat===true.
+    // EVERY toggle / one-shot action in this handler (editor Ctrl/Cmd+E, UI-mode `, pause
+    // Esc, taunt T, disguise E, view V, tool-select 1..9) must fire EXACTLY ONCE, on the
+    // INITIAL press — otherwise a held key rapidly re-triggers it and the menu flickers
+    // open/closed. Continuous held inputs (WASD movement, Space jump) don't need the repeats
+    // at all: they're read every frame off `this.keys` / the `jump` flag, which the FIRST
+    // keydown already set and keyup clears — so bailing on ALL auto-repeat here is both the
+    // fix AND safe for held movement. (One carve-out: keep suppressing Space's page-scroll
+    // default while it's held, so the page can't creep down under a held jump.)
+    if (e.repeat) {
+      if (e.code === 'Space') e.preventDefault();
+      return;
+    }
     // Ctrl/Cmd+E toggles the in-game level editor (a desktop debug tool). Handled
     // FIRST — before the pointer-lock gate (so it works from the lobby, uncaptured)
     // and before KeyE's disguise action (so edit-toggle never doubles as a disguise).

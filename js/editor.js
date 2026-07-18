@@ -482,6 +482,13 @@ export class Editor {
     const tag = (e.target && e.target.tagName) || '';
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
+    // AUTO-REPEAT GUARD (same family as input.js — Jie, 2026-07-18): every editor key here is a
+    // discrete one-shot (spawn 1..9, help toggle, rotate/scale nudge, ground-snap, delete,
+    // undelete, deselect). A HELD key must act ONCE, not on the OS auto-repeat — otherwise
+    // holding a number spawns a pile of props and holding '?' strobes the help panel. Fly
+    // movement is read continuously in frame(), NOT through this handler, so this never affects it.
+    if (e.repeat) return;
+
     // '?' toggles the help panel (matches the header hint + the ? button).
     if (e.key === '?') {
       this._toggleHelp();
