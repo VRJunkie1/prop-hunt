@@ -1,5 +1,60 @@
 # netcode
 
+## 2026-07-17 HOST-AUTHORITATIVE OBJECT SYNC + WORLD SNAPSHOT ON RELEASE/JOIN (VRmike)
+**Symptom:** one player knocks an object over; others — ESPECIALLY hunters spawning in after the
+hide phase — still see it UPRIGHT.
+
+**AUDIT (the plan demanded it before writing): the object stream already existed.** The host writes
+its live physics transforms into the snapshot every tick (`referee.broadcastSnapshot` → `props:
+this.awakePropTransforms` = `physics.awakeProps()`), clients apply/interpolate them (`scene.syncProps`
++ `scene.interpolate`; the guest predict world's fixed prop colliders are repositioned by
+`physics.syncPropTransforms`), and a mid-round joiner gets a full LIVE catch-up in STARTED
+(`referee._propsCatchup()` via `physics.allProps()`). So a *continuously-connected, non-blindfolded*
+client already sees objects move correctly. **The desync lived entirely in the blindfold path:**
+- A HUNTER is fed `props:[]` all through HIDING (`blindHunterSnapshot`, anti-cheat data-half).
+- By the time HUNTING starts, every object a hiding prop shoved has settled ASLEEP, and the per-tick
+  stream carries only AWAKE props — so it never resends them.
+- ⇒ the just-released hunter renders the FACTORY-FRESH map (props at spawn = "still upright").
+
+**FIX — three surgical changes, NO new parallel channel (extend the existing snapshot props form):**
+1. **World snapshot on blindfold release.** `referee.setPhase(HUNTING)` sends every HUNTER a ONE-TIME
+   `S2C.EVENT kind:'world' {props: _propsCatchup()}` (every dynamic body's current transform, same
+   live-form entries STARTED's catch-up uses). Client `main.js onEvent 'world'` →
+   `scene.applyWorldSnapshot(list)` SNAPS each MOVED prop's container to its transform (never-moved =
+   spawn-form, no `qx`, already correct → skipped) and `state.predict.syncPropTransforms(list)` snaps
+   the local prediction colliders. HIDING→HUNTING is the ONLY path into HUNTING, so no double-fire.
+   Props aren't blindfolded (they tracked the awake stream live) → they don't get it.
+2. **Mid-join catch-up is blindfold-gated.** `_propsCatchup(blind)` returns SPAWN-form props when
+   `blind` (no live positions leak); `admitMidGame` computes `blind = role===HUNTER &&
+   phase===HIDING`. A hunter joining mid-HIDING sees the factory-fresh map (their screen is blacked
+   out anyway) and gets the real world at the HUNTING release above — the two are ONE mechanism.
+3. **Final rest transform on sleep (part D).** `physics.awakeProps()` emits ONE last transform on the
+   awake→asleep EDGE (per-body `_wasAwake` flag, initialised `!isSleeping()`), then goes silent. A
+   body that STAYS asleep streams nothing (steady-state near-zero, unchanged); this just stops a
+   continuously-connected client from keeping a pose captured a hair before the body truly stopped.
+
+**Anti-cheat invariant preserved:** all object data still flows through the SAME withholding rule the
+blindfold enforces — withheld from a HIDING hunter (stream AND join-catch-up), released the instant
+HUNTING starts. We extended that gate; we never bypassed or reworked `blindHunterSnapshot`.
+
+**Guard:** `tools/check-object-sync.mjs` (needs the dev Rapier, like check-settle) drives a real Rapier
+world + a real Referee: knocks an object over, asserts (a) a late joiner's catch-up carries the moved
+transform, (b) an asleep body streams nothing, (c) the final rest frame arrives on sleep then stops,
+(d) a HIDING hunter gets zero object transforms (stream + catch-up) then the full world at HUNTING.
+
+**NOT done — (B) client prediction of the object you're directly pushing (OWED, deferred by design).**
+The brief's (B) asks for local dynamic sim + reconcile of the object under your hands, for
+responsiveness. It is deliberately NOT in this session: (i) a guest's shove ALREADY propagates
+correctly — the guest's kinematic avatar shoves the *real* dynamic body on the host, which streams
+back, so it's correct if slightly latency-lagged, not broken; (ii) it's the riskiest surface (it would
+make the predict world's props DYNAMIC for touched bodies only + add a `C2S` interaction message +
+smooth reconciliation), touching the settle/predict code the no-touch list guards. Design for a
+follow-up: on local shove, (a) simulate the touched body locally for instant feedback, (b) send the
+host a compact "I hit body X ~this hard at this point" event (one new C2S type; host applies it to its
+sim → wakes the body → it enters the awake stream), (c) blend the local body gently toward the host's
+incoming transforms (corrections smeared over a few frames, never a snap). Same philosophy as player
+prediction/reconciliation.
+
 ## 2026-07-13 JUMP-JUDDER FIX — vertical reconciliation is frozen while airborne (VRmike)
 **Symptom:** in FIRST person your own jump arc juddered (repeated downward jerks) — but
 watching OTHER players jump was perfectly smooth, and it happened even for the HOST.

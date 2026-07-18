@@ -39,6 +39,22 @@ transforms (`props: []`), keeping hunter entries and the propsAlive/propsTotal c
 Full prop data resumes automatically at `HUNTING`. This gate is gated on the same
 `role === HUNTER && phase === HIDING` rule as the client, so the two stay in lockstep.
 
+## 4. Object-sync rides the SAME gate (2026-07-17)
+The host-authoritative dynamic-object sync (see `notes/netcode.md`) flows through this exact
+withholding rule — it EXTENDS the gate, never bypasses it:
+- **Stream:** already covered — `blindHunterSnapshot` sets `props:[]` for a HIDING hunter.
+- **Mid-join catch-up:** `referee._propsCatchup(blind)` returns SPAWN-form props (no live shoved
+  positions) when `blind`; `admitMidGame` passes `blind = role===HUNTER && phase===HIDING`. So a
+  hunter joining mid-HIDING can't peek where props were pushed (the screen-blackout half can't stop a
+  data peek if a client deletes the overlay — the data half must).
+- **Release = catch-up:** the instant `setPhase(HIDING→HUNTING)` fires, every hunter receives a
+  one-time `S2C.EVENT kind:'world'` full snapshot of all dynamic-body transforms. This IS the
+  "hunter released from the hide phase sees the current world" case — withheld until the precise
+  moment the hunter is allowed to see it. Props (never blindfolded) don't get it.
+
+Guard: `tools/check-object-sync.mjs` (d) asserts a HIDING hunter gets zero object transforms (stream
+AND catch-up) then the full world at HUNTING, while a prop gets the transform during HIDING.
+
 ## Bug history
 Originally the **visual half was entirely missing**: `ui.setBlindfold` was called from
 main.js but never defined in `js/ui.js` (no overlay div / CSS either). So *every* client —

@@ -1013,6 +1013,18 @@ function onEvent(msg) {
       // PUBLIC log line broadcast by the host (a team switch or a mid-round join). Everyone sees it.
       if (msg.text) ui.feed(msg.text);
       break;
+    case 'world':
+      // WORLD SNAPSHOT ON BLINDFOLD RELEASE (host-authoritative object sync). A one-time full
+      // snapshot of every dynamic body's current transform, handed to a hunter the instant they're
+      // released from the HIDING blindfold. SNAP the rendered props (and the local prediction
+      // colliders) straight to it so knocked-over objects appear where they actually rest — never the
+      // factory-fresh map. Only moved props (live centre+quaternion) are applied; never-moved props
+      // are already at their built spawn pose. Guarded so a missing method / pre-scene event can't throw.
+      if (msg.props) {
+        if (scene && scene.applyWorldSnapshot) scene.applyWorldSnapshot(msg.props);
+        if (state.predict && state.predict.syncPropTransforms) state.predict.syncPropTransforms(msg.props);
+      }
+      break;
     case 'disguised':
       ui.feed(`Disguised as a ${msg.type}.`);
       break;

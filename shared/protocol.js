@@ -111,6 +111,14 @@ export const S2C = {
   //   kind:'roundOver'  { winner } -> ROLE.HUNTER or ROLE.PROP (props win if all hunters die).
   //   kind:'log'        { text } -> a PUBLIC log line for EVERY player's feed (a team switch or a
   //                     mid-round join, e.g. "VRmike switched to hunters" / "Sam joined the props").
+  //   kind:'world'      { props:[ propEntry ] } -> a ONE-TIME full world snapshot of every dynamic
+  //                     body's CURRENT transform (same live-form entries as STARTED's catch-up:
+  //                     { id, x, y, z, qx, qy, qz, qw } for moved props, spawn-form for never-moved).
+  //                     Handed to a HUNTER the instant they're released from the HIDING blindfold, so
+  //                     they see knocked-over objects where they actually rest — never the factory-fresh
+  //                     map. Rides the SAME anti-cheat gate as the blindfold (withheld until HUNTING).
+  //                     The client SNAPS its rendered props + prediction colliders to it. See
+  //                     shared/referee.js setPhase + js/main.js onEvent + js/scene.js applyWorldSnapshot.
   //   kind:'taunt'      { by, id, uncancellable } -> play taunt clip `id` as 3D positional
   //                     audio at player `by`'s live position for everyone. A new taunt from the
   //                     same `by` cuts off their previous one (one voice per prop; different

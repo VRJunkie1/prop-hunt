@@ -741,6 +741,27 @@ export class Scene3D {
     }
   }
 
+  // ONE-TIME full world catch-up (host-authoritative object sync). SNAP every dynamic prop that
+  // has MOVED (carries a live centre+quaternion) straight to its current transform, so a player just
+  // released from the HIDING blindfold — or newly admitted mid-round — sees the world as it actually
+  // is (knocked-over objects stay knocked over) instead of the factory-fresh map. Props that never
+  // moved (spawn-form entries, no quaternion) are already at their built pose, so they're skipped.
+  // Unlike syncProps this SNAPS (no interpolation — the released hunter's screen was blacked out, so
+  // there's nothing to smooth from) and does NOT mark props permanently awake; the per-tick awake
+  // stream resumes normal interpolation for anything still moving.
+  applyWorldSnapshot(list) {
+    if (!this.propMeshes || !list) return;
+    for (const q of list) {
+      if (!Number.isFinite(q.qx)) continue; // never-moved prop — already at its built spawn pose
+      const rec = this.propMeshes.get(q.id);
+      if (!rec || rec.isStatic) continue;   // unknown id / static aim-proxy (never moves)
+      rec.container.position.set(q.x, q.y, q.z);
+      rec.container.quaternion.set(q.qx, q.qy, q.qz, q.qw);
+      // Keep target coherent so a later interpolate() (if this prop re-wakes) eases from here, not spawn.
+      rec.target = { x: q.x, y: q.y, z: q.z, qx: q.qx, qy: q.qy, qz: q.qz, qw: q.qw };
+    }
+  }
+
   // Smoothly move other players + awake props toward their latest snapshot pose.
   interpolate(alpha) {
     for (const entry of this.players.values()) {
