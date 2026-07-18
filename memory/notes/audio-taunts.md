@@ -148,6 +148,14 @@ This is purely the output graph — no change to the relay/cut-off/finder logic 
 **`memory/notes/audio-limiter.md`** for the full design (incl. the "no true lookahead yet" rationale)
 and `tools/check-audio-limiter.mjs`.
 
+## Combat SFX reuse this positional path (B5, VRmike 2026-07-18)
+The B5 combat sounds (gunshot / grenade blast / finder ping / size-pitched prop ouch) are built on the
+SAME `AudioListener` → master-limiter graph and the SAME inverse-square + HRTF positional path as taunts.
+`js/scene.js` gained **`playPositionalSound(pos, buffer, opts)`** — a fire-and-forget one-shot at a FIXED
+world point (taunts follow a player; combat one-shots don't) with an optional `playbackRate` (the prop
+ouch's pitch-by-size lever). It reuses the taunt falloff/HRTF/limiter wiring verbatim. See
+**`memory/notes/combat-sfx.md`** + `tools/check-combat-sfx.mjs`.
+
 ## iOS / mobile
 Audio unlocks only inside a user gesture on iOS. `scene.unlockAudio()` (resume THREE's shared
 AudioContext) is called inside the menu-open and pick gestures. THREE's AudioLoader lazily creates

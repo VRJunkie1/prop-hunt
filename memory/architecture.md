@@ -657,6 +657,18 @@ is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancella
   (mock ctx) run the same code. Fail-silent: null/restores the direct connection on any failure — audio
   never breaks the game; iOS `unlockAudio` untouched. Web Audio has no true lookahead → a real one is a
   deferred AudioWorklet follow-up. Detail: `memory/notes/audio-limiter.md`.
+- **COMBAT SFX (2026-07-18, VRmike B5).** Four synthesized combat sounds — gunshot, grenade blast,
+  finder activation ping, and ONE shared prop "ouch" — hooked onto EXISTING broadcast events in
+  `js/main.js onEvent` (shot / grenade / find-ok / hurt), NO gameplay/damage/netcode change. They reuse
+  the taunt audio engine: `js/scene.js playPositionalSound(pos,buffer,opts)` plays a fire-and-forget
+  POSITIONAL one-shot at a fixed world point through the SAME `AudioListener → master limiter` path
+  (inverse-square falloff + HRTF), with an optional `playbackRate`. The shooter's own gunshot is
+  non-positional (`playUiSound`) so it isn't self-panned. The prop ouch is PITCH-SHIFTED by prop size:
+  `shared/damage.js ouchPlaybackRate`/`ouchRateForDisguise` derive the rate from the SAME
+  `entrySize`/`halfExtentsFor` footprint the damage curve scales by (tiny = high squeak, big = low
+  groan) — one size source, so pitch + damage can't drift. Sounds are our own generator scripts under
+  `tools/` (like `gen-finder-deny.mjs`), fail-silent throughout. Detail: `memory/notes/combat-sfx.md`;
+  guard `tools/check-combat-sfx.mjs`.
 
 ## Role/identity hiding
 

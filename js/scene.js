@@ -204,6 +204,11 @@ export class Scene3D {
     // which is unlocked on the first user gesture (unlockAudio) for iOS. See notes/audio-taunts.md.
     this._audioListener = null;
     this._tauntEmitters = new Map(); // playerId -> { obj, sound, endsAt }
+    // COMBAT SFX (2026-07-18, VRmike B5): active fire-and-forget POSITIONAL one-shots (gunshot at the
+    // muzzle, grenade at the blast, prop ouch at the prop). Each is a PositionalAudio on a bare
+    // Object3D at a FIXED world point (unlike taunts, which follow a player); reaped when it finishes
+    // (updateTauntEmitters). Routed through the SAME listener → master-limiter path as taunts.
+    this._oneShots = []; // [{ obj, sound, endsAt }]
     // MASTER AUDIO LIMITER: the headroom-trim + near-brickwall compressor spliced into the
     // listener's single output hop (listener.gain → preGain → limiter → destination) so the summed
     // mix of overlapping taunts + UI sounds can't clip. Installed lazily alongside the listener
@@ -418,6 +423,7 @@ export class Scene3D {
     // match could keep playing into the new one. The AudioListener lives on the camera (re-added
     // above), so it survives the rebuild.
     this._stopAllTaunts();
+    this._stopAllOneShots(); // COMBAT SFX: kill any in-flight gunshot/grenade/ouch one-shots too
     this.players.clear();
     // scene.clear() also drops the self avatar; reset its trackers and the camera's
     // collision set / smoothed distance so a fresh match starts fully zoomed out.
@@ -1531,6 +1537,68 @@ export class Scene3D {
     } catch { /* audio blocked/unavailable → silent */ }
   }
 
+  // COMBAT SFX (2026-07-18, VRmike B5): play `buffer` as a fire-and-forget 3D POSITIONAL one-shot at
+  // world point `pos` ({x,y,z}) — the gunshot at the muzzle, the grenade at the blast centre, the prop
+  // ouch at the prop. Reuses the SAME positional path as taunts: THREE.PositionalAudio wired to the one
+  // shared AudioListener (→ master limiter → output), inverse-square distance falloff tuned to the map,
+  // and HRTF binaural panning. Unlike a taunt this emitter sits at a FIXED point (short clips; nothing
+  // to follow) and self-disposes when it finishes (updateTauntEmitters reaps it). `opts`:
+  //   volume  — per-source trim (0..1); keep modest, the limiter is a safety net not the mixer.
+  //   rate    — playbackRate (prop-ouch pitch-by-size; default 1.0 = unchanged pitch).
+  //   mapSize — map width for the distance-falloff refDistance (same math as playTaunt).
+  // No-op (silent, never throws) if audio is unavailable — audio must never break the game.
+  playPositionalSound(pos, buffer, opts = {}) {
+    if (!buffer || !pos) return;
+    const listener = this._ensureAudioListener();
+    if (!listener || !THREE.PositionalAudio) return;
+    let sound;
+    try {
+      sound = new THREE.PositionalAudio(listener);
+      sound.setBuffer(buffer);
+      // Inverse-square falloff, tuned to the map — IDENTICAL model to playTaunt (see the long note
+      // there): exponential distanceModel + rolloffFactor 2, refDistance solved so the sound lands at
+      // COMBAT_FALLOFF_TARGET of full volume one map width away. Two knobs, one-line retunes.
+      const COMBAT_FALLOFF_TARGET = 0.03; // gain fraction at ONE MAP WIDTH away — retune knob
+      const COMBAT_FALLOFF_EXP = 2;       // distance exponent; 2 = true inverse-square (rolloffFactor)
+      const size = opts.mapSize || (this._lastMap && this._lastMap.size) || 36;
+      sound.setDistanceModel('exponential');
+      sound.setRefDistance(Math.max(2, size * Math.pow(COMBAT_FALLOFF_TARGET, 1 / COMBAT_FALLOFF_EXP)));
+      sound.setRolloffFactor(COMBAT_FALLOFF_EXP);
+      // Per-source trim: modest so several combat sounds at once stay under the master limiter.
+      sound.setVolume(Number.isFinite(opts.volume) ? opts.volume : 0.7);
+      // PROP OUCH pitch-by-size: Web Audio playbackRate is the cheap correct pitch lever. Default 1.0
+      // leaves the gunshot/grenade/finder-ping pitch untouched.
+      if (Number.isFinite(opts.rate) && opts.rate > 0 && sound.setPlaybackRate) sound.setPlaybackRate(opts.rate);
+      sound.setLoop(false);
+    } catch { return; }
+    // HRTF binaural panning on the underlying PannerNode — its OWN guarded try/catch, exactly like
+    // playTaunt: if unavailable we keep THREE's default equalpower pan and still play the sound.
+    try {
+      const panner = sound.panner;
+      if (panner) panner.panningModel = TAUNT_PANNING.model || TAUNT_PANNING.fallback;
+    } catch { /* keep default panning — never break audio over a panner tweak */ }
+    const obj = new THREE.Object3D();
+    obj.add(sound);
+    obj.position.set(pos.x, pos.y || 0, pos.z);
+    this.scene.add(obj);
+    const durMs = ((buffer.duration || 1) / (Number.isFinite(opts.rate) && opts.rate > 0 ? opts.rate : 1)) * 1000;
+    const nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    this._oneShots.push({ obj, sound, endsAt: nowT + durMs + 250 });
+    try { sound.play(); } catch { /* autoplay blocked until unlock — reaped by endsAt anyway */ }
+  }
+
+  _disposeOneShot(rec) {
+    try { if (rec.sound && rec.sound.isPlaying) rec.sound.stop(); } catch { /* ignore */ }
+    try { if (rec.sound && rec.sound.disconnect) rec.sound.disconnect(); } catch { /* ignore */ }
+    if (rec.obj && rec.obj.parent) rec.obj.parent.remove(rec.obj);
+  }
+
+  _stopAllOneShots() {
+    if (!this._oneShots) { this._oneShots = []; return; }
+    for (const rec of this._oneShots) this._disposeOneShot(rec);
+    this._oneShots = [];
+  }
+
   // Spawn a muzzle flash at (a*) and a tracer round from (a*) to the impact point (b*),
   // visible to EVERYONE (driven by the host's 'shot' event). Short-lived; updateEffects
   // fades + removes them. Reuses shared geometries so a burst of fire allocates little.
@@ -1790,8 +1858,16 @@ export class Scene3D {
   // Per-frame: keep each active taunt emitter glued to its player's current position and retire
   // finished ones. Called from the render loop (after mesh positions update, before render).
   updateTauntEmitters() {
-    if (!this._tauntEmitters.size) return;
     const nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    // COMBAT SFX: reap finished positional one-shots (fixed-point emitters — nothing to reposition).
+    if (this._oneShots && this._oneShots.length) {
+      this._oneShots = this._oneShots.filter((rec) => {
+        const done = (!rec.sound || !rec.sound.isPlaying) && nowT > rec.endsAt;
+        if (done) { this._disposeOneShot(rec); return false; }
+        return true;
+      });
+    }
+    if (!this._tauntEmitters.size) return;
     for (const [id, rec] of this._tauntEmitters) {
       const finished = (!rec.sound || !rec.sound.isPlaying) && nowT > rec.endsAt;
       if (finished) { this._disposeTauntEmitter(rec); this._tauntEmitters.delete(id); continue; }

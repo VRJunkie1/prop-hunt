@@ -64,6 +64,50 @@ export function damageForPlayerHit(disguiseType, catalog, cfg) {
   return c.base * multiplierForDisguise(disguiseType, catalog, c);
 }
 
+// COMBAT SFX — PROP "OUCH" PITCH-BY-SIZE (2026-07-18, VRmike B5). One shared ouch clip is played
+// for every prop hit (rifle or grenade), PITCH-SHIFTED by prop size via Web Audio playbackRate.
+// The rate is derived from the SAME characteristic size the damage curve scales by (entrySize /
+// halfExtentsFor) so pitch and damage can never disagree about how big a prop is. Monotonic
+// DECREASING in size: tiny props (burger) squeak HIGH (rate > 1), big props (table/fridge) groan
+// LOW (rate < 1); an undisguised/unknown player plays NEUTRAL (rate 1.0). Pure + dependency-light so
+// the guard (tools/check-combat-sfx.mjs) asserts the mapping (a relationship, not frozen numbers).
+//
+// Anchors default to the damage curve's own smallSize/largeSize so the pitch tracks the size band
+// the multiplier uses; pass { smallSize, largeSize } (e.g. from resolveDamageCfg) to keep them in
+// lockstep if those knobs are retuned. minRate/maxRate are the pitch bounds (playback speed).
+export function resolveOuchCfg(o) {
+  const c = o || {};
+  const num = (v, dflt) => (Number.isFinite(v) ? v : dflt);
+  return {
+    smallSize: num(c.smallSize, 0.72), // <= this => tiniest => maxRate (matches damage.smallSize)
+    largeSize: num(c.largeSize, 2.2),  // >= this => biggest => minRate (matches damage.largeSize)
+    maxRate: num(c.maxRate, 1.8),      // tiniest prop — highest squeak (fastest playback)
+    minRate: num(c.minRate, 0.7),      // biggest prop — deepest groan (slowest playback)
+  };
+}
+
+// Map a characteristic SIZE (metres, from entrySize) to an ouch playbackRate. Lerps the rate DOWN as
+// size grows across [smallSize, largeSize], clamped outside — the inverse of the size→damage curve's
+// shape (small => high number), so tiny = high pitch and big = low pitch. Unknown size => 1 (neutral).
+export function ouchPlaybackRate(size, cfg) {
+  const c = resolveOuchCfg(cfg);
+  if (!(size > 0)) return 1; // unknown size => neutral pitch (undisguised player)
+  if (size <= c.smallSize) return c.maxRate;
+  if (size >= c.largeSize) return c.minRate;
+  const t = (size - c.smallSize) / (c.largeSize - c.smallSize);
+  return c.maxRate + (c.minRate - c.maxRate) * t;
+}
+
+// Ouch playbackRate for a player wearing `disguiseType` (null/unknown => 1.0, a neutral yelp).
+// Mirrors multiplierForDisguise: same catalog lookup, same entrySize source — so the pitch and the
+// damage multiplier are computed from one size, never two lists that can drift.
+export function ouchRateForDisguise(disguiseType, catalog, cfg) {
+  if (!disguiseType) return 1;
+  const entry = catalog && catalog[disguiseType];
+  if (!entry) return 1;
+  return ouchPlaybackRate(entrySize(entry), cfg);
+}
+
 // WRONG-GUESS PENALTY (2026-07-12) — the self-inflicted damage a hunter takes for shooting
 // a disguisable DECOY (a prop or non-arch fixture that could have been a player). This is a
 // FLAT `base` hit with NO size multiplier, EVER — a small burger decoy and a big table decoy

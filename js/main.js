@@ -14,6 +14,10 @@ import { UI } from './ui.js';
 import { TauntLibrary } from './taunts.js';
 import { HudTimer } from './hud-timer.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
+// COMBAT SFX (B5): the shared prop-ouch pitch-by-size mapping — derives an ouch playbackRate from
+// the SAME size the damage curve scales by, so pitch and damage can never disagree. See onEvent
+// (kind:'hurt') + playPropOuch, and notes/combat-sfx.md.
+import { ouchRateForDisguise, resolveDamageCfg } from '/shared/damage.js';
 // Physics is imported LAZILY (loadRapier pulls WASM from a CDN) — only referenced
 // inside buildPredict(), which runs at match start, so a bare landing page still
 // makes zero external requests (headless load check stays clean).
@@ -485,6 +489,67 @@ function playFinderDenied() {
     _finderDenyBufLoading = false;
     if (buf) { _finderDenyBuf = buf; scene.playUiSound(buf, 0.5); }
   });
+}
+
+// ---- COMBAT SFX (B5, VRmike 2026-07-18) -----------------------------------
+// Four synthesized combat sounds (our own generator scripts under tools/, NOT ripped): a rifle
+// GUNSHOT, a grenade BLAST, a finder activation PING, and ONE shared prop OUCH (pitch-shifted by prop
+// size). All are lazily fetch+decoded ONCE through the scene's shared audio context (like the finder
+// deny buzz) and played through the existing audio graph — the gunshot/grenade/ouch positionally
+// (inverse-square + HRTF), routed through the SAME AudioListener → master limiter as taunts; the
+// shooter's own gunshot plainly/close (non-positional). Everything is fail-silent: no audio backend
+// (headless / pre-tap iOS) => every one of these no-ops. Per-source gains are modest so the master
+// limiter stays a safety net, not the mixer. See notes/combat-sfx.md.
+const COMBAT_SFX = {
+  gunshot: { url: '/assets/combat/gunshot.wav', buf: null, loading: false },
+  grenade: { url: '/assets/combat/grenade.wav', buf: null, loading: false },
+  ouch: { url: '/assets/combat/ouch.wav', buf: null, loading: false },
+  finderPing: { url: '/assets/finder/ping.wav', buf: null, loading: false },
+};
+
+// Lazily decode a combat clip once (cached), then hand the buffer to `cb`. Silent no-op if audio /
+// the asset is unavailable (never throws). Mirrors playFinderDenied's lazy-load pattern.
+function _withCombatSfx(key, cb) {
+  const s = COMBAT_SFX[key];
+  if (!s || !scene || !scene.loadAudioBuffer) return;
+  if (s.buf) { cb(s.buf); return; }
+  if (s.loading) return;
+  s.loading = true;
+  scene.loadAudioBuffer(s.url).then((buf) => {
+    s.loading = false;
+    if (buf) { s.buf = buf; cb(buf); }
+  });
+}
+
+// Play a combat clip POSITIONALLY at world point `pos` (through the inverse-square + HRTF path).
+function playCombatSoundAt(key, pos, volume, rate) {
+  if (!scene || !pos) return;
+  _withCombatSfx(key, (buf) => {
+    if (scene.playPositionalSound) {
+      scene.playPositionalSound(pos, buf, { volume, rate, mapSize: state.map && state.map.size });
+    }
+  });
+}
+
+// Play a combat clip NON-positionally/close (the shooter's own gunshot) — a flat 2D blip through the
+// same listener/limiter, same path as the finder deny buzz.
+function playCombatSound2D(key, volume) {
+  if (!scene) return;
+  _withCombatSfx(key, (buf) => { if (scene.playUiSound) scene.playUiSound(buf, volume); });
+}
+
+// PROP OUCH: a prop PLAYER took a real hit (rifle or grenade) — play the ONE shared ouch at the prop,
+// PITCH-SHIFTED by its disguise size. The rate comes from ouchRateForDisguise over the SAME merged
+// catalog + damage-size anchors the referee's damage math uses, so pitch and damage always agree about
+// how big the prop is: tiny burger => high squeak, big fridge/table => low groan, undisguised => 1.0.
+function playPropOuch(victim) {
+  if (!victim) return;
+  const catalog = scene && scene.catalog; // merged props+fixtures set in buildWorld
+  const dcfg = resolveDamageCfg(state.cfg && state.cfg.rules && state.cfg.rules.damage);
+  const rate = ouchRateForDisguise(victim.disguise, catalog, { smallSize: dcfg.smallSize, largeSize: dcfg.largeSize });
+  // Emit at the prop's snapshot position, lifted ~1 unit so it reads at body height (like taunts).
+  const pos = { x: victim.x, y: (victim.y || 0) + 1.0, z: victim.z };
+  playCombatSoundAt('ouch', pos, 0.7, rate);
 }
 
 // PROP FINDER: reflect the finder cooldown onto its tool button ("Finder (14s)") and drive the AOE
@@ -1010,6 +1075,10 @@ function onEvent(msg) {
         state.finderCooldownUntil = performance.now() + (msg.cooldownMs || finderCooldownMs());
         if (msg.hits > 0) ui.feed(`Finder pinged ${msg.hits} prop${msg.hits === 1 ? '' : 's'}!`);
         else ui.feed('Finder: no props in range.');
+        // COMBAT SFX: the activation PING — an ascending success pulse, DISTINCT from the descending
+        // deny buzz. This 'find' ok reply is private to the activating hunter, so it fires at their own
+        // position (positional, essentially centred on the listener). Modest volume.
+        playCombatSoundAt('finderPing', { x: state.self.x, y: (state.self.y || 0) + 1.2, z: state.self.z }, 0.6);
       } else {
         state.finderCooldownUntil = performance.now() + (msg.remainMs || 0);
         playFinderDenied();
@@ -1019,6 +1088,11 @@ function onEvent(msg) {
       // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
       // (o*) to the confirmed impact point (i*). Guarded so a missing method can't throw.
       if (scene && scene.spawnTracer) scene.spawnTracer(msg.ox, msg.oy, msg.oz, msg.ix, msg.iy, msg.iz);
+      // COMBAT SFX: the gunshot report. The SHOOTER hears their own shot plainly + up-close
+      // (non-positional, so it's not weirdly panned); everyone else hears it POSITIONALLY at the
+      // muzzle (inverse-square falloff + HRTF), so they can tell direction/distance.
+      if (msg.by === state.selfId) playCombatSound2D('gunshot', 0.4);
+      else playCombatSoundAt('gunshot', { x: msg.ox, y: msg.oy, z: msg.oz }, 0.7);
       break;
     case 'grenade':
       // HUNTER GRENADES: the host-computed blast exploded at (x,y,z). Everyone sees the 3D
@@ -1026,6 +1100,9 @@ function onEvent(msg) {
       // damage rides the normal 'hurt'/'eliminated' events + the health snapshot. Feedback for
       // the thrower: redeemed (a prop-kill healed them to full) or the backfire they soaked.
       if (scene && scene.spawnExplosion) scene.spawnExplosion(msg.x, msg.y, msg.z);
+      // COMBAT SFX: the blast boom, POSITIONAL at the blast centre for everyone in earshot (the
+      // thrower is near the blast, so they hear it positionally too — that's correct).
+      playCombatSoundAt('grenade', { x: msg.x, y: msg.y, z: msg.z }, 0.8);
       if (scene && scene.blastFlashAt) {
         const flash = scene.blastFlashAt(msg.x, msg.y, msg.z); // 0..1 by camera distance
         if (flash > 0) ui.flashScreen(flash);
@@ -1040,6 +1117,14 @@ function onEvent(msg) {
       if (msg.victim === state.selfId) {
         if (msg.self) ui.feed(`You shot a decoy! −${msg.dmg}% (aim for real props).`);
         else ui.feed(`Hit! −${msg.dmg}%`);
+      }
+      // COMBAT SFX — PROP OUCH: a prop PLAYER taking a real hit (rifle or grenade) yelps, pitched by
+      // prop size. Skip msg.self (the hunter's wrong-guess/backfire self-damage — that's not a prop),
+      // and skip hunter victims (only PROP players ouch). Reads the victim's live disguise + role from
+      // the newest snapshot roster (present for everyone during HUNTING, when combat happens).
+      if (!msg.self) {
+        const victim = state.lastPlayers && state.lastPlayers.find((p) => p.id === msg.victim);
+        if (victim && !victim.hunter) playPropOuch(victim);
       }
       break;
     case 'eliminated':
