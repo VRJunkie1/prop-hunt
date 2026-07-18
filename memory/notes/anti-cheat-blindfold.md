@@ -55,6 +55,22 @@ withholding rule — it EXTENDS the gate, never bypasses it:
 Guard: `tools/check-object-sync.mjs` (d) asserts a HIDING hunter gets zero object transforms (stream
 AND catch-up) then the full world at HUNTING, while a prop gets the transform during HIDING.
 
+## 5. SPECTATORS ride the SAME gate (2026-07-18, B6)
+A DEAD player becomes a spectator with a fly cam + player switching (see `notes/spectator-mode.md`).
+A dead teammate can still TALK to living hunters on voice, so a spectator watching props scatter during
+HIDING is the exact leak this blindfold guards. The gate was EXTENDED from *hunter-during-HIDING* to
+*hunter-OR-dead-during-HIDING* — it does NOT bypass the blindfold, it widens who rides it:
+- **Snapshot dispatch** (`broadcastSnapshot`): `if (phase===HIDING && (role===HUNTER || !alive))` →
+  `blindHunterSnapshot`. So a dead prop during HIDING is now withheld all prop positions too (was: full).
+- **Release catch-up** (`setPhase(HUNTING)`): the one-time `kind:'world'` snapshot now goes to
+  `role===HUNTER || !alive`, so a spectator withheld through HIDING gets the world the instant they're
+  allowed to see it (else the fly cam shows the factory-fresh map).
+- **HUNTING onward:** a spectator sees EVERYTHING including disguised props' names — a dead hunter falls
+  through to the FULL feed, NOT the name-blanked `hunterSafeSnapshot` (that stays for LIVING hunters only).
+  Decided, not accidental (plan rev 2): they're a dead teammate on voice anyway = normal spectating.
+Guard: `tools/check-spectator.mjs`. The `tools/check-blindfold.mjs` referee-gate assertion was updated to
+this extended spelling.
+
 ## Bug history
 Originally the **visual half was entirely missing**: `ui.setBlindfold` was called from
 main.js but never defined in `js/ui.js` (no overlay div / CSS either). So *every* client —

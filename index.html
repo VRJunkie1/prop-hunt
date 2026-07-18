@@ -123,7 +123,16 @@
       <!-- HUNTER-TOOLS v1: spectator banner for a dead player (hunters do NOT respawn). -->
       <div id="spectate" class="spectate hidden" aria-hidden="true">
         <div class="spectate-title">YOU ARE DEAD</div>
-        <div class="spectate-sub">Spectating &mdash; look around while the round finishes.</div>
+        <!-- B6: dynamic hint — updated by ui.setSpectateHint() with the current spectator controls. -->
+        <div id="spectateHint" class="spectate-sub">Spectating &mdash; look around while the round finishes.</div>
+        <!-- B6: on-screen spectator controls for PHONES (PC uses left-click + Space). Shown only on
+             touch while dead (ui.setSpectateControls); the parent vignette is pointer-events:none, so
+             this bar re-enables pointer events on itself. -->
+        <div id="spectateBar" class="spectate-bar hidden">
+          <button id="spectatePrev" class="spectate-btn" type="button" aria-label="Watch previous player">&#9664;</button>
+          <button id="spectateFree" class="spectate-btn" type="button" aria-label="Free-fly camera">FLY</button>
+          <button id="spectateNext" class="spectate-btn" type="button" aria-label="Watch next player">&#9654;</button>
+        </div>
       </div>
       <!-- AUDIO TAUNTS (props only). The taunt button opens a large scrolling list of taunts;
            picking one plays it as directional 3D audio at this prop's position for EVERYONE and

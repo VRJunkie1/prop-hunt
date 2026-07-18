@@ -1237,10 +1237,16 @@ export class Referee {
     // blindfold: withheld until the precise moment the hunter is allowed to see the world.
     // (Props were never blindfolded — they tracked the awake stream live — so they don't need
     // it.) HIDING→HUNTING is the only path into HUNTING, so this can't double-fire.
+    // SPECTATORS RIDE THE SAME GATE (B6, 2026-07-18). A DEAD player (spectator) is withheld all
+    // prop positions through HIDING exactly like a blindfolded hunter (see broadcastSnapshot) — a
+    // dead teammate on voice must not narrate where props are hiding to live hunters. So they, too,
+    // need this one-time world catch-up the moment HUNTING starts, else their fly cam would show the
+    // factory-fresh map. Dying during HIDING is rare (hunters are frozen + blindfolded then), but
+    // this closes the hole cleanly instead of special-casing it. Live props were never withheld.
     if (phase === PHASE.HUNTING) {
       const world = this._propsCatchup();
       for (const p of this.players.values()) {
-        if (p.role === ROLE.HUNTER) send(p, { t: S2C.EVENT, kind: 'world', props: world });
+        if (p.role === ROLE.HUNTER || !p.alive) send(p, { t: S2C.EVENT, kind: 'world', props: world });
       }
     }
   }
@@ -1620,15 +1626,29 @@ export class Referee {
     // a disguise — the render shape stays byte-for-byte intact, but "which burger is a person" is gone.
     // Undisguised props + hunters keep their names. During HIDING the blindfold already withholds ALL
     // prop entries, so the leak can't happen there; this covers HUNTING (and any non-blind hunter view).
+    //
+    // SPECTATOR WITHHOLDING (B6, 2026-07-18, VRmike). A dead player is a spectator with a fly cam and
+    // player-switching, and a dead teammate can still TALK to living hunters on voice. So a dead
+    // spectator watching props scatter during HIDING is the exact anti-cheat leak the blindfold
+    // guards. The rule therefore keys on DEAD-OR-HUNTER + phase, not team: during HIDING every
+    // spectator (dead, any team) is withheld all prop transforms via the SAME blindHunterSnapshot
+    // path as a blindfolded hunter, and gets the same one-time `kind:'world'` catch-up at HUNTING
+    // (see setPhase). From HUNTING onward a spectator sees everything — including disguised props'
+    // names — because they're a dead teammate on voice anyway and that's normal prop-hunt
+    // spectating (so a dead hunter falls through to the FULL feed, not the name-blanked hunterView).
+    // Living hunters/props are byte-identical to before. See memory/notes/anti-cheat-blindfold.md.
     let blinded = null, hunterView = null;
     for (const p of this.players.values()) {
-      if (p.role === ROLE.HUNTER && this.phase === PHASE.HIDING) {
+      if (this.phase === PHASE.HIDING && (p.role === ROLE.HUNTER || !p.alive)) {
+        // Blindfolded hunter OR any dead spectator during HIDING: withhold every prop position.
         if (!blinded) blinded = blindHunterSnapshot(full);
         send(p, blinded);
-      } else if (p.role === ROLE.HUNTER) {
+      } else if (p.role === ROLE.HUNTER && p.alive) {
+        // Living hunter during HUNTING: roster-safe (disguised props keep their shape, lose their name).
         if (!hunterView) hunterView = hunterSafeSnapshot(full);
         send(p, hunterView);
       } else {
+        // Living props, and any dead spectator during HUNTING: the full feed (fly cam sees the world).
         send(p, full);
       }
     }

@@ -639,6 +639,18 @@ button.ghost:hover { background: #3d2a66; }
 .spectate.hidden { display: none; }
 .spectate-title { font-size: 34px; font-weight: 800; color: #ff6b6b; text-shadow: 0 0 8px #000; }
 .spectate-sub { font-size: 16px; color: #e9dcffcc; text-shadow: 0 0 6px #000; }
+/* SPECTATOR (B6): on-screen phone controls (◀ / FLY / ▶). The parent vignette is pointer-events:none,
+   so the bar re-enables pointer events on itself. Shown only on touch while dead (ui.setSpectateControls). */
+.spectate-bar { display: flex; gap: 12px; margin-top: 14px; pointer-events: auto; }
+.spectate-bar.hidden { display: none; }
+.spectate-btn {
+  min-width: 62px; height: 46px; padding: 0 14px;
+  border: 1px solid #ff6b6b88; border-radius: 10px;
+  background: #1a0e2ccc; color: #ffd7d7;
+  font: bold 18px/1 system-ui, sans-serif; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.spectate-btn:active { background: #ff4fa3; color: #fff; transform: scale(0.95); }
 
 /* PAUSE MENU (Escape / ☰). The ☰ button sits top-right in-game; the overlay is a menu
    (NOT a real pause — the world runs on the host) with a live scoreboard + controls. */

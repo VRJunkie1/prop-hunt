@@ -340,6 +340,7 @@ export class Scene3D {
     // setCamera() early-returns while this is on so the follow-cam can't fight the fly-cam.
     this._freeCam = false;
     this._fcPos = new THREE.Vector3(); // fly-cam eye position (seeded from the live camera)
+    this._specPos = new THREE.Vector3(); // SPECTATOR fly-cam eye position (separate from the debug fly-cam)
     // FOCUS BOX + CLICK-TO-INSPECT: a magenta wireframe around the entity under the
     // crosshair (debugPick), deliberately a DISTINCT colour from the green disguise
     // highlight and the yellow/cyan/red collider-debug wires, and NEVER added to
@@ -917,12 +918,6 @@ export class Scene3D {
       return;
     }
 
-    // Camera-forward (same convention as first-person / the referee's aim vector).
-    const cp = Math.cos(pitch);
-    const fx = -Math.sin(yaw) * cp;
-    const fy = Math.sin(pitch);
-    const fz = -Math.cos(yaw) * cp;
-
     // Look-at point on the player; keep the own avatar glued to the predicted
     // position/yaw so it tracks the camera without snapshot lag.
     const target = this._vTarget.set(pos.x, this._camHeadY + py, pos.z);
@@ -934,6 +929,21 @@ export class Scene3D {
       this.selfMesh.rotation.y = selfYaw;
       this.selfMesh.visible = this.selfAlive;
     }
+    // Orbit behind/above the target with the collision pull-in (shared with the
+    // spectator follow-cam — see spectateFollow).
+    this._orbitCameraTo(target, yaw, pitch);
+  }
+
+  // Orbit the camera behind/above a look-at `target` (a scratch Vector3) for the given
+  // look angles, with the collision pull-in + snap-in/ease-out smoothing. Extracted from
+  // the third-person branch of setCamera so the SPECTATOR follow-cam reuses the EXACT same
+  // camera behaviour (rather than a second follow-cam that could drift). Camera-forward uses
+  // the same convention as first-person / the referee's aim vector.
+  _orbitCameraTo(target, yaw, pitch) {
+    const cp = Math.cos(pitch);
+    const fx = -Math.sin(yaw) * cp;
+    const fy = Math.sin(pitch);
+    const fz = -Math.cos(yaw) * cp;
 
     // Desired camera spot: behind (−forward) and lifted a touch. Floor the height
     // so looking far up (which orbits the camera downward) can't sink it below the
@@ -945,7 +955,7 @@ export class Scene3D {
       target.z - fz * dist
     );
 
-    // Collision pull-in: cast from the player toward the desired spot; if a wall or
+    // Collision pull-in: cast from the target toward the desired spot; if a wall or
     // prop is in the way, clamp the distance so the camera never clips through it.
     const dir = this._vDir.copy(desired).sub(target);
     const desiredLen = dir.length() || 1e-3;
@@ -2170,12 +2180,13 @@ export class Scene3D {
     else if (!this._wantSelfMesh()) this._removeSelfMesh();
   }
 
-  // Advance the fly-cam one frame from debug input. `inp`: { yaw, pitch, mx, mz, up, dt,
-  // boost } — yaw/pitch are absolute look angles (drag-to-look works on touch + desktop),
-  // mx/mz the planar move intent (WASD/joystick), up the vertical (jump = up), boost a
-  // speed multiplier. Uses the SAME forward/right convention as movement/aim.
-  updateFreeCam(inp) {
-    if (!this._freeCam) return;
+  // Advance a fly eye position `p` one frame from input `inp` ({ yaw, pitch, mx, mz, up, dt,
+  // boost }) and aim the camera along the look. yaw/pitch are absolute look angles (drag-to-look
+  // works on touch + desktop), mx/mz the planar move intent (WASD/joystick), up the vertical
+  // (jump = up), boost a speed multiplier. Uses the SAME forward/right convention as movement/aim.
+  // Optional `clamp(p)` keeps the eye inside bounds (spectator). Shared by the debug free cam
+  // (updateFreeCam) and the spectator fly cam (updateSpectateFly).
+  _flyStep(p, inp, clamp) {
     const dt = inp.dt > 0 ? Math.min(0.05, inp.dt) : 0.016;
     const yaw = inp.yaw || 0;
     const pitch = Math.max(-1.4, Math.min(1.4, inp.pitch || 0));
@@ -2184,14 +2195,65 @@ export class Scene3D {
     const fx = -Math.sin(yaw) * cp, fy = Math.sin(pitch), fz = -Math.cos(yaw) * cp; // forward
     const rx = Math.cos(yaw), rz = -Math.sin(yaw); // right (planar)
     const mz = inp.mz || 0, mx = inp.mx || 0, up = inp.up || 0;
-    const p = this._fcPos;
     p.x += (fx * mz + rx * mx) * speed * dt;
     p.y += (fy * mz + up) * speed * dt;
     p.z += (fz * mz + rz * mx) * speed * dt;
     if (p.y < 0.3) p.y = 0.3; // don't sink below the ground plane
+    if (clamp) clamp(p);
     this.camera.position.copy(p);
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(p.x + fx, p.y + fy, p.z + fz);
+  }
+
+  // Advance the DEBUG free cam one frame (?debug=1). No bounds clamp — a dev may want to fly out.
+  updateFreeCam(inp) {
+    if (!this._freeCam) return;
+    this._flyStep(this._fcPos, inp);
+  }
+
+  // ---- spectator (dead player) camera ---------------------------------------
+  // A dead player spectates with a free-flying camera (fly mode) that can switch to orbiting a
+  // live player (follow mode — reuses the third-person orbit via spectateFollow). Both modes are
+  // driven from js/main.js each frame; the physics player stays dead/frozen on the host and NOTHING
+  // goes over the network (spectating is purely client-side). Seed the fly eye from the live camera
+  // so entering is seamless (the death spot).
+  enterSpectate() {
+    this._specPos.copy(this.camera.position);
+    if (this._specPos.y < 1.4) this._specPos.y = 1.4; // lift off the floor a touch
+    // Hide the dead player's OWN body while spectating so it doesn't hang in the fly/follow view
+    // (setCamera — which normally toggles selfMesh.visible — is skipped while spectating). It's
+    // rebuilt/re-shown on respawn via the next setCamera. No-op for a first-person hunter (no body).
+    if (this.selfMesh) this.selfMesh.visible = false;
+  }
+
+  // FLY mode: advance the free-flying spectator eye, clamped INSIDE the map so nobody flies into
+  // the void. `inp` adds { half, yMin, yMax } bounds (map half-size + vertical limits) to the
+  // usual fly input. No collision (fly through walls freely), just the outer arena box.
+  updateSpectateFly(inp) {
+    const half = inp.half > 0 ? inp.half : 1e6;
+    const yMin = inp.yMin != null ? inp.yMin : 0.5;
+    const yMax = inp.yMax != null ? inp.yMax : 1e6;
+    this._flyStep(this._specPos, inp, (p) => {
+      if (p.x < -half) p.x = -half; else if (p.x > half) p.x = half;
+      if (p.z < -half) p.z = -half; else if (p.z > half) p.z = half;
+      if (p.y < yMin) p.y = yMin; else if (p.y > yMax) p.y = yMax;
+    });
+  }
+
+  // FOLLOW mode: orbit the SAME third-person camera the props use around a watched player's
+  // position `pos` ({x,y,z}) for the given look angles. Reuses _orbitCameraTo (not a second
+  // follow-cam), so what a spectator sees while following is identical to third-person play.
+  spectateFollow(pos, yaw, pitch) {
+    const target = this._vTarget.set(pos.x, this._camHeadY + (pos.y || 0), pos.z);
+    this._orbitCameraTo(target, yaw, pitch);
+  }
+
+  // Live rendered position of a player (self or remote), or null if their mesh isn't built yet.
+  // The spectator follow-cam reads this so it tracks the smoothly-interpolated mesh (not the 15 Hz
+  // snapshot). Public wrapper over the taunt-emitter's _playerWorldPos.
+  playerViewPos(id) {
+    const p = this._playerWorldPos(id);
+    return p ? { x: p.x, y: p.y, z: p.z } : null;
   }
 
   // ---- debug menu: focus box + click-to-inspect (?debug=1) ------------------

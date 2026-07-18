@@ -120,9 +120,13 @@ ok(blinded.players.some((p) => p.id === 'h1'), '(d) blinded hunter snapshot keep
 ok(full.props.length === 1 && full.players.length === 3, '(d) blindHunterSnapshot does not mutate the full snapshot');
 
 const refSrc = read('shared', 'referee.js');
+// B6 (2026-07-18): the withholding gate was EXTENDED from "hunter-during-HIDING" to
+// "hunter-OR-dead-during-HIDING" so a dead SPECTATOR (who can talk to live hunters on voice) also
+// can't watch props hide. Assert the extended snapshot-dispatch gate spelling; the full stream still
+// resumes at HUNTING. The dead-spectator behaviour itself is proven by tools/check-spectator.mjs.
 ok(
-  /p\.role === ROLE\.HUNTER && this\.phase === PHASE\.HIDING/.test(refSrc),
-  '(d) referee gate withholds prop data only for HUNTER during HIDING (full stream resumes at HUNTING)'
+  /this\.phase === PHASE\.HIDING && \(p\.role === ROLE\.HUNTER \|\| !p\.alive\)/.test(refSrc),
+  '(d) referee gate withholds prop data for a HUNTER or a DEAD spectator during HIDING (B6 extended gate; full stream resumes at HUNTING)'
 );
 
 // ---------------------------------------------------------------------------

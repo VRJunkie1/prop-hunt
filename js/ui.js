@@ -29,6 +29,12 @@ export class UI {
       hudHealth: $('hudHealth'),
       toolbar: $('toolbar'),
       spectate: $('spectate'),
+      // SPECTATOR (B6): dynamic hint line + the on-screen phone control bar (◀ / FLY / ▶).
+      spectateHint: $('spectateHint'),
+      spectateBar: $('spectateBar'),
+      spectatePrev: $('spectatePrev'),
+      spectateFree: $('spectateFree'),
+      spectateNext: $('spectateNext'),
       banner: $('banner'),
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
@@ -93,6 +99,13 @@ export class UI {
     if (this.el.controlsRefToggle) {
       this.el.controlsRefToggle.addEventListener('click', () => this._toggleControlsRef());
     }
+    // SPECTATOR (B6): the on-screen phone controls. Callbacks injected by main.js (no game logic here).
+    this.onSpectatePrev = () => {};
+    this.onSpectateNext = () => {};
+    this.onSpectateFree = () => {};
+    if (this.el.spectatePrev) this.el.spectatePrev.addEventListener('click', () => this.onSpectatePrev());
+    if (this.el.spectateNext) this.el.spectateNext.addEventListener('click', () => this.onSpectateNext());
+    if (this.el.spectateFree) this.el.spectateFree.addEventListener('click', () => this.onSpectateFree());
     // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
     // main.js injects the real handler (selectTool). No game logic lives in the UI.
     this.onSelectTool = () => {};
@@ -406,9 +419,21 @@ export class UI {
     if (locked) this.closeTauntMenu();
   }
 
-  // Show/hide the dead-player spectator banner (hunters do not respawn).
+  // Show/hide the dead-player spectator vignette (hunters do not respawn).
   setSpectator(on) {
     if (this.el.spectate) this.el.spectate.classList.toggle('hidden', !on);
+  }
+
+  // SPECTATOR (B6): update the vignette's dynamic hint line (fly vs follow controls). main.js
+  // composes the text (device-aware); the UI just paints it. Pure show — no game logic.
+  setSpectateHint(text) {
+    if (this.el.spectateHint) this.el.spectateHint.textContent = text;
+  }
+
+  // SPECTATOR (B6): show/hide the on-screen phone control bar (◀ / FLY / ▶). Only meaningful on
+  // touch — PC spectators use left-click + Space — so it's revealed only when `touch` AND `on`.
+  setSpectateControls(on, touch) {
+    if (this.el.spectateBar) this.el.spectateBar.classList.toggle('hidden', !(on && touch));
   }
 
   // ---- AUDIO TAUNTS (props) -------------------------------------------------
@@ -621,6 +646,11 @@ export class UI {
           ['JUMP', 'Jump'],
           ['ROTATE (hold)', 'Turn a disguise'],
           ['☰', 'This menu'],
+          // SPECTATING (B6) — shown while dead; controls reuse the joystick + drag look.
+          ['Spectating: joystick + drag', 'Fly the free camera around the map'],
+          ['Spectating: JUMP', 'Fly up'],
+          ['Spectating: ◀ / ▶', 'Switch between watching live players'],
+          ['Spectating: FLY', 'Back to the free-fly camera'],
         ]
       : [
           ['WASD / Arrows', 'Move'],
@@ -634,6 +664,11 @@ export class UI {
           ['V', 'Toggle view'],
           ['`', 'Free the mouse for debug/UI — click the view to resume'],
           ['Esc', 'Open / close this menu (releases the mouse; re-locks on close)'],
+          // SPECTATING (B6) — the controls a dead player gets (fly cam + player switching).
+          ['Spectating: WASD + mouse', 'Fly the free camera around the map'],
+          ['Spectating: Space / Shift', 'Fly up / down'],
+          ['Spectating: Left-click', 'Cycle between watching live players (past the last → free-fly)'],
+          ['Spectating: Space', 'While following a player, snap back to free-fly'],
         ];
     return rows.map(([k, v]) => `<div class="pause-help-row"><b>${k}</b><span>${v}</span></div>`).join('');
   }

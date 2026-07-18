@@ -284,6 +284,17 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   base 5). Health rides every snapshot player entry (HUD only, no secret).
 - **Hunters do NOT respawn** (DECISIONS.md #1): a dead player spectates; `checkRoundOver`
   ends the round PROPS-WIN when a round's hunters are all dead.
+- **SPECTATOR MODE (B6, 2026-07-18)** — a dead player gets a client-side **free-fly camera** +
+  **player switching**. Fly (`scene.updateSpectateFly`) reuses the debug free-cam math clamped to the
+  map bounds; follow (`scene.spectateFollow`) reuses the third-person orbit (`scene._orbitCameraTo`,
+  extracted from `setCamera`) pointed at a watched live player; `js/main.js` `updateSpectatorCamera`
+  drives it, `spectateCycle` rings `[free-fly, ...live players]` (PC click / Space, phone ◀/FLY/▶). The
+  physics body stays dead/frozen; the ONLY server change is the anti-cheat gate: the blindfold's
+  HIDING-phase withholding was extended from *hunter* to *hunter-OR-dead* (`broadcastSnapshot` +
+  `setPhase` world catch-up), so a dead teammate on voice can't watch props hide — from HUNTING onward a
+  spectator sees the full feed (disguised-prop names included). Docs: a "Spectating" block in
+  `_controlsHtml` + an on-death hint. Guard: `tools/check-spectator.mjs`. Detail:
+  `notes/spectator-mode.md` + `notes/anti-cheat-blindfold.md` (§5).
 - **PROP FINDER (hunter tool #2, 2026-07-17)** — the second selectable tool beside the rifle
   (grenades come later). Unlike the rifle's client-only fire, activating the finder is
   **host-authoritative**: `C2S.FIND` → `referee.applyFind` (a LIVING HUNTER in HUNTING, off its

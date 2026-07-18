@@ -6,6 +6,13 @@ behind and slightly above the player, so they see their own model/prop and can
 peek around cover. **Camera/view change only** — movement, roles, collision,
 networking, and the referee are all untouched.
 
+## Reused by the SPECTATOR follow-cam (2026-07-18, B6)
+The orbit block of `setCamera` (desired-spot behind/above + collision pull-in + snap-in/ease-out
+smoothing) was extracted into `scene._orbitCameraTo(target, yaw, pitch)`. `setCamera` still calls it for
+the live local player; the dead-player **spectator follow-cam** (`scene.spectateFollow`) calls the SAME
+helper pointed at a watched player — so following a live player looks identical to third-person play,
+not a second follow-cam that could drift. See `notes/spectator-mode.md`.
+
 ## Where "aim" lives — UPDATED 2026-07-11 (centered reticle + camera-center ray)
 
 The referee's tag cone (`applyTag`) and disguise both compute from the player's

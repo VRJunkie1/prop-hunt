@@ -176,11 +176,21 @@ const state = {
   // locally by the debug module and the physics player is frozen (no prediction, zeroed
   // movement sent), so the body stays put. Always false in normal play.
   freeCam: false,
+
+  // SPECTATOR MODE (B6, 2026-07-18). A dead player spectates during an active phase: a free-flying
+  // camera (mode:'fly') or orbiting a live player (mode:'follow', targetId = whom). Purely
+  // client-side — the physics body stays dead/frozen on the host, nothing new goes over the wire.
+  // Driven from the frame loop (updateSpectatorCamera) and toggled by setSpectating off the
+  // authoritative alive flag. _prevJump edge-detects Space to snap follow → free-fly.
+  spectate: { on: false, mode: 'fly', targetId: null, _prevJump: false },
 };
 
 // ---- action routing -------------------------------------------------------
 input.onAction = (name) => {
   if (state.phase !== PHASE.HIDING && state.phase !== PHASE.HUNTING) return;
+  // SPECTATOR (B6): a dead player has no fire/disguise — their primary (left-click / ACTION)
+  // cycles the spectator camera between live players and back to free-fly. See spectateCycle.
+  if (state.spectate.on) { if (name === 'primary') spectateCycle(1); return; }
   // HUNTER-TOOLS v1: a hunter's primary action fires the selected tool (rifle shoots; the
   // prop finder activates its AOE); a prop's primary disguises. The old instant 'tag' melee is
   // SUPERSEDED by the rifle + health system and fully unwired (client + referee) so it can't
@@ -734,7 +744,7 @@ function handleGameMessage(msg) {
           state.aimPropId = null;
           // HUNTER-TOOLS v1: tidy the tool bar / spectator / tool state for the next round.
           ui.setToolbar(false);
-          ui.setSpectator(false);
+          setSpectating(false);
           state.tool = 'rifle';
           state.alive = true;
           resetFinderState(); // PROP FINDER: cooldown/zone/lock reset to ready between rounds
@@ -883,7 +893,7 @@ function backToMenu(msg) {
   input.lookFrozen = false;
   state.aimPropId = null;
   ui.setToolbar(false); // HUNTER-TOOLS v1: hide the tool bar + spectator on the way out
-  ui.setSpectator(false);
+  setSpectating(false); // B6: exit spectator (fly/follow cam) + hide its hint/controls
   state.tool = 'rifle';
   state.alive = true;
   resetFinderState(); // PROP FINDER: clear cooldown/zone/taunt-lock on the way out
@@ -984,7 +994,7 @@ function onSnapshot(msg) {
     state.alive = me.alive !== false;
     if (state.alive !== wasAlive) applyToolView();
     const activePhase = msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING;
-    ui.setSpectator(!state.alive && activePhase);
+    setSpectating(!state.alive && activePhase);
     state.serverSelf.x = me.x;
     state.serverSelf.y = me.y || 0;
     state.serverSelf.z = me.z;
@@ -1280,6 +1290,132 @@ function predictStep(input, dt) {
 
 // ---- prediction + render loop ---------------------------------------------
 let last = performance.now();
+// ---- SPECTATOR MODE (B6) --------------------------------------------------
+// A dead player spectates during an active phase. Enter/exit is driven off the authoritative
+// alive flag in onSnapshot (setSpectating); the camera itself is driven each frame by
+// updateSpectatorCamera. Free-fly (mode:'fly') reuses the fly-cam math with map-bounds clamping;
+// follow (mode:'follow') reuses the third-person orbit pointed at a live player. Purely
+// client-side — the physics body stays dead/frozen on the host, nothing new crosses the wire.
+
+// Enter/leave spectator. Idempotent (no-op if already in the requested state). scene-null-safe so
+// it can be called from teardown paths where the renderer may be gone.
+function setSpectating(on) {
+  const sp = state.spectate;
+  if (on === sp.on) return;
+  sp.on = on;
+  if (on) {
+    sp.mode = 'fly';
+    sp.targetId = null;
+    sp._prevJump = input.jump;
+    if (scene && scene.enterSpectate) scene.enterSpectate();
+    ui.setSpectator(true);
+    ui.setSpectateControls(true, input.touch);
+    updateSpectateHint();
+  } else {
+    ui.setSpectator(false);
+    ui.setSpectateControls(false, input.touch);
+  }
+}
+
+// Live players a spectator can watch: everyone alive in the latest snapshot except themselves.
+// (During HIDING a spectator's snapshot is blindfold-filtered to hunters only — see the referee —
+// so the list is naturally just the visible seekers then; during HUNTING it's everyone alive.)
+function liveWatchables() {
+  const list = state.lastPlayers || [];
+  return list.filter((p) => p.alive !== false && p.id !== state.selfId);
+}
+function nameOf(id) {
+  const p = (state.lastPlayers || []).find((x) => x.id === id);
+  return p && p.name ? p.name : 'a player';
+}
+
+// Cycle the spectator camera one step through the ring [free-fly, ...live players] in direction
+// `dir` (+1 next / −1 prev). Passing the end wraps back to free-fly — so a single press always
+// returns to free-fly eventually, and there's an explicit path to it too (Space / the FLY button).
+function spectateCycle(dir) {
+  const sp = state.spectate;
+  const live = liveWatchables();
+  const ring = ['fly', ...live.map((p) => p.id)]; // 'fly' sentinel + live player ids
+  let idx = sp.mode === 'fly' ? 0 : ring.indexOf(sp.targetId);
+  if (idx < 0) idx = 0; // stale target (they died/left) — treat as free-fly for the step
+  idx = (idx + dir + ring.length) % ring.length;
+  const sel = ring[idx];
+  if (sel === 'fly') { setSpectateMode('fly'); ui.feed('Free-fly camera.'); }
+  else { sp.mode = 'follow'; sp.targetId = sel; ui.feed(`Now watching ${nameOf(sel)}.`); }
+  updateSpectateHint();
+}
+
+// Switch spectator sub-mode. Entering 'fly' re-seeds the fly eye from the CURRENT camera (which may
+// be the follow orbit) so the view doesn't jump.
+function setSpectateMode(mode) {
+  const sp = state.spectate;
+  sp.mode = mode;
+  if (mode === 'fly') {
+    sp.targetId = null;
+    if (scene && scene.enterSpectate) scene.enterSpectate();
+  }
+}
+
+// Update the on-screen spectator hint (repurposes the death vignette's subtitle) for the current
+// mode + device. Undocumented controls were half the complaint — this is the always-visible half;
+// the PC controls-reference panel carries the full list.
+function updateSpectateHint() {
+  const sp = state.spectate;
+  const touch = input.touch;
+  let text;
+  if (sp.mode === 'follow' && sp.targetId != null) {
+    text = touch
+      ? `Watching ${nameOf(sp.targetId)} · ◀ ▶ to switch · FLY for free-fly`
+      : `Watching ${nameOf(sp.targetId)} · click to cycle · Space for free-fly`;
+  } else {
+    text = touch
+      ? 'Free-fly — joystick + drag to move, JUMP up · ▶ to follow a player'
+      : 'Free-fly — WASD + mouse, Space/Shift up-down · click to follow players';
+  }
+  ui.setSpectateHint(text);
+}
+
+// Drive the spectator camera this frame. Called after scene.interpolate() so a followed player is
+// tracked at their smoothed mesh position. If the watched player dies/leaves, hop to the next live
+// one; if none remain, drop to free-fly.
+function updateSpectatorCamera(dt) {
+  if (!scene || state.freeCam) return; // the debug free cam (?debug=1) owns the view if a dev toggled it
+  const sp = state.spectate;
+
+  // Space edge = snap follow → free-fly (a dedicated "back to free-fly" that doesn't wait for a full cycle).
+  const jumpEdge = input.jump && !sp._prevJump;
+  sp._prevJump = input.jump;
+  if (jumpEdge && sp.mode === 'follow') { setSpectateMode('fly'); updateSpectateHint(); ui.feed('Free-fly camera.'); }
+
+  if (sp.mode === 'follow') {
+    const live = liveWatchables();
+    if (!live.length) {
+      setSpectateMode('fly'); updateSpectateHint();
+    } else if (!live.some((p) => p.id === sp.targetId)) {
+      sp.targetId = live[0].id; // watched player gone — jump to the next live one
+      ui.feed(`Now watching ${nameOf(sp.targetId)}.`);
+      updateSpectateHint();
+    }
+    if (sp.mode === 'follow') {
+      const pos = scene.playerViewPos(sp.targetId);
+      if (pos) { scene.spectateFollow(pos, input.yaw, input.pitch); return; }
+      // no rendered mesh yet — fall through to a free-fly frame
+    }
+  }
+
+  // FLY: free-flying eye, clamped inside the map so nobody drifts into the void.
+  const mv = input.moveVector();
+  const down = input.keys && (input.keys.has('ShiftLeft') || input.keys.has('ShiftRight'));
+  const size = state.map ? state.map.size : 0;
+  scene.updateSpectateFly({
+    yaw: input.yaw, pitch: input.pitch, mx: mv.mx, mz: mv.mz,
+    up: (input.jump ? 1 : 0) - (down ? 1 : 0),
+    dt,
+    half: size ? size / 2 : 1e6, // inside the arena walls
+    yMin: 0.6, yMax: size ? size : 1e6, // floor-to-a-generous-ceiling
+  });
+}
+
 // Render-loop safety wrapper. The next-frame reschedule happens HERE, first, before
 // any gameplay work — so a thrown exception in frameBody() can never stop the loop
 // (the bug that blanked the whole game to solid blue when a called method was missing).
@@ -1389,30 +1525,41 @@ function frameBody(now) {
       y: state.self.y + state.corr.y,
       z: state.self.z + state.corr.z,
     };
-    scene.setCamera(disp, input.yaw, input.pitch, state.selfDispYaw);
-
-    // PROP FINDER: countdown on the tool button + the AOE cylinder follows the hunter (green ready /
-    // grey cooling). After setCamera so the zone sits on the freshest displayed position.
-    updateFinderHud(now, disp);
-
-    // Crosshair-based disguise targeting + highlight. While alive as a PROP in an active
-    // phase, raycast from the player along the look direction for the first disguisable
-    // prop within disguiseRange; outline it (so you see what you'll become) and remember
-    // its id for Action. Anything else (hunter, dead, lobby) clears the highlight/target.
-    // state.movable for a PROP == alive AND in an active phase (props are never frozen),
-    // exactly when targeting should run.
-    if (state.role === ROLE.PROP && state.movable) {
-      const id = scene.aimedDisguiseTarget(disp, input.yaw, input.pitch, state.cfg.rules.disguiseRange);
-      state.aimPropId = id;
-      scene.highlightProp(id);
-      ui.setAimHint(id == null); // tiny "no prop targeted" hint when nothing valid is aimed at
-    } else {
+    if (state.spectate.on) {
+      // SPECTATOR (B6): a dead player flies free or orbits a live player — NOT the self follow-cam,
+      // finder HUD, or disguise targeting. The camera is positioned AFTER interpolate() below so the
+      // follow-cam tracks the smoothly-interpolated watched mesh, not this frame's stale pose.
       state.aimPropId = null;
       scene.highlightProp(null);
       ui.setAimHint(false);
+    } else {
+      scene.setCamera(disp, input.yaw, input.pitch, state.selfDispYaw);
+
+      // PROP FINDER: countdown on the tool button + the AOE cylinder follows the hunter (green ready /
+      // grey cooling). After setCamera so the zone sits on the freshest displayed position.
+      updateFinderHud(now, disp);
+
+      // Crosshair-based disguise targeting + highlight. While alive as a PROP in an active
+      // phase, raycast from the player along the look direction for the first disguisable
+      // prop within disguiseRange; outline it (so you see what you'll become) and remember
+      // its id for Action. Anything else (hunter, dead, lobby) clears the highlight/target.
+      // state.movable for a PROP == alive AND in an active phase (props are never frozen),
+      // exactly when targeting should run.
+      if (state.role === ROLE.PROP && state.movable) {
+        const id = scene.aimedDisguiseTarget(disp, input.yaw, input.pitch, state.cfg.rules.disguiseRange);
+        state.aimPropId = id;
+        scene.highlightProp(id);
+        ui.setAimHint(id == null); // tiny "no prop targeted" hint when nothing valid is aimed at
+      } else {
+        state.aimPropId = null;
+        scene.highlightProp(null);
+        ui.setAimHint(false);
+      }
     }
 
     scene.interpolate(0.25);
+    // SPECTATOR camera (fly / follow) — after interpolate so a followed player is tracked smoothly.
+    if (state.spectate.on) updateSpectatorCamera(dt);
     // Advance remote-hunter animation mixers (needs real dt; interpolate uses a fixed
     // alpha). Drives the velocity-based idle/run state machine — see scene.updateAnimations.
     scene.updateAnimations(dt);
@@ -1709,6 +1856,12 @@ function newSession() {
   ui.buildToolbar(HUNTER_TOOLS);
   ui.onSelectTool = selectTool;
   input.onSelectTool = (i) => { const t = HUNTER_TOOLS[i]; if (t) selectTool(t.id); };
+  // SPECTATOR (B6): the on-screen phone controls (◀ / FLY / ▶) shown while dead. PC uses left-click +
+  // Space; these buttons are the touch equivalent (no keyboard there). Guarded so a stray press while
+  // alive does nothing.
+  ui.onSpectatePrev = () => { if (state.spectate.on) spectateCycle(-1); };
+  ui.onSpectateNext = () => { if (state.spectate.on) spectateCycle(1); };
+  ui.onSpectateFree = () => { if (state.spectate.on && state.spectate.mode === 'follow') { setSpectateMode('fly'); updateSpectateHint(); ui.feed('Free-fly camera.'); } };
   // AUDIO TAUNTS: build the lazy clip loader (decodes through the scene's shared audio context)
   // and the data-driven menu list from the manifest, then wire the open/pick/stop/close/prefetch
   // callbacks + the desktop T key. Clips are never fetched here — only on first play / menu-open
