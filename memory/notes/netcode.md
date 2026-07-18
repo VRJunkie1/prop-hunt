@@ -1,5 +1,36 @@
 # netcode
 
+## 2026-07-18 GHOST PLAYERS — leave detection + recount (B2, VRmike)
+A player who LEFT used to persist as an uncontrolled GHOST until a new game. Two gaps, both fixed
+HOST-SIDE in `shared/referee.js` (no protocol change); guard: `tools/check-lifecycle.mjs`.
+
+**Two leave paths, one removal.** GRACEFUL close/error already ran `net.js → referee.removePlayer`
+(unchanged). The SILENT case — a phone locks / signal drops with NO WebRTC `'close'` — never fired
+that, so the ghost lingered. Now the referee times it out itself:
+- Every C2S message stamps `player._lastSeen` (`handleMessage`); `addPlayer` seeds it.
+- `tick()` calls `_sweepSilentPlayers(now)` ONLY during HIDING/HUNTING, where every live client
+  streams INPUT at 20Hz (`main.js startInputLoop` is phase-gated) — so a peer silent for
+  `rules.leaveTimeoutSeconds` (5s) has genuinely dropped, not just gone idle in the lobby. It
+  removes them via the SAME `removePlayer` path. The HOST id is never swept (the referee lives in
+  its tab; if it were gone nothing would run) and the sweep is off if the timeout is 0.
+- `removePlayer(id, reason)` now: despawns the physics body+collider (already did), drops them from
+  the roster (so they vanish from every snapshot + `propsTotal/propsAlive`), broadcasts a public
+  `kind:'log'` "X left" line (new — mirrors the join/switch lines; `reason` adds "(timed out)"),
+  then recounts. Called with one arg from `net.js` → plain "X left".
+
+**Recount is leave-proof (both teams).** A leave removes the player from the roster, which erased the
+roster-count proof that their team existed — so the old `checkRoundOver` (`props.length > 0 && …`)
+could NOT fire a win when the LAST prop left, leaving the round to limp to the timer with zero props
+(a stuck/ghost-kept-alive round). Fix: per-round flags `_roundHadHunters`/`_roundHadProps` set at
+round start (`_launchRound`) and kept monotonically true whenever a player joins/switches onto a team
+(`_spawnOnTeam`, `debugSetTeam`). `checkRoundOver` now resolves if EITHER side has no living members
+AND that team `_roundHad*`: last prop gone (caught OR left) → hunters win; last hunter gone → props
+win. A hunter-less SOLO round (`_roundHadHunters` false) still never false-resolves — it runs on the
+timer. Flags fall back to the live roster count when unset, so a manually-driven test harness (that
+skips `_launchRound`) keeps the original death-only behaviour (check-combat still passes). Flipped-round
+assignment was already leave-safe (it iterates the post-removal roster); verified it doesn't crash on a
+shrunk roster. See also `notes/spawn-system.md` (the spawn-embedding half of B2) + `game-loop.md`.
+
 ## 2026-07-18 SYNC BUGS: ROLE DESYNC + GAME TIMER DESYNC (B1, VRmike)
 Two playtest-reported sync-integrity bugs. Both fixed CLIENT-SIDE (no protocol change — the data
 was already on the wire); guard: `tools/check-sync-convergence.mjs`.

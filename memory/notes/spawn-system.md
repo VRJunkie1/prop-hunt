@@ -1,5 +1,30 @@
 # Spawn system + the far-side "locked / snapped-back" bug
 
+## 2026-07-18 HUNTER SPAWN CLIPPING + EMBEDDING (B2, VRmike)
+Hunters spawn CLIPPED into each other (they share `map.hunterSpawn`) and, since the physics-settle
+change, can spawn EMBEDDED in a prop that settled onto the spawn. Both go through ONE resolver —
+`PhysicsWorld.resolveSpawnOverlap(id)` (extended from the faf3d6b seam-D3 overlap machinery), so
+there's no new placement math. Called by the referee at every spawn choke point already
+(`_buildPhysics` per-player at round start, `_spawnOnTeam`, the `integrate` join-race). Two phases:
+1. **Player separation** (was seam D3, unchanged): slide the newcomer horizontally out of any player
+   it overlaps, golden-angle scatter when exactly stacked, capped `spawnOverlapPushMax` (3 m),
+   CLAMPED inside the arena walls — so staggering the shared hunter spawn can never fire anyone
+   through a boundary. Runs only with ≥2 players.
+2. **Obstruction clearance** (NEW, `_clearSpawnObstruction`): lift/nudge the newcomer out of any
+   PROP (`_propHandles`) or interior STATIC FIXTURE (`_staticFixtureTypeByHandle` — pillars/door/vent,
+   deliberately NOT the ground slab or boundary walls). Reuses the exact `_depenetrateFromProps`
+   projectPoint push-out (skin-aware, floor-clamped, picks the CHEAPEST exit → drops the player ONTO
+   the obstacle when its top is nearest, else nudges to the nearest clear side), a few bounded
+   iterations with `updateSceneQueries()` each pass (a spawn happens before the first `world.step()`,
+   stale broad-phase otherwise). Runs even SOLO (a lone hunter embedded in a settled prop still clears).
+   Wall-clamped like phase 1, and never resolved below the floor.
+Config: `spawnOverlapPushMax` (reused). Guard: `tools/check-lifecycle.mjs` part B (live Rapier) —
+two hunters on one spawn separate; a hunter spawned inside a crate is lifted onto it (verified
+footY≈crate-top) or nudged beside; obstructed two-hunter spawn ends with nobody overlapping anyone,
+inside a prop, below the floor, or outside the walls. The ghost-player half of B2 is in
+`notes/netcode.md`.
+
+
 ## How spawns work
 - `map.spawns[]` = prop spawn points; `map.hunterSpawn` = the hunter's. `referee.startMatch`
   assigns props round-robin through `map.spawns` (`spawnIdx++ % length`) and stamps `player.spawn`

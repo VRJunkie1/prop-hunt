@@ -107,6 +107,21 @@ export class Referee {
 
     this.lastTick = Date.now();
     this.lastSnapshot = 0;
+    // GHOST-PLAYER TIMEOUT (B2, 2026-07-18). A peer whose phone locks or whose signal drops
+    // SILENTLY never fires a WebRTC 'close', so the graceful-leave path (net.js → removePlayer)
+    // never runs and they linger as an uncontrolled ghost. We stamp `player._lastSeen` on every
+    // C2S message (handleMessage) and, during an active round, sweep out anyone silent longer than
+    // this window (tick → _sweepSilentPlayers). INPUT rides at 20Hz all through HIDING/HUNTING, so
+    // a genuinely-connected client is never silent; only a dropped one goes quiet. See rules.json.
+    this._leaveTimeoutMs = Math.max(0, (this.rules.leaveTimeoutSeconds != null ? this.rules.leaveTimeoutSeconds : 5) * 1000);
+    // Per-round record of which teams have EVER had a member this round (set at round start +
+    // whenever a player joins/switches onto a team). checkRoundOver reads these so a team emptied
+    // by a LEAVE (which removes the player from the roster, erasing the roster-count evidence that
+    // the team existed) still resolves the round — a departed last prop is a hunter win, a departed
+    // last hunter a props win. Undefined until the first round; checkRoundOver falls back to the
+    // live roster count then (so a manually-driven test harness behaves as before).
+    this._roundHadHunters = undefined;
+    this._roundHadProps = undefined;
     this.interval = setInterval(() => this.tick(), 1000 / this.rules.tickRate);
   }
 
@@ -134,6 +149,7 @@ export class Referee {
     // shared). 0 = ready. Reset each match (startMatch) and on resetToLobby. See applyFind.
     player._lastFindAt = 0;
 
+    player._lastSeen = Date.now(); // GHOST-PLAYER TIMEOUT: fresh join is "seen now" (see tick sweep)
     this.players.set(player.id, player);
     if (!this.hostId) this.hostId = player.id; // host adds itself first
 
@@ -200,10 +216,17 @@ export class Referee {
     this.broadcastLobby();
   }
 
-  removePlayer(id) {
-    if (!this.players.has(id)) return;
+  // A player left — GRACEFUL (WebRTC 'close'/'error' → net.js) or a SILENT TIMEOUT (the sweep in
+  // tick() when a locked/dropped phone stops sending). Either way we FULLY remove them: despawn the
+  // physics body + collider (so no ghost avatar blocks anyone), drop them from the roster (so they
+  // vanish from every snapshot + team count), announce a public "X left" line, and recount BOTH
+  // teams so a departure can resolve or unstick the round. `reason` is only for the log flavour.
+  removePlayer(id, reason) {
+    const player = this.players.get(id);
+    if (!player) return;
+    const wasActive = this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING;
     this.players.delete(id);
-    if (this.physics) this.physics.removePlayer(id);
+    if (this.physics) this.physics.removePlayer(id); // despawn avatar + collider (no ghost body)
 
     // The host is the referee: if it leaves, the whole match is torn down by the
     // network layer and this instance is destroyed, so this reassignment only
@@ -212,10 +235,33 @@ export class Referee {
       this.hostId = this.players.keys().next().value || null;
     }
 
-    if (this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING) {
-      this.checkRoundOver();
-    }
+    // Public feed line so everyone sees who dropped (mirrors the join / team-switch log lines).
+    if (player.name) this.broadcastLog(`${player.name} left${reason ? ` (${reason})` : ''}`);
+
+    // Recount BOTH teams after the removal: a ghost prop must not keep a round alive, and a leaver
+    // who was the last of their team resolves it (last prop gone → hunters win; last hunter gone →
+    // props win). checkRoundOver reads the per-round _roundHad* flags so it still knows the emptied
+    // team existed even though the leaver is no longer in the roster to be counted.
+    if (wasActive) this.checkRoundOver();
     this.broadcastLobby();
+  }
+
+  // GHOST-PLAYER TIMEOUT (B2, 2026-07-18). Called each tick during an active round. A connected
+  // client streams INPUT at 20Hz all through HIDING/HUNTING, so a peer that has sent NOTHING for
+  // _leaveTimeoutMs has genuinely dropped (phone locked, signal lost) WITHOUT a WebRTC 'close' —
+  // the exact case that used to leave an uncontrolled ghost standing in the round. Remove them the
+  // same way a graceful leave does. Two guards keep it safe: (1) the HOST is never swept — the
+  // referee lives in its tab, so if it were gone nothing would be running; (2) disabled if the
+  // timeout is 0. Collect-then-remove so we don't mutate the map mid-iteration.
+  _sweepSilentPlayers(now) {
+    if (!(this._leaveTimeoutMs > 0)) return;
+    let gone = null;
+    for (const p of this.players.values()) {
+      if (p.id === this.hostId) continue; // never time out the host (it IS the referee)
+      const last = p._lastSeen || 0;
+      if (now - last > this._leaveTimeoutMs) (gone || (gone = [])).push(p.id);
+    }
+    if (gone) for (const id of gone) this.removePlayer(id, 'timed out');
   }
 
   // ---- lobby rename (host-authoritative) ----------------------------------
@@ -270,6 +316,9 @@ export class Referee {
   handleMessage(id, msg) {
     const player = this.players.get(id);
     if (!player) return;
+    // GHOST-PLAYER TIMEOUT: any C2S message is proof the peer is alive. Stamp it so the silent-
+    // timeout sweep (tick) only ever removes a peer that has genuinely gone quiet.
+    player._lastSeen = Date.now();
     switch (msg.t) {
       case C2S.READY:
         player.ready = !!msg.ready;
@@ -341,6 +390,9 @@ export class Referee {
   debugSetTeam(player, role) {
     const r = role === ROLE.HUNTER ? ROLE.HUNTER : ROLE.PROP;
     player.role = r;
+    // Keep the per-round team-existence flags monotonic (see _launchRound / checkRoundOver).
+    if (r === ROLE.HUNTER) this._roundHadHunters = true;
+    else this._roundHadProps = true;
     player.alive = true;
     player.health = this._startHealth();
     if (r === ROLE.HUNTER) {
@@ -394,6 +446,10 @@ export class Referee {
   _spawnOnTeam(player, role) {
     const map = this.maps[this.mapId];
     player.role = role;
+    // A join/switch onto a team means that team HAS had a member this round (monotonic — never
+    // cleared mid-round), so checkRoundOver still resolves if that team later empties via a leave.
+    if (role === ROLE.HUNTER) this._roundHadHunters = true;
+    else if (role === ROLE.PROP) this._roundHadProps = true;
     player.alive = true;
     player.health = this._startHealth();
     player.disguise = null;
@@ -962,6 +1018,13 @@ export class Referee {
   // stands up the physics world. Clears lastResult (a new round supersedes the previous result).
   _launchRound() {
     this.lastResult = null; // a fresh round supersedes the previous result
+    // Record which teams start this round populated (roles are already assigned by startMatch /
+    // startFlippedRound). checkRoundOver reads these so a team later emptied by a LEAVE still
+    // resolves the round; _spawnOnTeam / admitMidGame keep them monotonically true as players
+    // join or switch onto a team mid-round.
+    const roster = [...this.players.values()];
+    this._roundHadHunters = roster.some((p) => p.role === ROLE.HUNTER);
+    this._roundHadProps = roster.some((p) => p.role === ROLE.PROP);
 
     const map = this.maps[this.mapId];
     // Build the authoritative prop instances (= every dynamic rigid body) from map
@@ -1182,22 +1245,33 @@ export class Referee {
     }
   }
 
+  // ONE shared recount, run after every elimination, team switch, mid-join AND leave, plus at
+  // round transitions. Resolves the round if EITHER side has no living members left — whether they
+  // were caught/self-destructed OR simply LEFT. The per-round _roundHad* flags record that a team
+  // existed this round even after a leaver is dropped from the roster (a departed last prop erases
+  // the roster-count proof that props existed), so a ghost/leaver can neither keep a round alive nor
+  // strand it. Falls back to the live roster count when the flags are unset (a manually-driven test
+  // harness that never ran _launchRound), preserving the original death-only behaviour there.
   checkRoundOver() {
     if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
     const all = [...this.players.values()];
     const props = all.filter((p) => p.role === ROLE.PROP);
+    const hunters = all.filter((p) => p.role === ROLE.HUNTER);
     const aliveProps = props.filter((p) => p.alive);
-    if (props.length > 0 && aliveProps.length === 0) {
-      this.endRound(ROLE.HUNTER); // every prop caught => hunters win
+    const aliveHunters = hunters.filter((p) => p.alive);
+    const hadProps = this._roundHadProps != null ? this._roundHadProps : props.length > 0;
+    const hadHunters = this._roundHadHunters != null ? this._roundHadHunters : hunters.length > 0;
+
+    // The round had props and none survive (every prop caught OR the last one left) => hunters win.
+    if (hadProps && aliveProps.length === 0) {
+      this.endRound(ROLE.HUNTER);
       return;
     }
-    // HUNTER-TOOLS v1 win condition: hunters do NOT respawn (see DECISIONS.md). If a round
-    // had hunters and they are ALL dead, the round ends — HUNTERS LOSE, PROPS WIN. (Hunters
-    // can only die during HUNTING, when they can shoot themselves on a decoy / be friendly-
-    // fired; a zero-hunter solo round never triggers this and just runs on the timer.)
-    const hunters = all.filter((p) => p.role === ROLE.HUNTER);
-    const aliveHunters = hunters.filter((p) => p.alive);
-    if (hunters.length > 0 && aliveHunters.length === 0) {
+    // HUNTER-TOOLS v1 win condition: hunters do NOT respawn (see DECISIONS.md). If the round had
+    // hunters and none survive — self-destructed on a decoy, friendly-fired, OR the last one left —
+    // the round ends HUNTERS LOSE, PROPS WIN. A zero-hunter solo round (_roundHadHunters false)
+    // never triggers this and just runs on the timer.
+    if (hadHunters && aliveHunters.length === 0) {
       this.endRound(ROLE.PROP);
     }
   }
@@ -1246,6 +1320,7 @@ export class Referee {
     this.lastTick = now;
 
     if (this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING) {
+      this._sweepSilentPlayers(now); // GHOST-PLAYER TIMEOUT: drop peers that went silent mid-round
       this.integrate(dt);
     }
 

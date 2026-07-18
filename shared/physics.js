@@ -714,68 +714,148 @@ export class PhysicsWorld {
     p.safePos = { x: pos.x, y, z: pos.z };
   }
 
-  // SPAWN/TELEPORT OVERLAP RESOLUTION (seam D3, 2026-07-18). A freshly spawned/teleported player
-  // can materialise INSIDE another player — every hunter shares one hunter spawn, a team-switch or
-  // mid-join respawn drops onto an occupied point, etc. Two kinematic character bodies don't resolve
-  // an existing overlap on their own (the controller only prevents NEW penetration during a sweep),
-  // so without this they fuse and jitter. Called by the host referee right after a spawn/teleport
-  // for the NEWCOMER only (incumbents stay put — deterministic + minimal): slide `id` horizontally
-  // out of any player it overlaps, away from that player's centre, a few capped steps, clamped
-  // inside the arena walls so it can never be pushed through a boundary. No-op solo / on guests
-  // (guest predictors hold a single local player). Uses the same EXCLUDE_SENSORS query as movement.
+  // SPAWN/TELEPORT OVERLAP RESOLUTION (seam D3, 2026-07-18; extended B2, 2026-07-18). A freshly
+  // spawned/teleported player can materialise INSIDE another player — every hunter shares one hunter
+  // spawn, a team-switch or mid-join respawn drops onto an occupied point — AND, since the physics-
+  // settle change, a dynamic PROP may have come to rest ON a spawn point so the player spawns embedded
+  // in it. Two kinematic character bodies don't resolve an existing overlap on their own, and a spawn
+  // buried in a prop just jitters. Called by the host referee right after a spawn/teleport for the
+  // NEWCOMER only (incumbents stay put — deterministic + minimal). Two phases, ONE resolver:
+  //   1) PLAYER SEPARATION — slide `id` horizontally out of any player it overlaps, away from that
+  //      player's centre, capped steps, clamped inside the arena walls so separating two players can
+  //      never fire one through a boundary (this is what staggers the shared hunter spawn apart).
+  //   2) OBSTRUCTION CLEARANCE — lift/nudge `id` out of any PROP or interior static fixture it sits
+  //      inside (a settled prop on the spawn, or a stagger that ended inside a pillar), reusing the
+  //      per-substep prop depenetration so an embedded spawn is dropped onto / nudged off the obstacle.
+  // No-op on guests for phase 1 (predictors hold a single local player); phase 2 still runs (a guest
+  // predictor has the fixed prop colliders). Uses the same EXCLUDE_SENSORS query as movement.
   resolveSpawnOverlap(id) {
     const R = this.R;
     const p = this.players.get(id);
     if (!p || !p.collider) return;
-    if (!this.players || this.players.size < 2) return;
-    if (typeof this.world.intersectionWithShape !== 'function' || !R.Capsule) return;
-    const byHandle = new Map();
-    for (const [oid, q] of this.players) if (oid !== id && q.collider) byHandle.set(q.collider.handle, oid);
-    if (byHandle.size === 0) return;
-    const onlyOthers = (col) => byHandle.has(col.handle);
     const rr = Math.max(0.1, p.radius != null ? p.radius : this._pRadius);
-    const hh = Math.max(0.02, p.half != null ? p.half : this._pHalf);
-    const step = Math.max(0.15, rr * 0.5);
-    // Keep the pushed body inside the boundary walls (inner face = size/2 - WALL_INSET; a legal
-    // stand sits a radius short of it) so separating two players never fires one through a wall.
+    // Keep any push inside the boundary walls (inner face = size/2 - WALL_INSET; a legal stand sits a
+    // radius short of it) so separating players / clearing an obstacle never fires one through a wall.
     const bound = this.map && this.map.size ? this.map.size / 2 - WALL_INSET_PHYS - rr : Infinity;
-    let travelled = 0;
-    for (let iter = 0; iter < 24 && travelled <= this._spawnPushMax; iter++) {
-      // A spawn/teleport can happen BEFORE the first world.step() (round start builds the world and
-      // adds every player up front), and the shape query reads a STALE broad-phase until the scene
-      // queries are refreshed — so update them from the bodies' current transforms each iteration
-      // (we just moved one). Guarded: an older build without it just relies on the post-step queries.
-      if (typeof this.world.updateSceneQueries === 'function') this.world.updateSceneQueries();
-      const t = p.body.translation();
-      const cy = t.y + (p.colliderOffsetY || 0);
-      let hit;
-      try {
-        hit = this.world.intersectionWithShape(
-          { x: t.x, y: cy, z: t.z }, IDENT_QUAT, new R.Capsule(hh, rr), this._moveFilter, undefined, p.collider, p.body, onlyOthers
-        );
-      } catch {
-        return; // API gap — leave the newcomer where it is (depenetration handles the rest over time)
+
+    // ── Phase 1: separate from other PLAYERS ──────────────────────────────────────────────────
+    if (this.players && this.players.size >= 2 && typeof this.world.intersectionWithShape === 'function' && R.Capsule) {
+      const byHandle = new Map();
+      for (const [oid, q] of this.players) if (oid !== id && q.collider) byHandle.set(q.collider.handle, oid);
+      if (byHandle.size > 0) {
+        const onlyOthers = (col) => byHandle.has(col.handle);
+        const hh = Math.max(0.02, p.half != null ? p.half : this._pHalf);
+        const step = Math.max(0.15, rr * 0.5);
+        let travelled = 0;
+        for (let iter = 0; iter < 24 && travelled <= this._spawnPushMax; iter++) {
+          // A spawn/teleport can happen BEFORE the first world.step() (round start builds the world
+          // and adds every player up front), and the shape query reads a STALE broad-phase until the
+          // scene queries are refreshed — so update them from the bodies' current transforms each
+          // iteration (we just moved one). Guarded: an older build relies on the post-step queries.
+          if (typeof this.world.updateSceneQueries === 'function') this.world.updateSceneQueries();
+          const t = p.body.translation();
+          const cy = t.y + (p.colliderOffsetY || 0);
+          let hit;
+          try {
+            hit = this.world.intersectionWithShape(
+              { x: t.x, y: cy, z: t.z }, IDENT_QUAT, new R.Capsule(hh, rr), this._moveFilter, undefined, p.collider, p.body, onlyOthers
+            );
+          } catch {
+            hit = null; break; // API gap — leave the newcomer where it is (depenetration handles the rest)
+          }
+          if (!hit) break; // clear of everyone
+          const o = this.players.get(byHandle.get(hit.handle));
+          let dx = 0, dz = 0;
+          if (o) { const ot = o.body.translation(); dx = t.x - ot.x; dz = t.z - ot.z; }
+          let d = Math.hypot(dx, dz);
+          if (d < 1e-4) {
+            // Exactly stacked (shared spawn point): scatter by a deterministic golden-angle spiral so
+            // repeated calls fan the players out instead of all pushing the same way.
+            const ang = (iter + 1) * 2.399963229728653;
+            dx = Math.cos(ang); dz = Math.sin(ang); d = 1;
+          }
+          dx /= d; dz /= d;
+          let nx = t.x + dx * step, nz = t.z + dz * step;
+          if (Number.isFinite(bound)) { nx = clampScalar(nx, -bound, bound); nz = clampScalar(nz, -bound, bound); }
+          p.body.setTranslation({ x: nx, y: t.y, z: nz }, false);
+          p.body.setNextKinematicTranslation({ x: nx, y: t.y, z: nz });
+          travelled += step;
+        }
       }
-      if (!hit) break; // clear of everyone
-      const o = this.players.get(byHandle.get(hit.handle));
-      let dx = 0, dz = 0;
-      if (o) { const ot = o.body.translation(); dx = t.x - ot.x; dz = t.z - ot.z; }
-      let d = Math.hypot(dx, dz);
-      if (d < 1e-4) {
-        // Exactly stacked (shared spawn point): scatter by a deterministic golden-angle spiral so
-        // repeated calls fan the players out instead of all pushing the same way.
-        const ang = (iter + 1) * 2.399963229728653;
-        dx = Math.cos(ang); dz = Math.sin(ang); d = 1;
-      }
-      dx /= d; dz /= d;
-      let nx = t.x + dx * step, nz = t.z + dz * step;
-      if (Number.isFinite(bound)) { nx = clampScalar(nx, -bound, bound); nz = clampScalar(nz, -bound, bound); }
-      p.body.setTranslation({ x: nx, y: t.y, z: nz }, false);
-      p.body.setNextKinematicTranslation({ x: nx, y: t.y, z: nz });
-      travelled += step;
     }
+
+    // ── Phase 2: clear PROP / interior-static-fixture embedding ──────────────────────────────
+    this._clearSpawnObstruction(p, bound);
+
     const t = p.body.translation();
     p.safePos = { x: t.x, y: t.y, z: t.z };
+  }
+
+  // Lift/nudge a freshly-spawned player OUT of any PROP or interior STATIC FIXTURE it sits inside
+  // (settled-prop embedding, or a stagger that ended inside a pillar/counter). Reuses the exact
+  // projectPoint push-out the per-substep prop depenetration uses (skin-aware, floor-clamped, picks
+  // the cheapest exit → drops the player ONTO the obstacle when its top is nearest, else nudges to
+  // the nearest clear side), run a few bounded iterations here with the broad-phase refreshed each
+  // pass (a spawn happens before the first world.step()). The obstruction set = dynamic/capped PROPS
+  // plus interior static FIXTURES (pillars/door/vent) — deliberately NOT the ground slab or boundary
+  // walls: the ground is the surface we stand on, and the arena edge is already clamped by phase 1.
+  // Guarded: absent projectPoint / empty world => no-op. Same push cap + wall clamp as everything else.
+  _clearSpawnObstruction(p, bound) {
+    const world = this.world;
+    if (!p || !p.collider) return;
+    if (typeof world.projectPoint !== 'function') return;
+    const handles = new Set();
+    if (this._propHandles) for (const h of this._propHandles) handles.add(h);
+    if (this._staticFixtureTypeByHandle) for (const h of this._staticFixtureTypeByHandle.keys()) handles.add(h);
+    if (handles.size === 0) return;
+    const obstruction = (col) => handles.has(col.handle);
+    const half = p.half != null ? p.half : this._pHalf;
+    const radius = p.radius != null ? p.radius : this._pRadius;
+    const clear = radius - this._propSkin; // an axis point must keep this much distance from a surface
+    for (let iter = 0; iter < 24; iter++) {
+      if (typeof world.updateSceneQueries === 'function') world.updateSceneQueries();
+      const t = p.body.translation();
+      const cy = t.y + (p.colliderOffsetY || 0);
+      // Two candidate pushes, chosen exactly like _depenetrateFromProps: an INSIDE axis sample exits
+      // through its nearest surface (cheapest exit wins — a deep sample can point at a floor-pressed
+      // underside); a NEAR sample is pushed straight away from the surface (deepest violation wins).
+      let inX = 0, inY = 0, inZ = 0, inNeed = Infinity;
+      let outX = 0, outY = 0, outZ = 0, outNeed = 0;
+      for (const oy of [-half, 0, half]) {
+        const pt = { x: t.x, y: cy + oy, z: t.z };
+        let proj;
+        try {
+          proj = world.projectPoint(pt, false, undefined, undefined, undefined, undefined, obstruction);
+        } catch {
+          return; // API mismatch — leave the newcomer where it is
+        }
+        if (!proj || !proj.point) continue;
+        const dx = proj.point.x - pt.x, dy = proj.point.y - pt.y, dz = proj.point.z - pt.z;
+        const d = Math.hypot(dx, dy, dz);
+        if (d < 1e-9) continue;
+        if (proj.isInside) {
+          const need = d + clear;
+          if (need < inNeed) { inNeed = need; inX = (dx / d) * need; inY = (dy / d) * need; inZ = (dz / d) * need; }
+        } else if (d < clear) {
+          const need = clear - d;
+          if (need > outNeed) { outNeed = need; outX = (-dx / d) * need; outY = (-dy / d) * need; outZ = (-dz / d) * need; }
+        }
+      }
+      let px, py, pz;
+      if (inNeed < Infinity) { px = inX; py = inY; pz = inZ; }
+      else if (outNeed > 0) { px = outX; py = outY; pz = outZ; }
+      else break; // clear of every prop / interior fixture
+      const mag = Math.hypot(px, py, pz);
+      if (mag < 1e-9) break;
+      const scale = Math.min(1, this._propMaxPush / mag);
+      let nx = t.x + px * scale, nz = t.z + pz * scale;
+      if (Number.isFinite(bound)) { nx = clampScalar(nx, -bound, bound); nz = clampScalar(nz, -bound, bound); }
+      // Never push the capsule below the floor plane (a prop face resting on the ground must not
+      // become an exit route into the slab — same clamp the mover + prop depenetration apply).
+      const ny = Math.max(t.y + py * scale, this._pCenterY + FLOOR_Y);
+      p.body.setTranslation({ x: nx, y: ny, z: nz }, false);
+      p.body.setNextKinematicTranslation({ x: nx, y: ny, z: nz });
+    }
   }
 
   getPlayer(id) {

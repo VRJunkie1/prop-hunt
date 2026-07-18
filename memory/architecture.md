@@ -544,6 +544,14 @@ LOBBY → (host START, ≥minPlayers) → HIDING (hunters frozen) → HUNTING �
 → LOBBY. Timers via `phaseEndsAt`. Hunters win when all props eliminated; props
 win if the hunt timer expires with any prop alive.
 
+**Leaving is leave-proof (B2, 2026-07-18).** A player who leaves — GRACEFULLY (WebRTC close →
+`net.js → removePlayer`) or via a SILENT TIMEOUT (a locked/dropped phone swept by `tick →
+_sweepSilentPlayers`, `rules.leaveTimeoutSeconds`, active phases only, host never swept) — is fully
+removed (physics body despawned, dropped from roster/snapshots/counts, public "X left" line). The
+shared `checkRoundOver` recount reads per-round `_roundHad{Hunters,Props}` flags so a departed LAST
+prop → hunters win and a departed LAST hunter → props win (a ghost can't keep a round alive or strand
+it), while a hunter-less solo round still runs on the timer. Detail: `notes/netcode.md`.
+
 **`minPlayers` is 1 (solo launch)** — the host can start alone. Role math keeps
 ≥1 prop (`hunterCount = min(max(1,round(n*hunterRatio)), n-1)`), so a solo host is
 a prop; a zero-hunter round has no instant win and just runs on the timer.
