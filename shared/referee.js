@@ -416,6 +416,9 @@ export class Referee {
       // hunter or an undisguised fresh prop is collided/shot on their plain body shape).
       if (this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, null);
       if (this.physics.setShotCollider) this.physics.setShotCollider(player.id, null);
+      // SEAM D3: a fresh respawn (team switch / mid-join) can land ON another player — the shared
+      // hunter spawn especially. Nudge the newcomer clear so nobody spawns fused inside anyone.
+      if (this.physics.resolveSpawnOverlap) this.physics.resolveSpawnOverlap(player.id);
     }
     send(player, { t: S2C.ROLE, role });
   }
@@ -1144,6 +1147,10 @@ export class Referee {
           // HITBOX ACCURACY: attach every player's shot sensor (disguise-shaped or capsule-
           // matching) so the authoritative shot raycast tests the visible shape from the start.
           if (world.setShotCollider) world.setShotCollider(p.id, p.disguise || null);
+          // SEAM D3: every hunter shares one spawn point, so several materialise inside each other
+          // on a fresh world. Resolving per-player as we add fans them apart (each newcomer clears
+          // the ones already placed) so nobody starts the round fused to a teammate.
+          if (world.resolveSpawnOverlap) world.resolveSpawnOverlap(p.id);
         }
       }
       this.physics = world;
@@ -1308,6 +1315,7 @@ export class Referee {
         if (!this.physics.hasPlayer(p.id)) {
           this.physics.addPlayer(p.id, p.pos); // join race
           if (this.physics.setShotCollider) this.physics.setShotCollider(p.id, p.disguise || null);
+          if (this.physics.resolveSpawnOverlap) this.physics.resolveSpawnOverlap(p.id); // seam D3: don't materialise inside anyone
         }
         // HITBOX ACCURACY: keep a disguised player's shot sensor oriented to its visible facing
         // (dispYaw, advanced above by updateDisguiseRotation) so a rotated box is hit at its

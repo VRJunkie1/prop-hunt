@@ -330,6 +330,26 @@ export class PhysicsWorld {
     this._stuckPlayerIds = new Set(); // ids the escape hatch couldn't free → referee respawns
     this._propObstacles = []; // per-prop {body|cx,cy,cz, hx,hy,hz} for character-vs-prop push-out
 
+    // HEAVY-OBJECT NUDGE (solid disguised players, 2026-07-18). A disguised prop-player's body is
+    // a KINEMATIC character body — infinite mass, so a player who shoves it does NOT move it. A
+    // REAL dynamic prop of the same disguise DOES slide away when shoved; the disguised player
+    // standing there as an immovable wall is the tell. This lets a SUSTAINED push slide a disguised
+    // player SLOWLY along the push, like shoving heavy furniture (no tip — a kinematic body never
+    // rotates on its own). It runs the crawl THROUGH the pushed player's own character controller,
+    // so it collide-and-slides vs walls/props exactly like normal movement and can't be shoved
+    // into geometry. HOST-ONLY (dynamicProps) + capped crawl speed + a short warm-up so a glancing
+    // bump barely registers, so it can never be abused to teleport (host resolves; clients
+    // reconcile). Gated to DISGUISED targets only — undisguised hunter-vs-hunter / player-vs-player
+    // solidity is left exactly as it was. See notes/solid-disguised-players.md.
+    this._heavyNudge = opts.heavyNudge !== false; // test seam: off => the nudge pass is a no-op
+    this._nudgeSpeed = this.rules.heavyNudgeSpeed != null ? this.rules.heavyNudgeSpeed : 0.8; // m/s
+    this._nudgeContactSkin = this.rules.heavyNudgeContactSkin != null ? this.rules.heavyNudgeContactSkin : 0.12;
+    this._nudgeWarmup = this.rules.heavyNudgeWarmupFrames != null ? this.rules.heavyNudgeWarmupFrames : 3;
+    // SPAWN/TELEPORT OVERLAP (seam D3). Max metres resolveSpawnOverlap may push a freshly
+    // spawned player to clear another player it materialised inside (team-switch respawn,
+    // mid-join, shared hunter spawn), so nobody fuses together. Iteration-bounded + wall-clamped.
+    this._spawnPushMax = this.rules.spawnOverlapPushMax != null ? this.rules.spawnOverlapPushMax : 3.0;
+
     // HIDE-SPOT REMOVAL: indices into map.fixtures the referee deleted this match. _buildStatic
     // skips them so a removed built-in leaves NO collider — matching the client scenery render,
     // which drops the same indices, so a removed pillar never becomes an invisible wall. Built
@@ -692,6 +712,70 @@ export class PhysicsWorld {
     // A teleport (reconciliation / respawn) is by construction a fresh valid spot, so
     // reset the depenetration anchor to it — otherwise it could snap back to a stale one.
     p.safePos = { x: pos.x, y, z: pos.z };
+  }
+
+  // SPAWN/TELEPORT OVERLAP RESOLUTION (seam D3, 2026-07-18). A freshly spawned/teleported player
+  // can materialise INSIDE another player — every hunter shares one hunter spawn, a team-switch or
+  // mid-join respawn drops onto an occupied point, etc. Two kinematic character bodies don't resolve
+  // an existing overlap on their own (the controller only prevents NEW penetration during a sweep),
+  // so without this they fuse and jitter. Called by the host referee right after a spawn/teleport
+  // for the NEWCOMER only (incumbents stay put — deterministic + minimal): slide `id` horizontally
+  // out of any player it overlaps, away from that player's centre, a few capped steps, clamped
+  // inside the arena walls so it can never be pushed through a boundary. No-op solo / on guests
+  // (guest predictors hold a single local player). Uses the same EXCLUDE_SENSORS query as movement.
+  resolveSpawnOverlap(id) {
+    const R = this.R;
+    const p = this.players.get(id);
+    if (!p || !p.collider) return;
+    if (!this.players || this.players.size < 2) return;
+    if (typeof this.world.intersectionWithShape !== 'function' || !R.Capsule) return;
+    const byHandle = new Map();
+    for (const [oid, q] of this.players) if (oid !== id && q.collider) byHandle.set(q.collider.handle, oid);
+    if (byHandle.size === 0) return;
+    const onlyOthers = (col) => byHandle.has(col.handle);
+    const rr = Math.max(0.1, p.radius != null ? p.radius : this._pRadius);
+    const hh = Math.max(0.02, p.half != null ? p.half : this._pHalf);
+    const step = Math.max(0.15, rr * 0.5);
+    // Keep the pushed body inside the boundary walls (inner face = size/2 - WALL_INSET; a legal
+    // stand sits a radius short of it) so separating two players never fires one through a wall.
+    const bound = this.map && this.map.size ? this.map.size / 2 - WALL_INSET_PHYS - rr : Infinity;
+    let travelled = 0;
+    for (let iter = 0; iter < 24 && travelled <= this._spawnPushMax; iter++) {
+      // A spawn/teleport can happen BEFORE the first world.step() (round start builds the world and
+      // adds every player up front), and the shape query reads a STALE broad-phase until the scene
+      // queries are refreshed — so update them from the bodies' current transforms each iteration
+      // (we just moved one). Guarded: an older build without it just relies on the post-step queries.
+      if (typeof this.world.updateSceneQueries === 'function') this.world.updateSceneQueries();
+      const t = p.body.translation();
+      const cy = t.y + (p.colliderOffsetY || 0);
+      let hit;
+      try {
+        hit = this.world.intersectionWithShape(
+          { x: t.x, y: cy, z: t.z }, IDENT_QUAT, new R.Capsule(hh, rr), this._moveFilter, undefined, p.collider, p.body, onlyOthers
+        );
+      } catch {
+        return; // API gap — leave the newcomer where it is (depenetration handles the rest over time)
+      }
+      if (!hit) break; // clear of everyone
+      const o = this.players.get(byHandle.get(hit.handle));
+      let dx = 0, dz = 0;
+      if (o) { const ot = o.body.translation(); dx = t.x - ot.x; dz = t.z - ot.z; }
+      let d = Math.hypot(dx, dz);
+      if (d < 1e-4) {
+        // Exactly stacked (shared spawn point): scatter by a deterministic golden-angle spiral so
+        // repeated calls fan the players out instead of all pushing the same way.
+        const ang = (iter + 1) * 2.399963229728653;
+        dx = Math.cos(ang); dz = Math.sin(ang); d = 1;
+      }
+      dx /= d; dz /= d;
+      let nx = t.x + dx * step, nz = t.z + dz * step;
+      if (Number.isFinite(bound)) { nx = clampScalar(nx, -bound, bound); nz = clampScalar(nz, -bound, bound); }
+      p.body.setTranslation({ x: nx, y: t.y, z: nz }, false);
+      p.body.setNextKinematicTranslation({ x: nx, y: t.y, z: nz });
+      travelled += step;
+    }
+    const t = p.body.translation();
+    p.safePos = { x: t.x, y: t.y, z: t.z };
   }
 
   getPlayer(id) {
@@ -1204,6 +1288,12 @@ export class PhysicsWorld {
     // approach speed is moveSpeed/60 = 0.1 m per substep, so a 0.2 cap always wins.
     for (const p of this.players.values()) this._depenetrateFromProps(p);
 
+    // HEAVY-OBJECT NUDGE (solid disguised players, part B). A disguised player is kinematic, so a
+    // shove that would slide a real dynamic prop just stops dead against the disguised one (the
+    // tell). Slide the disguised target SLOWLY along a sustained push. Host-only; disguised targets
+    // only; capped crawl — see _applyHeavyNudges. Runs after the step so it reads settled contacts.
+    if (this._heavyNudge && this.dynamicProps) this._applyHeavyNudges(dt);
+
     // BURIED-PROP RECOVERY (pass #5). While a prop is being shoved by (or trampled
     // under) the infinite-mass kinematic capsule, the solver can only resolve the
     // overlap by pushing the PROP — and against the capsule it can drive the prop into
@@ -1297,6 +1387,88 @@ export class PhysicsWorld {
     // The pushed-out position is MORE collision-free than the pre-push one — make it
     // the new anchor so a following static snap can't yank the player back into the prop.
     p.safePos = { x: nx, y: ny, z: nz };
+  }
+
+  // HEAVY-OBJECT NUDGE (part B, 2026-07-18). Slide any DISGUISED player that another player is
+  // actively pushing into, slowly, along the push — so a disguised prop shoves like the real
+  // dynamic prop it imitates instead of standing there as an immovable wall (the tell). Two
+  // passes: (1) detect — for every MOVING player, shape-cast its own (skin-inflated) capsule for
+  // an overlap with another player's movement collider; if that other player is DISGUISED,
+  // accumulate a push direction (from pusher toward target, horizontal) onto the target; (2) apply
+  // — for each pushed disguised target, once the push has persisted `_nudgeWarmup` frames (so a
+  // glancing tap barely moves it — the "sustained" feel), crawl it `_nudgeSpeed·dt` along the
+  // accumulated direction THROUGH ITS OWN character controller (collide-and-slide vs walls/props,
+  // never a raw teleport, never any rotation/tip since the body is kinematic). Host-only (guarded
+  // by the caller's dynamicProps check + <2-player early-out). Undisguised targets are never
+  // touched, so hunter-vs-hunter / general player-vs-player is left exactly as it was.
+  _applyHeavyNudges(dt) {
+    const R = this.R;
+    if (!this.players || this.players.size < 2) { this._clearNudgeState(); return; }
+    if (!(this._nudgeSpeed > 0)) return;
+    if (typeof this.world.intersectionWithShape !== 'function' || !R.Capsule) return;
+    // handle -> id for player MOVEMENT colliders (cheap; a handful of players).
+    const byHandle = new Map();
+    for (const [id, q] of this.players) if (q.collider) byHandle.set(q.collider.handle, id);
+    // (1) detect pushes.
+    const push = new Map(); // targetId -> { x, z }
+    for (const [mid, m] of this.players) {
+      const inp = m.input || {};
+      if (Math.hypot(inp.mx || 0, inp.mz || 0) <= 1e-3 || !m.collider) continue; // idle pusher: no push
+      const mt = m.body.translation();
+      const mcy = mt.y + (m.colliderOffsetY || 0);
+      const rr = (m.radius != null ? m.radius : this._pRadius) + this._nudgeContactSkin;
+      const hh = Math.max(0.02, m.half != null ? m.half : this._pHalf);
+      const otherPlayers = (col) => { const tid = byHandle.get(col.handle); return tid != null && tid !== mid; };
+      let hit;
+      try {
+        hit = this.world.intersectionWithShape(
+          { x: mt.x, y: mcy, z: mt.z }, IDENT_QUAT, new R.Capsule(hh, rr), this._moveFilter, undefined, m.collider, m.body, otherPlayers
+        );
+      } catch {
+        return; // API gap — skip the whole nudge pass this substep
+      }
+      if (!hit) continue;
+      const tid = byHandle.get(hit.handle);
+      const t = tid != null ? this.players.get(tid) : null;
+      if (!t || !t.disguiseType) continue; // ONLY disguised players are nudgeable
+      const tt = t.body.translation();
+      let dx = tt.x - mt.x, dz = tt.z - mt.z;
+      let d = Math.hypot(dx, dz);
+      if (d < 1e-6) {
+        // Centres coincide — push along the pusher's own move direction instead.
+        const s = Math.sin(inp.yaw || 0), c = Math.cos(inp.yaw || 0);
+        dx = -s * (inp.mz || 0) + c * (inp.mx || 0);
+        dz = -c * (inp.mz || 0) - s * (inp.mx || 0);
+        d = Math.hypot(dx, dz);
+        if (d < 1e-6) continue;
+      }
+      const acc = push.get(tid) || { x: 0, z: 0 };
+      acc.x += dx / d; acc.z += dz / d;
+      push.set(tid, acc);
+    }
+    // (2) apply the capped crawl to each pushed target through its own controller.
+    for (const [tid, t] of this.players) {
+      const acc = push.get(tid);
+      if (!acc) { t._pushFrames = 0; continue; }
+      const d = Math.hypot(acc.x, acc.z);
+      if (d < 1e-6) { t._pushFrames = 0; continue; }
+      t._pushFrames = (t._pushFrames || 0) + 1;
+      if (t._pushFrames < this._nudgeWarmup) continue; // sustained-push warm-up
+      if (!t.collider) continue;
+      const step = this._nudgeSpeed * dt;
+      const desired = { x: (acc.x / d) * step, y: 0, z: (acc.z / d) * step };
+      this._controller.computeColliderMovement(t.collider, desired, this._moveFilter);
+      const mv = this._controller.computedMovement();
+      const tr = t.body.translation();
+      const nx = tr.x + mv.x, nz = tr.z + mv.z; // horizontal only — y untouched, so no lift and no tip
+      t.body.setTranslation({ x: nx, y: tr.y, z: nz }, false);
+      t.body.setNextKinematicTranslation({ x: nx, y: tr.y, z: nz });
+      t.safePos = { x: nx, y: tr.y, z: nz };
+    }
+  }
+
+  _clearNudgeState() {
+    for (const p of this.players.values()) p._pushFrames = 0;
   }
 
   // Player ids the depenetration escape hatch flagged as unrecoverably wedged since the
@@ -1403,6 +1575,15 @@ export class PhysicsWorld {
 
 // Identity rotation, reused by the depenetration intersection test (no per-call alloc).
 const IDENT_QUAT = { x: 0, y: 0, z: 0, w: 1 };
+
+// Boundary-wall inset — the inner, arena-facing wall face sits this far inside the map edge.
+// MUST match `wallInset` in _buildStatic; resolveSpawnOverlap clamps a separated player just
+// inside it so nudging two players apart can never fire one through a boundary wall.
+const WALL_INSET_PHYS = 0.5;
+
+function clampScalar(v, lo, hi) {
+  return v < lo ? lo : v > hi ? hi : v;
+}
 
 // Quaternion for a yaw (rotation about +Y).
 function yawQuat(yaw) {

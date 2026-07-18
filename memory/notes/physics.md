@@ -677,7 +677,11 @@ readers (`js/scene.js`, `js/main.js`) + catalog flags (`shared/config/*`).
   the render capsule). Moved by one reusable `KinematicCharacterController`
   (autostep, snap-to-ground, slide, `setApplyImpulsesToDynamicBodies(true)` so a
   walking player shoves props). Players **cannot be knocked over** — kinematic
-  bodies ignore impulses entirely.
+  bodies ignore impulses entirely. A DISGUISED player, being kinematic, is otherwise
+  an immovable wall when shoved (a real dynamic prop would slide); `_applyHeavyNudges`
+  lets a sustained push slide a *disguised* target slowly through its own controller
+  (no tip), and `resolveSpawnOverlap` fans out players who spawn fused. Full detail:
+  `notes/solid-disguised-players.md` (SOLID DISGUISED PLAYERS, 2026-07-18, Jie).
 - **Static fixtures / walls / ground**: solo (parent-less = fixed) colliders,
   cheap. Ground is a thin slab with its top at y=0; boundary walls match the
   renderer's enclosing box; each `map.fixtures[]` entry becomes one collider.

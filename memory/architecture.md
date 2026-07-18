@@ -435,10 +435,27 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   with reconciliation, not lockstep.
 - **Players** are kinematic capsule character bodies (run/jump, real collide-and-
   slide vs walls/fixtures — FIXES the old pass-through gap — shove dynamic props,
-  can never be knocked over). A disguised player's capsule GIRTH is grown to the
-  disguise footprint (solidity pass #3, `PhysicsWorld.setPlayerCollider`, capped at
-  `rules.disguiseColliderMaxRadius` for doorway fit; total height kept constant) so a
-  big disguise is solid instead of clipping into world props. **Architecture + wall-attached pieces
+  can never be knocked over). A disguised player's MOVEMENT collider IS the disguise's
+  real prop shape (Part 1, `_buildMoveColliderDesc`/`setPlayerCollider`, the same
+  `shapeFor()` cuboid/cylinder/cone/ball/hull the world prop uses, **uncapped** — the
+  `disguiseColliderMaxRadius` cap only shrank the retired `_capsuleDimsFor` fallback),
+  so a table-disguised player is solid AT TABLE SIZE and other players collide against
+  that footprint (this IS the "solid shell" — there is no separate outward collider).
+- **SOLID DISGUISED PLAYERS (2026-07-18, Jie).** A disguised player is kinematic
+  (infinite mass), so a shove that slides a REAL dynamic prop stops dead against the
+  disguised one — an immovable-wall tell. `PhysicsWorld._applyHeavyNudges` (host-only,
+  end of each substep) lets a SUSTAINED push from another player slide a **disguised**
+  target SLOWLY (`rules.heavyNudgeSpeed` 0.8 m/s, warm-up `heavyNudgeWarmupFrames`)
+  along the push, resolved THROUGH the target's own controller (collide-and-slide vs
+  walls, horizontal-only ⇒ no tip), so a disguised prop shoves like the real prop it
+  imitates. Capped + host-authoritative ⇒ can't teleport-abuse; clients reconcile via
+  the existing player-sync (no new netcode). Gated to disguised targets ⇒ hunter-vs-
+  hunter / general player-vs-player is byte-identical (nudge-off == nudge-on there).
+  `PhysicsWorld.resolveSpawnOverlap(id)` (called by the referee at the spawn choke
+  points `_spawnOnTeam` / `_buildPhysics` / join-race) nudges a freshly spawned player
+  out of anyone it materialised inside (shared hunter spawn, team switch, mid-join),
+  wall-clamped, so nobody spawns fused. Guard: `tools/check-solid-players.mjs`. Detail:
+  `notes/solid-disguised-players.md`. **Architecture + wall-attached pieces
   (pillars / door / vent, `isFixedBodyEntry`)** are static colliders; **everything else** (all props,
   ALL surface clutter, AND the un-`static` built-ins: counters/appliances/tables/chairs/crates) are
   **dynamic** rigid bodies that get shoved (the TELL: real props tumble, a kinematic disguised player
