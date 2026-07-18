@@ -1804,23 +1804,27 @@ function wireMenu() {
     session.send({ t: C2S.SWITCH_TEAM });
     closePause(true);
   };
-  // COPY ROOM CODE from the pause menu, so new players can be added mid-game. navigator.clipboard with
-  // a phone-friendly fallback (show the code in the feed if clipboard access is denied / insecure ctx).
+  // COPY JOIN LINK from the pause menu, so new players can be added mid-game by pasting one URL
+  // (opening it drops them straight into the room — see tryJoinFromHash). Build the link string
+  // FIRST (synchronous, via the shared buildJoinLink) then write it inside this tap handler —
+  // mobile browsers only grant clipboard access from a direct user gesture. Phone-friendly
+  // fallback: show the link in the feed if clipboard access is denied / insecure ctx. The raw
+  // room code stays visible on-screen (#pauseRoomCode) for anyone who'd rather type it.
   ui.onPauseCopyRoom = async () => {
-    const code = state.room;
-    if (!code) return;
+    if (!state.room) return;
+    const link = buildJoinLink(state.room);
     try {
-      await navigator.clipboard.writeText(code);
-      ui.feed(`Room code ${code} copied — share it so friends can join mid-game.`);
+      await navigator.clipboard.writeText(link);
+      ui.feed('Join link copied — paste it so friends drop straight into the room.');
     } catch {
-      ui.feed(`Room code: ${code} (copy it manually to invite players).`);
+      ui.feed(`Join link: ${link} (copy it manually to invite players).`);
     }
   };
   const pauseBtn = document.getElementById('pauseBtn');
   if (pauseBtn) pauseBtn.addEventListener('click', () => openPause());
   ui.el.copyLinkBtn.addEventListener('click', async () => {
     if (!state.room) return;
-    const link = `${location.origin}${location.pathname}#${state.room}`;
+    const link = buildJoinLink(state.room);
     try {
       await navigator.clipboard.writeText(link);
       ui.lobbyHint('Invite link copied — paste it to your friends.');
@@ -1831,10 +1835,23 @@ function wireMenu() {
   });
 }
 
+// --- JOIN LINK: ONE definition of the shareable-URL format, used by BOTH the builder
+// (lobby "Copy invite link" + pause "Copy link") and the parser (auto-join on boot) so the
+// two sides can never drift. The link is the page's OWN current address with the room code as
+// the URL hash:  <origin><path>#CODE  (e.g. https://prophunt.pages.dev/#X7K2). Using
+// location.origin+pathname (never a hardcoded URL) means preview/test deploys share correctly
+// too. Room codes are an uppercase alphabet, so the parser upper-cases + trims.
+function buildJoinLink(code) {
+  return `${location.origin}${location.pathname}#${code}`;
+}
+function parseRoomFromHash() {
+  return (location.hash || '').replace(/^#/, '').toUpperCase().trim();
+}
+
 // Join-by-link: a shared URL carries the room code after a '#'. If present, drop
 // it into the code field and auto-join so the friend really does "just click".
 function tryJoinFromHash() {
-  const code = (location.hash || '').replace(/^#/, '').toUpperCase().trim();
+  const code = parseRoomFromHash();
   if (!code) return;
   ui.el.roomCode.value = code;
   session.join(ui.el.name.value, code);

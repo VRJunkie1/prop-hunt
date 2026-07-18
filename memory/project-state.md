@@ -1649,8 +1649,11 @@ unchanged. **Not yet verified across real networks** — see the playtest gap [9
       `C2S.CREATE/JOIN` from `shared/protocol.js`.
 - [E] **Direct/relayed lobby badge preserved** — detection now reads
       `conn.peerConnection.getStats()` (PeerJS exposes the RTCPeerConnection).
-- [F] **Join-by-link**: `#CODE` in the URL auto-joins on boot; lobby has a
-      "Copy invite link" button. See `main.js` `tryJoinFromHash` / `wireMenu`.
+- [F] **Join-by-link**: `#CODE` in the URL auto-joins on boot; the lobby "Copy invite
+      link" button AND the pause menu "Copy link" button both copy the full join link
+      (`<origin><path>#CODE`). Format is single-sourced: `buildJoinLink(code)` +
+      `parseRoomFromHash()` in `main.js` back all three sites (both builders + the boot
+      parser `tryJoinFromHash`) so build/parse can't drift. See `wireMenu` / pause note.
 - [G] `package.json` trimmed to a static project (dropped `ws` + node scripts).
       README + all memory notes updated.
 

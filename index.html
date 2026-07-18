@@ -173,12 +173,13 @@
         <div class="pause-card">
           <h2>PAUSED</h2>
           <p class="pause-sub">The match is still running &mdash; this is just a menu.</p>
-          <!-- ROOM CODE + copy, so new players can be added mid-game (mid-round joins land on the
+          <!-- ROOM CODE (shown for manual typing) + a copy button that copies the FULL JOIN LINK,
+               so new players can be added mid-game by pasting one URL (mid-round joins land on the
                smaller team). Populated by ui.setPauseRoom(); copy handled by main.js onPauseCopyRoom. -->
           <div class="pause-room">
             <span class="pause-room-label">Room code</span>
             <code id="pauseRoomCode" class="pause-room-code">----</code>
-            <button id="pauseCopyRoom" class="ghost" type="button">Copy</button>
+            <button id="pauseCopyRoom" class="ghost" type="button">Copy link</button>
           </div>
           <!-- MOUSE SENSITIVITY slider (B4, 2026-07-18) — PC only. Hidden on touch by ui.js
                (same prefersTouchControls() check the controls scheme uses). Scales mouse-look live

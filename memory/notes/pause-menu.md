@@ -5,9 +5,16 @@ Full detail: `notes/team-switch-flipped-rounds.md`. Three pause-menu-facing chan
 - **Switch teams** (`#pauseSwitch`) → `main.js ui.onPauseSwitch` sends `C2S.SWITCH_TEAM` + `closePause(true)`.
   Host respawns you FRESH on the opposite team (`applySwitchTeam` → `_spawnOnTeam`) + a public log line.
   No cooldown/anti-abuse (accepted). The new `ROLE` re-runs `applyRoleView`/`applyToolView` + banner.
-- **Room code + Copy** (`#pauseRoomCode` set by `ui.setPauseRoom(state.room)` in `openPause`; `#pauseCopyRoom`
-  → `main.js ui.onPauseCopyRoom`, `navigator.clipboard` with a feed fallback) — so friends can be added
-  mid-game (mid-round joins land on the smaller team).
+- **Room code + Copy link** (`#pauseRoomCode` set by `ui.setPauseRoom(state.room)` in `openPause`;
+  `#pauseCopyRoom` labelled "Copy link" → `main.js ui.onPauseCopyRoom`) — so friends can be added
+  mid-game (mid-round joins land on the smaller team). **Copies the FULL JOIN LINK, not the raw code**
+  (2026-07-18, VRmike): tapping it copies `buildJoinLink(state.room)` = `<origin><path>#CODE`, so pasting
+  the URL drops someone straight into the room via `tryJoinFromHash` on load — no "open the site, type
+  X7K2". `navigator.clipboard` inside the tap handler (mobile gesture rule) with a feed fallback that
+  shows the link. The raw code stays on-screen (`#pauseRoomCode`) for anyone who'd rather type it.
+  **Join-link format lives in ONE place** — `buildJoinLink(code)` + `parseRoomFromHash()` in `main.js`
+  are used by BOTH the builders (lobby `#copyLinkBtn` "Copy invite link" AND this pause button) and the
+  parser (`tryJoinFromHash`, auto-join on boot), so build-side and parse-side can't drift.
 - **Disguise-leak fix in the scoreboard:** `ui.updatePauseScoreboard(players, selfId, selfIsHunter)` shows a
   prop's disguise label ONLY to a PROP viewer; a HUNTER sees "prop" (and disguised props arrive name-blanked
   from the host — `hunterSafeSnapshot` — so they render anonymously as "a prop"). `main.js` passes
