@@ -86,6 +86,15 @@ close it. A STOP button appears while your own taunt plays and kills it for ever
   - `updateTauntUi()`: the taunt button shows for a living prop in an active phase; called from
     `applyToolView` (role/alive/scene rebuild) and the phase event. Full teardown in `backToMenu`.
 
+## Master audio limiter (stop the clipping)
+Every taunt emitter + `playUiSound` sums at THREE's shared `AudioListener` before the speakers, so
+overlapping loud sounds can clip. A **master limiter** is spliced into the listener's single output
+hop (`listener.gain → preGain → limiter → destination`) so the summed mix can't exceed 0dBFS. Taunt
+emitters were trimmed from full `1.0` to `0.85` in `playTaunt` so the limiter stays a safety net.
+This is purely the output graph — no change to the relay/cut-off/finder logic above. See
+**`memory/notes/audio-limiter.md`** for the full design (incl. the "no true lookahead yet" rationale)
+and `tools/check-audio-limiter.mjs`.
+
 ## iOS / mobile
 Audio unlocks only inside a user gesture on iOS. `scene.unlockAudio()` (resume THREE's shared
 AudioContext) is called inside the menu-open and pick gestures. THREE's AudioLoader lazily creates

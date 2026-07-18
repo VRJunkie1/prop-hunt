@@ -16,6 +16,10 @@ import { sizeHunterRig, measureRigBones, findBone } from '/shared/hunter-sizing.
 // wireframe overlay below — the same function the headless misalignment guard reads, so
 // what you SEE in debug is exactly what the guard checks and the engine builds.
 import { worldColliderBoxes } from '/shared/bounds.js';
+// MASTER AUDIO LIMITER — the one output-graph choke point that stops the summed mix clipping. Pure
+// Web Audio (no THREE), so the game and the headless check (tools/check-audio-limiter.mjs) run the
+// exact same install code. See memory/notes/audio-limiter.md.
+import { installMasterLimiter } from '/shared/audio-limiter.js';
 
 // Screen-centre in NDC (0,0) = the fixed reticle at the EXACT middle of the screen.
 // ONE shared aim point for every reticle raycast so there's a single crosshair
@@ -182,6 +186,12 @@ export class Scene3D {
     // which is unlocked on the first user gesture (unlockAudio) for iOS. See notes/audio-taunts.md.
     this._audioListener = null;
     this._tauntEmitters = new Map(); // playerId -> { obj, sound, endsAt }
+    // MASTER AUDIO LIMITER: the headroom-trim + near-brickwall compressor spliced into the
+    // listener's single output hop (listener.gain → preGain → limiter → destination) so the summed
+    // mix of overlapping taunts + UI sounds can't clip. Installed lazily alongside the listener
+    // (_ensureMasterLimiter). Null until then; fail-silent if audio is unavailable.
+    this._masterLimiter = null;
+    this._masterPreGain = null;
 
     this.selfId = null;
     this.catalog = null;
@@ -1623,7 +1633,19 @@ export class Scene3D {
     if (!THREE.AudioListener) return null;
     if (!this._audioListener) this._audioListener = new THREE.AudioListener();
     if (this._audioListener.parent !== this.camera) this.camera.add(this._audioListener);
+    this._ensureMasterLimiter(); // splice the master limiter into the listener's output (once)
     return this._audioListener;
+  }
+
+  // MASTER AUDIO LIMITER: route the listener's summed output through a headroom trim + near-brickwall
+  // compressor so several overlapping loud sounds (taunts + finder buzz + future audio) can't add
+  // past 0dBFS and clip. Idempotent (splices once); fail-silent — on any failure THREE's default
+  // direct gain→destination connection stays intact so audio still plays, just uncapped. The chain
+  // lives on the AudioContext (not the scene graph), so it survives buildWorld's scene.clear().
+  _ensureMasterLimiter() {
+    if (this._masterLimiter) return; // already spliced
+    const chain = installMasterLimiter(this._audioListener);
+    if (chain) { this._masterPreGain = chain.preGain; this._masterLimiter = chain.limiter; }
   }
 
   // THREE's shared Web Audio context (for decoding clips + the iOS unlock). null if unavailable.
@@ -1681,6 +1703,10 @@ export class Scene3D {
       sound.setRefDistance(Math.max(2, size * 0.08)); // full volume out to ~3 units
       sound.setMaxDistance(Math.max(12, size * 1.3)); // inaudible past ~map diagonal
       sound.setRolloffFactor(1);
+      // Per-source trim: emitters otherwise play at full 1.0 inside refDistance, so several props
+      // taunting near you stack toward the ceiling. A modest 0.85 keeps each taunt loud while
+      // leaving the master limiter as a safety net rather than the mixer. See notes/audio-limiter.md.
+      sound.setVolume(0.85);
       sound.setLoop(false);
     } catch { return; }
     const obj = new THREE.Object3D();

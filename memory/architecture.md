@@ -599,6 +599,15 @@ is a dormant FINDER-TOOL HOOK (one line to wire) that forces a random uncancella
   carries a discoverable `T / Esc to close` hint (hidden on touch), and an in-menu STOP button that
   silences your taunt without closing the menu; `T`/`Esc` close + re-lock. Detail:
   `memory/notes/audio-taunts.md`.
+- **MASTER AUDIO LIMITER (2026-07-18, Jie).** ALL game audio (positional taunts + `playUiSound` UI
+  blips + any future sound) sums at THREE's ONE shared `AudioListener` gain node before the speakers,
+  so overlapping loud sounds can exceed 0dBFS and clip. `shared/audio-limiter.js` `installMasterLimiter`
+  splices a headroom trim + near-brickwall `DynamicsCompressor` into the listener's single output hop
+  (`listener.gain → preGain(0.7) → limiter(-6dB, ratio 20) → destination`), installed once from
+  `scene._ensureAudioListener`. Pure Web Audio (no THREE) so the game + `tools/check-audio-limiter.mjs`
+  (mock ctx) run the same code. Fail-silent: null/restores the direct connection on any failure — audio
+  never breaks the game; iOS `unlockAudio` untouched. Web Audio has no true lookahead → a real one is a
+  deferred AudioWorklet follow-up. Detail: `memory/notes/audio-limiter.md`.
 
 ## Role/identity hiding
 
