@@ -182,7 +182,13 @@ export class Referee {
     // prop that has moved (resting or not), or they'd see kicked chairs/tables back at their spawn — an
     // instant desync (fix #8). STARTED must precede ROLE/phase so the client switches into the running
     // world before it learns its role. Props that never moved (or are capped-static) fall back to spawn.
-    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup(), removedFixtures: this.removedFixtures });
+    //
+    // ANTI-CHEAT: a HUNTER joining DURING HIDING is blindfolded — they must get the factory-fresh
+    // (spawn-form) world, never the live shoved positions (a data peek the screen-blackout can't stop
+    // if a client deletes the overlay). Props join seeing normally; hunters joining in HUNTING see the
+    // live world. The blindfolded joiner gets the full world snapshot at HIDING→HUNTING (setPhase).
+    const blind = role === ROLE.HUNTER && this.phase === PHASE.HIDING;
+    send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup(blind), removedFixtures: this.removedFixtures });
     // Fresh spawn on the assigned team via the SHARED routine (same one the pause-menu team switch
     // uses, so mid-join and switch can't drift): full HP, no disguise, a physics body + private ROLE.
     this._spawnOnTeam(player, role);
@@ -1150,6 +1156,23 @@ export class Referee {
     this.phase = phase;
     this.phaseEndsAt = Date.now() + seconds * 1000;
     this.broadcast({ t: S2C.EVENT, kind: 'phase', phase, seconds });
+    // WORLD SNAPSHOT ON BLINDFOLD RELEASE (host-authoritative object sync). A hunter was
+    // blindfolded through HIDING: their snapshots carried ZERO prop transforms
+    // (blindHunterSnapshot) AND, by the time HUNTING starts, nearly every object a hiding
+    // prop shoved has settled ASLEEP — so the per-tick awake stream won't resend it either.
+    // Result without this: the just-released hunter sees the FACTORY-FRESH map (props upright
+    // at spawn) instead of the world as it actually is — the exact "hunters spawning in later
+    // still see it upright" desync. So the instant HIDING→HUNTING, hand every hunter a ONE-TIME
+    // full snapshot of every dynamic body's current transform. Same anti-cheat door as the
+    // blindfold: withheld until the precise moment the hunter is allowed to see the world.
+    // (Props were never blindfolded — they tracked the awake stream live — so they don't need
+    // it.) HIDING→HUNTING is the only path into HUNTING, so this can't double-fire.
+    if (phase === PHASE.HUNTING) {
+      const world = this._propsCatchup();
+      for (const p of this.players.values()) {
+        if (p.role === ROLE.HUNTER) send(p, { t: S2C.EVENT, kind: 'world', props: world });
+      }
+    }
   }
 
   checkRoundOver() {
@@ -1538,8 +1561,15 @@ export class Referee {
   // (centre + quaternion) when the physics world is up, so a knocked-about room
   // arrives as it actually is. Props with no live body (capped-static, or physics
   // not yet loaded) keep their spawn entry. Quantised like a snapshot.
-  _propsCatchup() {
-    if (!this.physics) return this.props;
+  //
+  // BLINDFOLD GATE (anti-cheat). A hunter who joins DURING the HIDING phase is
+  // blindfolded — they must NOT learn where props have been shoved. Pass blind=true
+  // and they get the SPAWN-form list (factory-fresh map) instead of the live world;
+  // the moment HIDING flips to HUNTING they receive the full world snapshot as their
+  // legitimate catch-up (setPhase → kind:'world'). This rides the SAME door the
+  // blindfold's snapshot half already guards — extend it, never bypass it.
+  _propsCatchup(blind = false) {
+    if (blind || !this.physics) return this.props;
     const live = new Map(this.physics.allProps().map((q) => [q.id, q]));
     return this.props.map((p) => {
       const q = live.get(p.id);

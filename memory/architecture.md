@@ -476,8 +476,16 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   a local prediction world for their OWN player and reconcile (rewind to the
   authoritative pose, replay unacked inputs, ease/snap the residual) — this is full
   prediction + reconciliation, the target design, NOT the interpolation-only
-  fallback. Remote players + awake props interpolate. **Vertical reconciliation is
-  FROZEN while the local player is airborne (2026-07-13 jump-judder fix):** the jump
+  fallback. Remote players + awake props interpolate. **Object sync + world snapshot on
+  release/join (2026-07-17):** a body that just fell asleep sends ONE final rest transform then
+  the stream stops (`physics.awakeProps()` awake→asleep edge, part D). Because a blindfolded HUNTER
+  is fed `props:[]` all through HIDING and everything has settled asleep by HUNTING, the instant
+  `setPhase(HIDING→HUNTING)` fires every hunter gets a ONE-TIME `S2C.EVENT kind:'world'` full
+  snapshot of all dynamic-body transforms (`scene.applyWorldSnapshot` SNAPS the render + prediction
+  colliders) — else they'd see the factory-fresh map ("still upright"). The mid-join catch-up
+  (`_propsCatchup(blind)`) is blindfold-gated the same way. All object data rides the SAME anti-cheat
+  door the blindfold guards. Guard: `tools/check-object-sync.mjs`. Detail: `notes/netcode.md`.
+  **Vertical reconciliation is FROZEN while the local player is airborne (2026-07-13 jump-judder fix):** the jump
   arc is deterministic from the shared gravity/jumpSpeed, so reconciling Y against
   15Hz phase-shifted, 1cm-quantised snapshots only injected a sawtooth camera judder
   (even on the host — the two worlds step out of phase). While `!state.grounded` the

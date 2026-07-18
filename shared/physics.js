@@ -570,6 +570,10 @@ export class PhysicsWorld {
           id: p.id, body,
           spawn: { x: p.x, y: spawnY, z: p.z, q: spawnQ },
           minHalf: Math.min(he.hx, he.hy, he.hz),
+          // Prior sleep state for the awake→asleep final-rest-frame edge (awakeProps, part D).
+          // Bodies spawn AWAKE (round 5 lets them settle), so a body that never actually moves
+          // still streams once as it first sleeps — its true settled pose, sent exactly once.
+          _wasAwake: !body.isSleeping(),
         });
         dynCount++;
       } else {
@@ -1326,16 +1330,29 @@ export class PhysicsWorld {
     }
   }
 
-  // Transforms of props that are currently AWAKE (moving). Sleeping props are
-  // skipped — they haven't moved, so there's nothing to sync (bandwidth win).
+  // Transforms of props that are currently AWAKE (moving), PLUS the ONE final rest
+  // transform of any body that just fell asleep this tick (wake/sleep propagation,
+  // part D). Rationale: a body streams every tick while awake, then Rapier auto-sleeps
+  // it — and a SLEEPING body is skipped forever after (steady-state traffic near zero,
+  // the bandwidth win). But the last AWAKE frame was captured a hair before the body
+  // truly stopped, so without a final frame a continuously-connected client keeps a
+  // marginally-off pose. So on the awake→asleep EDGE we emit one last transform (the
+  // exact resting pose) and then go silent. `_wasAwake` tracks the prior state per body;
+  // a body that spawned asleep and never woke (`_wasAwake` false) emits NOTHING, ever.
   // Host only (guests have no dynamic prop bodies). Returns [] otherwise.
   awakeProps() {
     const out = [];
-    for (const { id, body } of this.propBodies) {
-      if (body.isSleeping()) continue;
-      const t = body.translation();
-      const r = body.rotation();
-      out.push({ id, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w });
+    for (const pb of this.propBodies) {
+      const sleeping = pb.body.isSleeping();
+      if (sleeping) {
+        if (!pb._wasAwake) continue; // long-asleep: no traffic
+        pb._wasAwake = false;        // awake→asleep edge: send ONE final rest frame below, then go silent
+      } else {
+        pb._wasAwake = true;
+      }
+      const t = pb.body.translation();
+      const r = pb.body.rotation();
+      out.push({ id: pb.id, x: t.x, y: t.y, z: t.z, qx: r.x, qy: r.y, qz: r.z, qw: r.w });
     }
     return out;
   }
