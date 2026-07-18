@@ -3,6 +3,36 @@
 Landed in the big physics + netcode pass (2026-07-09, `physics-net`). Read this
 before touching movement, collision, or the disguise orientation lock.
 
+## 2026-07-18 PROP JUMP = 5-INCH HOP — mis-sized depenetration proxy (VRmike, `build/162`)
+VRmike: disguised PROP players "usually fail to jump on plain ground — a ~5-inch hop instead of a
+full ~5-foot jump — but it works when running up against another object." DEBUG-FIRST (no
+guess-patch): three headless harnesses stood up the REAL `PhysicsWorld` and pinned the mechanism
+before a line changed. **Root cause (proven, `tools/_jump_pen.mjs`):** the anti-tunnel
+DEPENETRATION failsafe was ZEROING the jump velocity every substep. Its `_isPenetrating` proxy is a
+bounding CAPSULE (`radius`/`half` from `_buildMoveColliderDesc`), and for a WIDE-SHORT disguise
+(crate 1.5w × 1.0h → horizontal half-extent 0.75 > half-height 0.5) the old `radius = min(hx,hz)` =
+0.75 with `half = max(0.05, halfH−radius)` = 0.05 made a fat SPHERE centred at the box middle whose
+BOTTOM sat ~0.22 m BELOW the foot/floor. While the body was perfectly still Rapier's broad-phase was
+stale and missed the floor overlap (jump worked → why "standing sometimes ok" / "against a wall you
+don't move → works"); the instant the body MOVED the scene query refreshed, `_isPenetrating`
+returned true, the failsafe snapped the body back to `safePos` and set `p.vy = 0`, so the jump
+collapsed to a single substep (jumpSpeed/60 ≈ 0.13 m = 5 in). Collider-size-dependent exactly as the
+disguise-sized-collider work (`faf3d6b`/`be19b5b`) risked: wide-short disguises (crate/table/counter/
+chair) fail; tall-narrow (canister/shelf) never did (their proxy stays above the floor) — matched by
+the probe. The engine ITSELF gives full height for every size + a 1-substep press (`_jump_probe.mjs`)
+and the netcode co-sim is clean for undisguised (`_jump_cosim.mjs`) — so this was NOT the jump code,
+snap-to-ground, grounded clamp, or reconciliation; it was the proxy.
+- **FIX (`_buildMoveColliderDesc`, one line):** cap the proxy radius at the shape half-height —
+  `radius = max(0.05, min(hx, hz, halfH))` — so the bounding capsule stays INSCRIBED in the shape and
+  its bottom can never dip below the foot. Only the FAILSAFE proxy (`p.radius`/`p.half`) shrinks; the
+  REAL movement collision is `s.desc` (the true prop shape) and is UNCHANGED — solidity/nudge/spawn
+  guards stay green (`check-solid-players` still blocks a hunter at full table size 1.65 m).
+- **GUARD: `tools/check-jump.mjs` (NEW build gate).** Measures the STANDING and MOVING jump peak for
+  the hunter + every disguise size (canister/crate/counter/table/shelf) and asserts each clears 90%
+  of the analytic full-jump height; a SELF-TEST re-injects the pre-fix proxy and confirms the moving
+  jump collapses (guard bites). Scratch probes kept (`tools/_jump_probe.mjs`, `_jump_cosim.mjs`,
+  `_jump_pen.mjs`) as the debugging record, per repo `_`-prefix convention.
+
 ## 2026-07-17 FLOATING FIXED PROPS — round 4 (VRmike, `build/118`). Read before touching the fixed/dynamic split.
 The 2026-07-16 pass (below) made built-ins dynamic but **PINNED** surface clutter (`pinClutterAboveY`,
 any prop with authored `y>0.5`) as a FIXED collider to stop it launching out of tall hulls. That pin

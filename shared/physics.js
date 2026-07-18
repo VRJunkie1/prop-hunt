@@ -920,8 +920,18 @@ export class PhysicsWorld {
       const offsetY = s.halfH - this._pCenterY;
       s.desc.setTranslation(0, offsetY, 0);
       const h = halfExtentsFor(c);
-      const radius = Math.max(0.05, Math.min(h.hx, h.hz)); // inscribed horizontal half-extent
-      const half = Math.max(0.05, s.halfH - radius);
+      // Bounding-capsule PROXY dims for the depenetration/nudge failsafes (NOT the real collision —
+      // that is s.desc, the true prop shape). The proxy must stay INSCRIBED in the shape, i.e. it
+      // may never be taller OR fatter than the shape, or it pokes out past the real geometry.
+      // BUGFIX (2026-07-18, VRmike "prop jump = 5-inch hop"): for a WIDE-SHORT disguise (crate 1.5w
+      // × 1.0h → hx 0.75 > halfH 0.5) the old `radius = min(hx,hz)` made a fat sphere centred at the
+      // box middle whose BOTTOM sat ~0.2 m BELOW the foot/floor. Resting, Rapier's broad-phase was
+      // stale and missed the overlap (jump worked); the instant the body moved the query refreshed,
+      // _isPenetrating fired, the failsafe snapped back and ZEROED vy — the jump died after one
+      // substep. Capping radius at s.halfH keeps the capsule within the shape height, so its bottom
+      // never dips below the foot and the failsafe can't false-trip on the floor. See notes/physics.md.
+      const radius = Math.max(0.05, Math.min(h.hx, h.hz, s.halfH)); // inscribed: never wider or taller than the shape
+      const half = Math.max(0.02, s.halfH - radius);
       return { desc: s.desc, radius, half, offsetY };
     }
     return { desc: R.ColliderDesc.capsule(this._pHalf, this._pRadius), radius: this._pRadius, half: this._pHalf, offsetY: 0 };
