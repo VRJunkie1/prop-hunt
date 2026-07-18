@@ -107,6 +107,38 @@ the **exponential** model with `rolloffFactor = 2` IS exactly it: `gain = (d / r
   `refDistance = size * target^(1/exp)` formula, `setMaxDistance` absent, and a numeric end-to-end
   check that gain lands at 3% one map width out.
 
+## HRTF binaural panning (Jie, 2026-07-18)
+Flipped positional taunts from Web Audio's default **equalpower** pan (cheap constant-power L/R only)
+to **HRTF** (Head-Related Transfer Function — convolves a measured per-ear impulse response). On
+headphones this gives true binaural 3D: real **front/back** and up/down cues that equalpower simply
+cannot produce (before this, a taunt dead ahead and one dead behind sounded identical). Zero
+dependencies — native to every browser's Web Audio engine; this is the realism step BEFORE any
+external HRTF library.
+- **Touch point:** `playTaunt` in `js/scene.js` sets `sound.panner.panningModel` on each
+  `THREE.PositionalAudio` emitter (THREE exposes the underlying Web Audio `PannerNode` as `.panner`).
+- **Guarded + fail-silent:** the assignment is in its OWN try/catch, OUTSIDE the emitter-create block.
+  If `.panner` is missing or the set throws, we silently keep THREE's default equalpower pan and STILL
+  play the taunt — audio must never throw (house rule).
+- **CLIENT-SIDE knob, NOT shared/config:** module-level `TAUNT_PANNING = { model: 'HRTF', fallback:
+  'equalpower' }` near the top of `js/scene.js`. This is how audio RENDERS on this machine, not
+  authoritative game data, so it deliberately does not live in `shared/config/`. Applied value is
+  `model || fallback`, so an empty/unset `model` degrades to equalpower rather than an invalid string.
+- **Spec-exact spelling matters:** the Web Audio `PanningModelType` enum is `'HRTF'` (UPPERCASE) and
+  `'equalpower'` (lowercase). Browsers SILENTLY IGNORE a wrong case (you'd get default panning and no
+  error), so both strings are taken verbatim from the spec (verified against MDN), not from memory.
+- **Mobile CPU caveat (the one real unknown):** HRTF costs a bit more CPU per emitter than equalpower,
+  and the prop-finder's `forceTaunt` can drive ~5+ simultaneous taunt emitters. Desktop handles this
+  trivially; a handful of HRTF panners is light on modern mobile too, but this was NOT verified on a
+  real low-end phone under the worst case (headless boot can't measure audio CPU). If a weak phone
+  ever stutters, the fix is to flip `TAUNT_PANNING.model` to the `fallback` value — globally, or
+  gate it per-platform (desktop keeps HRTF, mobile → equalpower) — rather than reverting the feature.
+- **Owed live pass:** one headphone listen in a real match — walk past a taunting prop and confirm the
+  sound clearly moves front → side → behind you (the front/back distinction is the whole point), and
+  spot-check ~5 simultaneous forced taunts on a phone for stutter.
+- Asserted in `tools/check-taunts.mjs` §C: the `TAUNT_PANNING` knob exists (model HRTF, fallback
+  equalpower), `playTaunt` sets `panner.panningModel = model || fallback`, reads `sound.panner` behind
+  an `if (panner)` guard, and never hard-codes equalpower onto the panner.
+
 ## Master audio limiter (stop the clipping)
 Every taunt emitter + `playUiSound` sums at THREE's shared `AudioListener` before the speakers, so
 overlapping loud sounds can clip. A **master limiter** is spliced into the listener's single output
@@ -157,7 +189,9 @@ referee: taunt relayed to every player tagged by the taunter; a second taunt re-
 hunter / dead prop / bogus id / lobby-phase all REJECTED; `forceTaunt` fires an uncancellable taunt and
 the prop's stop is then ignored; a normal taunt clears the flag; empty library degrades gracefully.
 (C) source assertions that scene/main/ui/config expose the audio API the render loop + event handler
-call (the "a missing scene method silently kills the render loop every frame" lesson).
+call (the "a missing scene method silently kills the render loop every frame" lesson), the
+inverse-square falloff knobs/formula, AND the HRTF panning setup (the `TAUNT_PANNING` knob + the
+guarded `panner.panningModel = model || fallback` in `playTaunt`).
 
 ## Owed live pass
 Taunt from a phone (iOS sound actually plays), hear it directionally on a second device, spam cut-off

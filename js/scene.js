@@ -21,6 +21,24 @@ import { worldColliderBoxes } from '/shared/bounds.js';
 // exact same install code. See memory/notes/audio-limiter.md.
 import { installMasterLimiter } from '/shared/audio-limiter.js';
 
+// HRTF BINAURAL PANNING for taunt audio (Jie, 2026-07-18). Web Audio's PannerNode has two
+// panningModels: 'equalpower' (a cheap constant-power L/R pan — THREE's default) and 'HRTF' (a
+// Head-Related Transfer Function that convolves a measured per-ear impulse response, giving true
+// binaural 3D on headphones — including the FRONT/BACK and up/down cues equal-power completely
+// lacks, so a taunt dead ahead no longer sounds identical to one dead behind). We default to HRTF.
+// The exact strings are the Web Audio spec's PanningModelType enum — 'HRTF' uppercase, 'equalpower'
+// lowercase; a wrong case is SILENTLY ignored by browsers, so they're taken verbatim from the spec.
+//
+// CLIENT-SIDE render knob ONLY — this is how audio is rendered on THIS machine, not authoritative
+// game data, so it deliberately does NOT live in shared/config/. HRTF costs a bit more CPU per
+// emitter than equalpower, and the prop-finder can force ~5+ taunts at once; if a weak phone ever
+// stutters, flip `model` to the `fallback` value (globally, or per-platform below) instead of
+// reverting the feature. `model` empty/unset ⇒ we fall back automatically, so `fallback` is live.
+const TAUNT_PANNING = {
+  model: 'HRTF',          // default: real binaural front/back/up/down on headphones
+  fallback: 'equalpower', // the safe cheaper value if HRTF ever costs too much (e.g. low-end mobile)
+};
+
 // Screen-centre in NDC (0,0) = the fixed reticle at the EXACT middle of the screen.
 // ONE shared aim point for every reticle raycast so there's a single crosshair
 // system: the disguise-target pick (aimedDisguiseTarget), the hunter fire ray
@@ -1719,6 +1737,15 @@ export class Scene3D {
       sound.setVolume(0.85);
       sound.setLoop(false);
     } catch { return; }
+    // HRTF binaural panning on the underlying Web Audio PannerNode (THREE.PositionalAudio exposes
+    // it as `.panner`). Its OWN guarded try/catch, OUTSIDE the create block above: if `.panner` is
+    // unavailable or the assignment fails for any reason we silently keep THREE's default equalpower
+    // pan and still play the taunt — audio must never throw (house rule). `model || fallback` means
+    // an empty knob degrades to equalpower rather than an invalid (silently-ignored) value.
+    try {
+      const panner = sound.panner;
+      if (panner) panner.panningModel = TAUNT_PANNING.model || TAUNT_PANNING.fallback;
+    } catch { /* keep default panning — never break audio over a panner tweak */ }
     const obj = new THREE.Object3D();
     obj.add(sound);
     this.scene.add(obj);

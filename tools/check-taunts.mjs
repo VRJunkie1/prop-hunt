@@ -223,6 +223,24 @@ console.log('\nC) scene / client audio API present in source');
     'playTaunt derives refDistance = size * target^(1/exp) so gain hits 3% at one map width');
   ok(!/setMaxDistance/.test(playTaunt),
     'playTaunt drops setMaxDistance (ignored by non-linear models — leaving it would mislead)');
+
+  // HRTF BINAURAL PANNING (Jie, 2026-07-18). playTaunt must set the underlying PannerNode's
+  // panningModel to HRTF for true front/back binaural on headphones, driven from a CLIENT-SIDE knob
+  // (TAUNT_PANNING) that keeps 'equalpower' as the safe fallback. The assignment must be GUARDED so a
+  // missing `.panner` never throws (audio is fail-silent). The exact strings are the Web Audio spec
+  // enum — 'HRTF' uppercase, 'equalpower' lowercase — so we assert that spelling verbatim.
+  ok(/const\s+TAUNT_PANNING\s*=/.test(scene) && /model\s*:\s*['"]HRTF['"]/.test(scene),
+    'scene defines a TAUNT_PANNING knob defaulting model to HRTF');
+  ok(/fallback\s*:\s*['"]equalpower['"]/.test(scene),
+    'TAUNT_PANNING keeps equalpower as the fallback value (flip a knob, not a revert)');
+  ok(/\.panningModel\s*=\s*TAUNT_PANNING\.model\s*\|\|\s*TAUNT_PANNING\.fallback/.test(playTaunt),
+    'playTaunt sets panner.panningModel from the knob (model || fallback)');
+  ok(/sound\.panner\b/.test(playTaunt) && /if\s*\(\s*panner\s*\)/.test(playTaunt),
+    'playTaunt reads sound.panner and GUARDS it (no throw if .panner is unavailable — fail-silent)');
+  // The applied model must be the spec-exact HRTF string, and the OLD equalpower default must not be
+  // hard-set anywhere in playTaunt (it stays only as the knob's fallback value).
+  ok(/['"]HRTF['"]/.test(scene) && !/panningModel\s*=\s*['"]equalpower['"]/.test(playTaunt),
+    "HRTF is the spec-exact applied value; equalpower isn't hard-coded onto the panner in playTaunt");
   // Verify the math numerically: refDistance ≈ 0.1732 * size, and the resulting gain at one map
   // width is the 3% target. This is the property Jie specified, checked end to end.
   {
