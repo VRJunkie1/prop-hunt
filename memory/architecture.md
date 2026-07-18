@@ -129,6 +129,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
     play" overlay, which covers the canvas and swallows its clicks) and drives the
     overlay off the browser's real `pointerlockchange`/`pointerlockerror` signals
     (`onLockChange`/`onLockError`) — never a guess. Untouched by the touch work.
+    **Mouse sensitivity (B4, 2026-07-18):** desktop look = `BASE_SENSITIVITY` (0.0022, the
+    historical feel) × a multiplier; `setSensitivity(mult)` scales it LIVE (clamped to the exported
+    `SENSITIVITY_RANGE` 0.2×–3×, default 1×). input.js only APPLIES it — `main.js` persists the
+    multiplier to `localStorage` (`prophunt.sensitivity`) and restores it at boot. Touch drag-look
+    (`touchLookSens`) is a separate, untouched knob. Detail: `notes/pc-feel-controls.md`.
   - **Touch** — nipplejs virtual joystick (lazy-loaded from jsDelivr, like
     Three/PeerJS — nothing at boot), hand-rolled drag-to-look via pointer events on
     the canvas (no pointer lock on phones, so it REPLACES mouse-look), and an
@@ -173,7 +178,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   bind-pose sphere, and a disguise clone whose bounds lag its runtime rescale. WORLD
   props/scenery keep normal culling (surgical — only the handful of player objects opt
   out). Guarded by `tools/check-flicker.mjs`. Detail: `memory/notes/flicker-culling.md`.
-- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. The **HUD countdown
+- `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. **PC feel/controls
+  (B4, 2026-07-18):** the pause menu carries a **mouse-sensitivity slider** (`#pauseSens`, 0.2×–3×)
+  shown only on PC (`#pauseSensRow` hidden on touch via `prefersTouchControls()`); its `input` event
+  fires `onSensitivityChange` LIVE while dragging (main.js applies + persists), and
+  `setSensitivityValue()` reflects the restored value. An always-visible **PC controls reference**
+  panel (`#controlsRef`, bottom-right, collapsible) is built by `buildControlsRef()` from the SAME
+  `_controlsHtml()` rows the pause "Controls" panel uses (one source of truth — can't drift), hidden
+  on touch. Detail: `notes/pc-feel-controls.md`. The **HUD countdown
   timer is TICKED LOCALLY (2026-07-18, B1):** `setHud`/`setTimer` render via `formatClock` from
   the PURE `js/hud-timer.js` (`HudTimer`), which `main.js` re-anchors on every snapshot + phase
   event and ticks each frame — so a snapshot stall can't freeze/drift the clock (Jie's "5s left"
@@ -532,7 +544,10 @@ camera uses `YXZ` rotation order (yaw then pitch).
 This exact horizontal formula now appears in THREE places and must stay identical:
 `Referee.integrate` (2D fallback), `main.js` frame loop (2D fallback), and
 `PhysicsWorld._substep` (the Rapier path both host + client use). Change all three
-together. With physics active the horizontal displacement is fed to the character
+together. **`moveSpeed` is the ONE run-speed knob (`rules.moveSpeed`)** read by all three,
+so retuning it (B4, 2026-07-18: 6 → 9 m/s, +50%) speeds host + client in lockstep — no
+desync, and no "moving too fast" sanity check to update (movement is host-authoritative from
+input INTENT, never client positions). Hot-tunable; see `notes/balance-tuning.md`. With physics active the horizontal displacement is fed to the character
 controller (collide-and-slide) instead of applied raw, and a vertical `vy`
 (gravity/jump) is added — but the input→direction mapping is the same. For the
 host, reconciliation is near-a-no-op (authoritative pos tracks its prediction via

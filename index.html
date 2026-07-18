@@ -106,6 +106,20 @@
            and clickable on PC; number keys 1/2 also select. The current tool is highlighted.
            Built for 4+ tools — main.js renders it from the HUNTER_TOOLS list. -->
       <div id="toolbar" class="toolbar hidden" aria-hidden="true"></div>
+      <!-- PC CONTROLS REFERENCE (B4, 2026-07-18) — an always-visible, unobtrusive list of every
+           keyboard/mouse binding in the bottom-right corner, so PC players don't have to open the
+           pause menu to check controls. Visible by default; the ▾/▸ toggle collapses it to just the
+           header. Built + populated by ui.buildControlsRef() from the SAME _controlsHtml() rows the
+           pause "Controls" panel uses (one source of truth — the list can't drift). HIDDEN on mobile
+           (touch already shows its on-screen buttons) via prefersTouchControls() in ui.js. -->
+      <div id="controlsRef" class="controls-ref hidden" aria-hidden="true">
+        <div class="controls-ref-head">
+          <span class="controls-ref-title">Controls</span>
+          <button id="controlsRefToggle" class="controls-ref-toggle" type="button"
+                  aria-label="Collapse controls">&#9662;</button>
+        </div>
+        <div id="controlsRefBody" class="controls-ref-body"></div>
+      </div>
       <!-- HUNTER-TOOLS v1: spectator banner for a dead player (hunters do NOT respawn). -->
       <div id="spectate" class="spectate hidden" aria-hidden="true">
         <div class="spectate-title">YOU ARE DEAD</div>
@@ -156,6 +170,19 @@
             <span class="pause-room-label">Room code</span>
             <code id="pauseRoomCode" class="pause-room-code">----</code>
             <button id="pauseCopyRoom" class="ghost" type="button">Copy</button>
+          </div>
+          <!-- MOUSE SENSITIVITY slider (B4, 2026-07-18) — PC only. Hidden on touch by ui.js
+               (same prefersTouchControls() check the controls scheme uses). Scales mouse-look live
+               while dragging (no Apply/restart); the value is persisted to localStorage by main.js
+               and restored next session. 1.0× reproduces the historical feel exactly. -->
+          <div id="pauseSensRow" class="pause-sens">
+            <div class="pause-sens-head">
+              <span class="pause-sec-label">Mouse sensitivity</span>
+              <span id="pauseSensVal" class="pause-sens-val">1.0&times;</span>
+            </div>
+            <input id="pauseSens" class="pause-sens-slider" type="range"
+                   min="0.2" max="3" step="0.05" value="1"
+                   aria-label="Mouse sensitivity" />
           </div>
           <div class="pause-sec-label">Scoreboard</div>
           <ul id="pauseScores" class="pause-scores"></ul>

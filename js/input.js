@@ -96,6 +96,20 @@ export function prefersTouchControls(env) {
   return !!(hasOntouchstart || maxTouchPoints > 0);
 }
 
+// MOUSE SENSITIVITY (B4, 2026-07-18, VRmike) — PC only. `BASE_SENSITIVITY` is the radians-per-
+// mouse-count factor that was hard-coded here before (0.0022 = today's exact feel), so a multiplier
+// of 1.0× reproduces the old behaviour byte-for-byte. `setSensitivity(mult)` scales it live (no
+// restart) and clamps to SENSITIVITY_RANGE. The multiplier is persisted to localStorage by main.js
+// (not here — input.js stays storage-free / testable); this module only applies it. Touch drag-look
+// (touchLookSens) is deliberately UNTOUCHED — this slider is desktop mouse-look only.
+const BASE_SENSITIVITY = 0.0022;
+export const SENSITIVITY_RANGE = { min: 0.2, max: 3, default: 1, step: 0.05 };
+const clampSens = (m) => {
+  const n = Number(m);
+  if (!Number.isFinite(n)) return SENSITIVITY_RANGE.default;
+  return n < SENSITIVITY_RANGE.min ? SENSITIVITY_RANGE.min : n > SENSITIVITY_RANGE.max ? SENSITIVITY_RANGE.max : n;
+};
+
 export class Input {
   // lockTrigger is the element clicked to capture the mouse (desktop) OR tapped to
   // dismiss the overlay (touch) — the "Click/Tap to play" overlay, which is painted
@@ -110,7 +124,10 @@ export class Input {
     // during the HIDING phase so a blindfolded hunter can't pre-aim while their screen
     // is blacked out. Movement is frozen separately by the referee. Set from main.js.
     this.lookFrozen = false;
-    this.sensitivity = 0.0022;
+    // Desktop mouse-look sensitivity = BASE × multiplier (1.0× == the historical 0.0022 feel).
+    // main.js loads the saved multiplier from localStorage at boot and calls setSensitivity().
+    this.sensitivityMult = SENSITIVITY_RANGE.default;
+    this.sensitivity = BASE_SENSITIVITY * this.sensitivityMult;
     this.jump = false; // held: Space (desktop) / jump button (touch)
     this.rotUnlock = false; // held: right-click (desktop) / rotate button (touch) —
     //   lets a disguised prop rotate on yaw only (never tips)
@@ -453,6 +470,16 @@ export class Input {
     if (!a) return false;
     const tag = a.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || a.isContentEditable === true;
+  }
+
+  // Set the desktop mouse-look sensitivity MULTIPLIER (1.0× = default feel). Clamped to
+  // SENSITIVITY_RANGE. Applied live — the next mousemove uses the new value, so dragging the
+  // pause-menu slider changes the feel instantly with no restart. Returns the applied multiplier
+  // (post-clamp) so the caller can persist/display the real value. No-op-safe on touch.
+  setSensitivity(mult) {
+    this.sensitivityMult = clampSens(mult);
+    this.sensitivity = BASE_SENSITIVITY * this.sensitivityMult;
+    return this.sensitivityMult;
   }
 
   // Movement intent in local space: mz forward(+)/back(-), mx right(+)/left(-).

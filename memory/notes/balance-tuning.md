@@ -4,6 +4,29 @@ Central record of deliberate PLAYTEST-TUNING values (not arbitrary defaults). A 
 session/planner should treat these as intentional balance decisions, freely re-tunable, and
 NOT "restore to some prettier round number." All are HOT-TUNABLE config/CSS — no rebuild.
 
+## B4 — RUN SPEED +50% (2026-07-18, VRmike, branch build/144-b4-pc-feel-controls)
+
+**`shared/config/rules.json` → `moveSpeed` 6 → 9 m/s** (+50%, playtest feel). This is the SINGLE
+authoritative player run speed, read from this one knob by BOTH the host's authoritative movement
+(`shared/referee.js integrate` 2D fallback + `shared/physics.js _substep` collide-and-slide) AND
+every client's own prediction world (`js/main.js` frame loop + its physics world). So raising it
+speeds EVERY player up in lockstep — no desync, and no movement sanity-check to update (movement is
+host-authoritative from input INTENT `mx,mz`, never client-reported positions, so there is no
+"moving too fast" guard that could false-flag a legit player). Added `_moveSpeedComment` in the
+config next to it.
+
+- WATCH ITEM next playtest: +50% changes *feel* beyond raw speed — hiding spots get reachable
+  faster, hunters sweep rooms quicker. If 9 is too zoomy in the restaurant's tight corridors, dial
+  it back here — one number, no rebuild. VRmike said explicitly it WILL get retuned.
+- Guard: no check hardcodes the number. `tools/check-solid-players.mjs` already reads
+  `rules.moveSpeed` and asserts the disguised-player nudge stays *well under* walk speed
+  (`avg < moveSpeed * 0.4`) — a RELATIONSHIP, so it auto-tracks the retune (verified green at 9).
+  `tools/check-pc-controls.mjs` (new, B4) asserts moveSpeed is read from config and never
+  hardcoded in the JS movement paths.
+
+See also the sibling B4 feel/controls work in `notes/pc-feel-controls.md` (mouse-sensitivity slider
++ PC controls reference panel).
+
 ## B3 — BALANCE KNOBS (2026-07-18, VRmike, branch build/143-b3-balance-knobs-small)
 
 Three number-only changes from playtest feedback. No new systems, no logic changes.

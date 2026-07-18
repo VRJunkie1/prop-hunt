@@ -1,7 +1,8 @@
 {
   "tickRate": 30,
   "snapshotRate": 15,
-  "moveSpeed": 6,
+  "_moveSpeedComment": "PLAYER RUN SPEED in m/s (B4, 2026-07-18, VRmike): the single authoritative movement speed for EVERY player. Raised +50% from 6 to 9 for playtest feel. Read from THIS one knob by both the host's authoritative movement (shared/referee.js integrate + shared/physics.js _substep collide-and-slide) AND every client's own prediction, so raising it speeds everyone up in lockstep — no desync, and no movement sanity-check to update (movement is host-authoritative from input INTENT, not client-reported positions; there is no 'moving too fast' guard to fool). HOT-TUNABLE playtest value, NOT sacred — VRmike expects to retune it (may be too zoomy in the restaurant's tight corridors; dial back here, one number, no rebuild). See notes/balance-tuning.md.",
+  "moveSpeed": 9,
   "minPlayers": 1,
   "hunterRatio": 0.34,
   "hidingSeconds": 20,

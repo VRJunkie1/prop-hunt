@@ -739,6 +739,45 @@ button.ghost:hover { background: #3d2a66; }
 .pause-btns button { flex: 1 1 auto; min-height: 40px; }
 .pause-btns .warn { background: #4a1b2a; color: #ff9ab0; }
 
+/* ---- MOUSE SENSITIVITY slider (B4, PC only — ui.js hides #pauseSensRow on touch) ---- */
+.pause-sens { text-align: left; margin: 6px 0 10px; }
+.pause-sens.hidden { display: none; }
+.pause-sens-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.pause-sens-val { color: #8ad9ff; font: bold 13px/1 monospace; font-variant-numeric: tabular-nums; }
+.pause-sens-slider { width: 100%; margin-top: 6px; accent-color: #ff2fd0; cursor: pointer; }
+
+/* ---- PC CONTROLS REFERENCE (B4): unobtrusive bottom-right corner list, collapsible ----
+   Hidden on mobile (ui.js keeps #controlsRef .hidden on touch — phones show their own buttons). */
+.controls-ref {
+  position: absolute;
+  right: 12px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  width: 232px;
+  max-width: 42vw;
+  background: #0a0518c2;
+  border: 1px solid #ffffff22;
+  border-radius: 10px;
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  color: #ded2ff;
+  z-index: 38; /* below the toolbar (40) / pause (50), above the world */
+  box-shadow: 0 2px 10px #0007;
+  pointer-events: auto;
+  opacity: 0.82;
+  transition: opacity 0.12s;
+}
+.controls-ref:hover { opacity: 1; }
+.controls-ref.hidden { display: none; }
+.controls-ref-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.controls-ref-title { font: bold 11px/1 monospace; letter-spacing: 1px; text-transform: uppercase; color: #ff8ae8; }
+.controls-ref-toggle {
+  border: 0; background: transparent; color: #cdbdfd; cursor: pointer;
+  font: bold 13px/1 monospace; padding: 2px 4px; line-height: 1;
+}
+.controls-ref-body { display: flex; flex-direction: column; gap: 1px; margin-top: 5px; }
+.controls-ref.collapsed .controls-ref-body { display: none; }
+.controls-ref .pause-help-row { font-size: 11px; padding: 1px 0; }
+
 /* ---- AUDIO TAUNTS (props): taunt button, stop button, scrolling menu ----
    The taunt + stop buttons sit TOP-CENTRE, just below the HUD pills — a band that's clear of the
    joystick (bottom-left), the action/jump/rotate stack (bottom-right), the pause ☰ (top-right) and

@@ -9,7 +9,7 @@
 // file is identical for both — it just calls session.send()/reads session.onMessage.
 import { loadConfig } from './config.js';
 import { Session } from './net.js';
-import { Input } from './input.js';
+import { Input, SENSITIVITY_RANGE } from './input.js';
 import { UI } from './ui.js';
 import { TauntLibrary } from './taunts.js';
 import { HudTimer } from './hud-timer.js';
@@ -1482,6 +1482,22 @@ function loadSavedName() {
   try { return localStorage.getItem(NAME_KEY) || ''; } catch { return ''; }
 }
 
+// MOUSE SENSITIVITY (B4, 2026-07-18, VRmike) — persist the PC mouse-look multiplier locally (NOT a
+// cookie, NOT a server; no account) so the chosen feel survives a reload and future sessions. Anything
+// missing / corrupted / out of range silently falls back to 1.0× (the historical default feel). Range
+// clamp mirrors input.js SENSITIVITY_RANGE so a hand-edited localStorage value can't push it out of band.
+const SENS_KEY = 'prophunt.sensitivity';
+function saveSensitivity(mult) {
+  try { localStorage.setItem(SENS_KEY, String(mult)); } catch { /* storage blocked / private mode */ }
+}
+function loadSensitivity() {
+  let raw = null;
+  try { raw = localStorage.getItem(SENS_KEY); } catch { return SENSITIVITY_RANGE.default; }
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n)) return SENSITIVITY_RANGE.default; // absent / corrupted → default
+  return Math.min(SENSITIVITY_RANGE.max, Math.max(SENSITIVITY_RANGE.min, n));
+}
+
 // create()/join() hand off to PeerJS (the free public broker introduces the two
 // browsers); everything after (ready, start, and all gameplay) rides the peer
 // link via session.send().
@@ -1621,6 +1637,18 @@ function newSession() {
   ui.onTauntClose = () => closeTauntMenu(true);
   ui.onTauntPrefetch = () => { if (taunts) taunts.prefetch(); };
   input.onToggleTaunt = () => { if (state.tauntMenuOpen) closeTauntMenu(true); else openTauntMenu(); };
+  // MOUSE SENSITIVITY (B4, PC): restore the saved multiplier from localStorage, apply it to input.js,
+  // and reflect it in the pause-menu slider. The slider then drives it LIVE (no restart) and persists
+  // every change. On touch the slider row is hidden (ui.js) — this still runs harmlessly.
+  {
+    const s = loadSensitivity();
+    input.setSensitivity(s);
+    ui.setSensitivityValue(s);
+    ui.onSensitivityChange = (mult) => { saveSensitivity(input.setSensitivity(mult)); };
+  }
+  // PC CONTROLS REFERENCE (B4): populate + show the always-visible corner controls list (PC only;
+  // ui.js keeps it hidden on touch). Built once here from the shared _controlsHtml() rows.
+  ui.buildControlsRef();
   updateEditorButton(); // show the dev editor button on the landing screen (desktop solo)
   startInputLoop();
   requestAnimationFrame(frame);

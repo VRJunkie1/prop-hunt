@@ -47,6 +47,14 @@ export class UI {
       pauseSwitch: $('pauseSwitch'),
       pauseRoomCode: $('pauseRoomCode'),
       pauseCopyRoom: $('pauseCopyRoom'),
+      // MOUSE SENSITIVITY slider (B4, PC only). Row hidden on touch below.
+      pauseSensRow: $('pauseSensRow'),
+      pauseSens: $('pauseSens'),
+      pauseSensVal: $('pauseSensVal'),
+      // PC CONTROLS REFERENCE (B4): always-visible corner list + its collapse toggle. PC only.
+      controlsRef: $('controlsRef'),
+      controlsRefToggle: $('controlsRefToggle'),
+      controlsRefBody: $('controlsRefBody'),
       // AUDIO TAUNTS (props): the taunt button, the (while-playing) stop button, and the
       // scrolling menu with its list + close + empty-state note.
       tauntBtn: $('tauntBtn'),
@@ -68,6 +76,23 @@ export class UI {
     if (this.el.pauseHelp) this.el.pauseHelp.addEventListener('click', () => this._togglePauseHelp());
     if (this.el.pauseSwitch) this.el.pauseSwitch.addEventListener('click', () => this.onPauseSwitch());
     if (this.el.pauseCopyRoom) this.el.pauseCopyRoom.addEventListener('click', () => this.onPauseCopyRoom());
+    // MOUSE SENSITIVITY (B4, PC only). The slider fires 'input' continuously while dragging, so the
+    // look feel changes LIVE (no Apply/restart). main.js injects onSensitivityChange to apply it to
+    // input.js AND persist to localStorage. Hide the whole row on touch (the same prefersTouchControls
+    // check the control scheme uses) — the mobile drag-look sensitivity is a separate, untouched knob.
+    this.onSensitivityChange = () => {};
+    if (this.el.pauseSensRow && prefersTouchControls()) this.el.pauseSensRow.classList.add('hidden');
+    if (this.el.pauseSens) {
+      this.el.pauseSens.addEventListener('input', () => {
+        const mult = parseFloat(this.el.pauseSens.value);
+        this._renderSensVal(mult);
+        this.onSensitivityChange(mult);
+      });
+    }
+    // PC CONTROLS REFERENCE (B4): the collapse toggle just shows/hides the body (visible by default).
+    if (this.el.controlsRefToggle) {
+      this.el.controlsRefToggle.addEventListener('click', () => this._toggleControlsRef());
+    }
     // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
     // main.js injects the real handler (selectTool). No game logic lives in the UI.
     this.onSelectTool = () => {};
@@ -536,6 +561,40 @@ export class UI {
     li.className = 'ps-empty';
     li.textContent = text;
     return li;
+  }
+
+  // MOUSE SENSITIVITY (B4): reflect the current multiplier into the slider + its "1.0×" label.
+  // Called by main.js at boot with the value loaded from localStorage (clamped), so the pause menu
+  // opens already showing the persisted setting. Pure DOM.
+  setSensitivityValue(mult) {
+    if (this.el.pauseSens) this.el.pauseSens.value = String(mult);
+    this._renderSensVal(mult);
+  }
+
+  _renderSensVal(mult) {
+    if (this.el.pauseSensVal) this.el.pauseSensVal.textContent = `${Number(mult).toFixed(2)}×`;
+  }
+
+  // PC CONTROLS REFERENCE (B4): populate the always-visible corner panel from the SAME rows the
+  // pause "Controls" panel uses (_controlsHtml — one source of truth, so the list can't drift), and
+  // reveal it. HIDDEN on mobile (phones already show their on-screen buttons) — leave it .hidden.
+  // Idempotent: safe to call on every match start. Called by main.js once at boot.
+  buildControlsRef() {
+    const panel = this.el.controlsRef;
+    if (!panel) return;
+    if (prefersTouchControls()) { panel.classList.add('hidden'); return; }
+    if (this.el.controlsRefBody) this.el.controlsRefBody.innerHTML = this._controlsHtml();
+    panel.classList.remove('hidden'); // visible by default on PC
+  }
+
+  _toggleControlsRef() {
+    const panel = this.el.controlsRef;
+    if (!panel) return;
+    const collapsed = panel.classList.toggle('collapsed');
+    if (this.el.controlsRefToggle) {
+      this.el.controlsRefToggle.innerHTML = collapsed ? '▸' : '▾'; // ▸ collapsed / ▾ expanded
+      this.el.controlsRefToggle.setAttribute('aria-label', collapsed ? 'Expand controls' : 'Collapse controls');
+    }
   }
 
   _togglePauseHelp() {
