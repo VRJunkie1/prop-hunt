@@ -341,5 +341,83 @@ console.log('\nH) source: tool selection (3 tools), throw wiring, explosion + sc
   ok(/blast-flash/.test(css), 'css styles the blast flash overlay');
 }
 
+// ---------------------------------------------------------------------------
+// I) GRENADE FLING (2026-07-18, VRmike): loose DYNAMIC props caught in the blast get an outward
+//    physics shove whose speed scales LINEARLY with the grenade damage at their distance (falloff).
+//    Driven through a MOCK physics that records the applyBlastImpulse calls (the guard has no Rapier),
+//    plus source assertions for the physics primitive + the host gating.
+// ---------------------------------------------------------------------------
+console.log('\nI) fling: loose props get an outward shove scaling linearly with blast damage (falloff)');
+// config knob (hot-tunable; 0 disables).
+ok(Number.isFinite(rules.grenade.flingSpeed) && rules.grenade.flingSpeed > 0, `rules.grenade.flingSpeed is a positive number — got ${rules.grenade.flingSpeed}`);
+ok(Number.isFinite(gcfg.flingSpeed) && gcfg.flingSpeed > 0, `resolveGrenadeCfg exposes flingSpeed (${gcfg.flingSpeed})`);
+{
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0, { health: 100000 });
+  // A spread of props: at the centre (full falloff), at mid-falloff (half), and beyond the outer edge.
+  t.ref.props = [
+    { id: 'CENTER', type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },
+    { id: 'MID', type: 'burger', disguisable: true, x: HALF, y: 0, z: 0 },
+    { id: 'OUT', type: 'burger', disguisable: true, x: OUTER + 0.5, y: 0, z: 0 },
+  ];
+  // MOCK physics: record every fling call (propId, center, speed). No raycast needed — we call the
+  // resolver directly with a fixed centre.
+  const flings = [];
+  t.ref.physics = {
+    applyBlastImpulse: (propId, center, speed) => { flings.push({ propId, center, speed }); return true; },
+    destroy: () => {},
+  };
+  t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
+
+  const byId = Object.fromEntries(flings.map((f) => [f.propId, f]));
+  ok(!!byId.CENTER && !!byId.MID, 'props inside the blast are flung (applyBlastImpulse called for CENTER + MID)');
+  ok(!byId.OUT, 'a prop beyond the outer radius is NOT flung');
+  ok(byId.CENTER && near(byId.CENTER.speed, gcfg.flingSpeed), `a prop at the centre is flung at the FULL flingSpeed (${byId.CENTER && byId.CENTER.speed} = ${gcfg.flingSpeed})`);
+  ok(byId.MID && near(byId.MID.speed, gcfg.flingSpeed * 0.5), `a prop at mid-falloff is flung at half the speed — LINEAR to damage (${byId.MID && byId.MID.speed} = ${gcfg.flingSpeed * 0.5})`);
+  ok(byId.CENTER && byId.MID && byId.CENTER.speed > byId.MID.speed, 'closer prop is flung harder than an edge one (more damage = more fling)');
+  ok(flings.every((f) => f.center && f.center.x === 0 && f.center.z === 0), 'every fling passes the blast centre (physics derives the outward direction from the body)');
+  t.ref.destroy();
+}
+{
+  // flingSpeed = 0 disables the fling (no applyBlastImpulse calls). Temporarily override the rules.
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0, { health: 100000 });
+  t.ref.rules = { ...rules, grenade: { ...rules.grenade, flingSpeed: 0 } };
+  t.ref.props = [{ id: 'C', type: 'burger', disguisable: true, x: 0, y: 0, z: 0 }];
+  let called = false;
+  t.ref.physics = { applyBlastImpulse: () => { called = true; return true; }, destroy: () => {} };
+  t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
+  ok(!called, 'flingSpeed=0 disables the fling entirely (no applyBlastImpulse calls)');
+  t.ref.destroy();
+}
+{
+  // No physics (offline / guest) => the resolver still runs and just skips the fling (no throw).
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0, { health: 100000 });
+  const P = t.add('P', ROLE.PROP, 0, 0, 0, { disguise: null, health: 100000 });
+  t.ref.props = [{ id: 'C', type: 'burger', disguisable: true, x: 0, y: 0, z: 0 }];
+  t.ref.physics = null;
+  let threw = false;
+  try { t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 }); } catch { threw = true; }
+  ok(!threw && 100000 - P.health > 0, 'with no physics the blast still deals damage and skips the fling cleanly (no throw)');
+  t.ref.destroy();
+}
+{
+  // Source: the physics fling primitive + the referee gating.
+  const phys = readText('shared', 'physics.js');
+  ok(/applyBlastImpulse\s*\(/.test(phys), 'physics.js provides applyBlastImpulse (the grenade fling primitive)');
+  const fn = (phys.match(/applyBlastImpulse\s*\([\s\S]*?\n  \}/) || [''])[0];
+  ok(/translation\(\)/.test(fn) && /center/.test(fn), 'applyBlastImpulse derives an OUTWARD direction from the body position vs the blast centre');
+  ok(/mass\s*\(\)/.test(fn), 'the fling impulse is mass-scaled (heavy table vs light burger both react, no tiny-prop launch)');
+  ok(/wakeUp\s*\(\)/.test(fn), 'an asleep body is woken before the fling impulse (else it is ignored)');
+  ok(/applyImpulse\b/.test(fn), 'the fling applies a real Rapier impulse');
+  ok(/return false/.test(fn), 'applyBlastImpulse is guarded (no-op for a missing body / non-positive speed / API gap)');
+
+  const ref = readText('shared', 'referee.js');
+  const blast = (ref.match(/_resolveGrenadeBlast\s*\(hunter, center\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
+  ok(/this\.physics\s*&&\s*this\.physics\.applyBlastImpulse/.test(blast), '_resolveGrenadeBlast calls applyBlastImpulse only when physics is present (offline-safe)');
+  ok(/flingSpeed\s*\*\s*f/.test(blast), 'the fling speed is flingSpeed × falloff (linear to the damage the prop took)');
+}
+
 console.log(fails ? `\nFAILED (${fails})` : '\nAll hunter-grenade checks passed.');
 process.exit(fails ? 1 : 0);

@@ -13,6 +13,17 @@ VRmike's HUD-context screenshots for this request: the tool bar sits TOP-LEFT (t
 lives beside the rifle), the taunt button TOP-CENTRE — this build keeps that layout.
 <img src="../../assets/attached_0.png" width="320"> <img src="../../assets/attached_2.png" width="320">
 
+> **SOUND-FOR-ALL UPDATE (2026-07-18, VRmike):** the finder ping is now heard by EVERYONE, not
+> just the activating hunter. On a SUCCESSFUL `applyFind`, the host also broadcasts a small
+> `S2C.EVENT kind:'finderPing' {by, x, y, z}` carrying ONLY the ping's world position. Every client
+> plays it as positional 3D audio through the SAME combat-SFX path (`playCombatSoundAt('finderPing')`
+> → `scene.playPositionalSound` → master limiter). The activating hunter IGNORES its own echo
+> (`msg.by !== state.selfId`) — they keep their instant local ping off the private `kind:'find' ok`
+> reply (no double-ping, no network lag on their own click). ANTI-LEAK: the event carries a POSITION
+> ONLY, never any prop/target data, and the finder is a HUNTING-phase tool, so the blindfold/
+> withholding rules are untouched. Nice side effect (the point of the ask): props get an audio warning
+> a hunter is scanning nearby. Guarded in `check-finder.mjs` §G. See `notes/combat-sfx.md`.
+
 ## What it does (spec, faithfully)
 
 - **Selectable tool** (weapon-slot style): number keys 1/2 on PC, the on-screen tool bar on

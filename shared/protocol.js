@@ -144,6 +144,13 @@ export const S2C = {
   //                     hunter was still cooling down; remainMs is the time left (client plays the
   //                     short denied buzz + keeps its countdown synced). The forced taunts themselves
   //                     ride the normal kind:'taunt' broadcast (uncancellable:true) to EVERYONE.
+  //   kind:'finderPing' { by, x, y, z } -> BROADCAST to EVERYONE when a hunter SUCCESSFULLY
+  //                     activates the prop finder, carrying ONLY the ping's world position (never
+  //                     any prop data). Every client plays the ping as positional 3D audio so all
+  //                     players hear a hunter scanning nearby (the point of the request). The
+  //                     activating hunter IGNORES this echo of their own ping — they already heard
+  //                     an instant local sound off the private kind:'find' reply above, so there's
+  //                     no double-ping and no network lag on their own click. See referee.applyFind.
   //   kind:'grenade'    { by, x, y, z, hits, backfire, redeemed } -> a grenade exploded at the
   //                     host-computed blast centre (x,y,z). Everyone draws the explosion flash
   //                     there. hits = prop players killed; backfire = HP the thrower took from

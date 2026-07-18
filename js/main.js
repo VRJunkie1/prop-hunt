@@ -1117,6 +1117,16 @@ function onEvent(msg) {
         playFinderDenied();
       }
       break;
+    case 'finderPing':
+      // FINDER SOUND FOR ALL: the host echoes every SUCCESSFUL finder activation to everyone so all
+      // players hear the ping positionally (an audio warning that a hunter is scanning nearby). We
+      // IGNORE our own echo — the activating hunter already heard an instant local ping off the
+      // private 'find' ok reply above (no double-ping, no network lag on their own click). Same
+      // positional path / master limiter as the other combat SFX, so it can't blow out headphones.
+      if (msg.by !== state.selfId) {
+        playCombatSoundAt('finderPing', { x: msg.x, y: (msg.y || 0) + 1.2, z: msg.z }, 0.6);
+      }
+      break;
     case 'shot':
       // Everyone sees the muzzle flash + tracer, host-authoritative from the rifle muzzle
       // (o*) to the confirmed impact point (i*). Guarded so a missing method can't throw.

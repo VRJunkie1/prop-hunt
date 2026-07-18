@@ -12,7 +12,7 @@ nothing ripped.
 |---|---|---|---|---|
 | **Gunshot** | `S2C.EVENT kind:'shot'` (broadcast to all) | shooter (`by===selfId`): NON-positional/close (`playUiSound`); everyone else: POSITIONAL at the muzzle `(ox,oy,oz)` | 0.4 self / 0.7 others | 1.0 |
 | **Grenade blast** | `kind:'grenade'` (broadcast to all) | POSITIONAL at the blast centre `(x,y,z)` — the thrower is near it, so they hear it positionally too | 0.8 | 1.0 |
-| **Finder ping** | `kind:'find'` `ok:true` (host's PRIVATE reply to the activating hunter) | POSITIONAL at the hunter's own position (`state.self`) — essentially centred on the listener since only the local hunter gets this event | 0.6 | 1.0 |
+| **Finder ping** | `kind:'find'` `ok:true` (host's PRIVATE reply → the activating hunter's own local ping) **+** `kind:'finderPing'` (host BROADCAST → everyone else, 2026-07-18) | activating hunter: POSITIONAL at `state.self` off the private reply; EVERYONE ELSE: POSITIONAL at the ping's world pos `(x,y,z)` off the broadcast, IGNORING their own echo (`by===selfId`) | 0.6 | 1.0 |
 | **Prop ouch** | `kind:'hurt'` `self:false` on a PROP-role victim | POSITIONAL at the prop, ONE shared clip **pitch-shifted by prop size** | 0.7 | `ouchRateForDisguise` |
 
 ## Gunshot: positional for others, plain for the shooter
@@ -42,6 +42,16 @@ distance read through the inverse-square + HRTF path (33166c8 / 15ea82f).
   is present in every client's roster during HUNTING (only the `name` is blanked for hunters — the
   render-facing `disguise` field must stay, see referee `hunterSafeSnapshot`), so the shooter computes
   the right pitch too.
+
+## Finder ping FOR ALL (2026-07-18, VRmike)
+Originally the ping was private to the activating hunter (played off the `kind:'find' ok` reply). Now
+everyone hears it: `referee.applyFind`, on a SUCCESSFUL activation, ALSO broadcasts
+`S2C.EVENT kind:'finderPing' {by, x, y, z}` with ONLY the hunter's world position. `main.js onEvent`
+`case 'finderPing'` plays `playCombatSoundAt('finderPing', {x, y:y+1.2, z}, 0.6)` positionally through
+the same master-limiter path — BUT ignores its own echo (`msg.by !== state.selfId`), so the hunter
+keeps the instant local ping from the private reply (no double-ping, no net lag on their own click). A
+cooldown-REJECTED activation broadcasts nothing. Position-only payload → no prop-data leak, blindfold
+rules untouched (finder is HUNTING-only anyway). Guarded in `check-finder.mjs` §G.
 
 ## Audio plumbing (`js/scene.js`)
 - New **`playPositionalSound(pos, buffer, opts)`** — a fire-and-forget POSITIONAL one-shot at a FIXED

@@ -848,6 +848,17 @@ export class Referee {
       }
     }
     send(hunter, { t: S2C.EVENT, kind: 'find', ok: true, cooldownMs: cd, hits });
+
+    // FINDER SOUND FOR ALL (2026-07-18, VRmike): echo the activation to EVERY player as a small
+    // event carrying ONLY the ping's world position — no prop data, so the blindfold/withholding
+    // rules aren't touched (and the finder is a HUNTING-phase tool anyway). Every client plays this
+    // positionally through the same audio graph / master limiter as the other combat SFX, so props
+    // get an audio warning that a hunter is scanning nearby. The activating hunter ignores their own
+    // echo (they already heard an instant local sound off the private 'find' reply above).
+    this.broadcast({
+      t: S2C.EVENT, kind: 'finderPing', by: hunter.id,
+      x: round2(hunter.pos.x), y: round2(hunter.pos.y || 0), z: round2(hunter.pos.z),
+    });
   }
 
   // ---- HUNTER GRENADES (hunter tool #3, host-authoritative) ---------------
@@ -957,6 +968,24 @@ export class Referee {
       redeemed = true;
     } else if (backfire > 0) {
       this._damagePlayer(hunter, hunter, backfire, true); // self-inflicted via decoys; may be lethal
+    }
+
+    // (4) FLING loose props (2026-07-18, VRmike). Every loose DYNAMIC prop caught in the blast gets
+    // an outward physics shove whose target speed scales LINEARLY with the grenade damage at its
+    // distance (falloff): a close hit launches it, an edge hit just nudges it. Host-authoritative —
+    // it acts on the host's Rapier bodies and rides the existing host→peers prop snapshot stream, so
+    // it reaches everyone with no new netcode. No-op offline (the guard has no physics) and for any
+    // prop without a dynamic body (architecture / capped-static). Disguised PLAYERS are kinematic
+    // and have no dynamic prop body, so they are never flung — only loose world objects fly.
+    if (this.physics && this.physics.applyBlastImpulse && g.flingSpeed > 0) {
+      for (const prop of this.props) {
+        const pos = this._propBlastPos(prop);
+        const d = dist3(center, pos);
+        if (d >= outer) continue;
+        const f = grenadeFalloff(d, g);
+        if (f <= 0) continue;
+        this.physics.applyBlastImpulse(prop.id, center, g.flingSpeed * f);
+      }
     }
 
     this.broadcast({

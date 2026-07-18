@@ -274,5 +274,59 @@ console.log('\nF) client API: AOE zone + denied buzz + prop taunt-UI lock presen
   ok(existsSync(join(root, 'assets', 'finder', 'deny.wav')), 'the synthesized denied-buzz WAV exists (assets/finder/deny.wav)');
 }
 
+// ---------------------------------------------------------------------------
+// G) FINDER SOUND FOR ALL (2026-07-18, VRmike): a successful activation broadcasts a small
+//    kind:'finderPing' event to EVERY player carrying ONLY the ping position (no prop data); a
+//    REJECTED (cooling) activation broadcasts nothing; the client plays it positionally + ignores
+//    its own echo.
+// ---------------------------------------------------------------------------
+console.log('\nG) finder ping is broadcast to everyone (position only) on a successful activation');
+{
+  const t = makeTable();
+  t.add('HUNT', 'Hunter');
+  t.add('PROP', 'Prop');
+  t.add('OBS', 'Observer'); // a second hunter, far away — proves the ping reaches non-actors
+  t.ref.phase = PHASE.HUNTING;
+  t.setPlayer('HUNT', ROLE.HUNTER, 3, 0, 0);
+  t.setPlayer('PROP', ROLE.PROP, 4, 0, 0);
+  t.setPlayer('OBS', ROLE.HUNTER, 40, 0, 40);
+
+  t.clear();
+  t.ref.handleMessage('HUNT', { t: C2S.FIND });
+
+  // EVERY player (incl. the activating hunter and a distant observer) receives the finderPing.
+  const pingHunt = t.events('HUNT', 'finderPing');
+  const pingProp = t.events('PROP', 'finderPing');
+  const pingObs = t.events('OBS', 'finderPing');
+  ok(pingHunt.length === 1 && pingProp.length === 1 && pingObs.length === 1,
+    'a successful activation broadcasts ONE kind:\'finderPing\' to every player (hunter, prop, observer)');
+  const ping = pingProp[0] || {};
+  ok(ping.by === 'HUNT', 'the ping is tagged with the activating hunter (so they can ignore their own echo)');
+  ok(ping.x === 3 && ping.z === 0 && Number.isFinite(ping.y),
+    `the ping carries the hunter's world position (x=${ping.x}, y=${ping.y}, z=${ping.z})`);
+  // ANTI-LEAK: the event carries ONLY a position + the sender id — never any prop/target data.
+  const allowed = new Set(['t', 'kind', 'by', 'x', 'y', 'z']);
+  ok(Object.keys(ping).every((k) => allowed.has(k)),
+    `the ping carries ONLY position + sender (no prop data); keys = {${Object.keys(ping).sort().join(',')}}`);
+
+  // A REJECTED activation (still cooling) must NOT broadcast a ping.
+  t.clear();
+  t.ref.handleMessage('HUNT', { t: C2S.FIND });
+  ok(t.events('HUNT', 'finderPing').length === 0 && t.events('PROP', 'finderPing').length === 0,
+    'a cooldown-rejected activation broadcasts NO finderPing (only successful ones ping)');
+
+  t.ref.destroy();
+
+  // Client source: main.js handles finderPing, ignores its OWN echo, and plays it positionally.
+  const main = readText('js', 'main.js');
+  ok(/case 'finderPing'/.test(main), "main.js handles the 'finderPing' event");
+  const pingCase = (main.match(/case 'finderPing':[\s\S]*?break;/) || [''])[0];
+  ok(/msg\.by\s*!==\s*state\.selfId/.test(pingCase), 'the client IGNORES the echo of its own ping (msg.by !== selfId)');
+  ok(/playCombatSoundAt\('finderPing'/.test(pingCase), 'the client plays finderPing positionally (same combat-SFX / master-limiter path)');
+
+  const proto = readText('shared', 'protocol.js');
+  ok(/kind:'finderPing'/.test(proto), 'protocol.js documents the kind:\'finderPing\' broadcast');
+}
+
 console.log(fails ? `\nFAILED (${fails})` : '\nAll prop-finder checks passed.');
 process.exit(fails ? 1 : 0);

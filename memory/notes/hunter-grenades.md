@@ -46,6 +46,38 @@ props take proportionally more) but can kill the thrower if it only hits decoys.
   died → thrower to full, backfire forgiven (never applied); else → apply the backfire (may kill the
   hunter). The backfire can NEVER kill the hunter before the prop-kill check runs.
 
+## FLING — loose props fly (2026-07-18, VRmike)
+
+Grenades now FLING loose dynamic props caught in the blast, with force LINEAR to the damage dealt
+(more damage = more fling), host-authoritative, on the existing Rapier bodies.
+- **Where:** `_resolveGrenadeBlast` step (4), AFTER damage/redemption, BEFORE the broadcast. Iterates
+  `this.props`, and for each in range (`d < outer`, `grenadeFalloff(d) > 0`) calls
+  `physics.applyBlastImpulse(prop.id, center, g.flingSpeed * f)`. Speed = `flingSpeed × falloff`, so
+  it's LINEAR to the same falloff the damage uses — close hit = big fling, edge = a nudge.
+- **Config:** `rules.grenade.flingSpeed` (default **8** m/s target speed at full damage; **0 disables**).
+  Added to `resolveGrenadeCfg` (`shared/damage.js`). Hot-tunable; rides the B3-tuned radii for free
+  (the fling loop reads the same `outer`/`grenadeFalloff` as the damage loops — no new balance math).
+- **Physics primitive:** NEW `physics.applyBlastImpulse(propId, center, speed)` (`shared/physics.js`,
+  right after `applyShotImpulse`, self-contained — the shot path is byte-identical). Finds the dynamic
+  body by id, derives an OUTWARD direction from the body's live `translation()` vs `center` (dead-centre
+  → straight up), adds a **0.35 upward bias** (props pop-and-tumble, not skid flat), MASS-SCALES the
+  impulse (`speed × mass` — a heavy table and a light burger both react without launching the tiny
+  props, exactly like the shot kick), wakes the body first, `applyImpulse`. Fail-silent: no-op for a
+  missing/non-dynamic body (architecture / capped-static / disguised PLAYERS — they're kinematic and
+  have no prop body), non-positive speed, guest predictor, or API gap; never throws.
+- **Netcode:** ZERO new. The host shoves its authoritative Rapier body; the motion reaches everyone
+  through the existing host→peers awake-prop snapshot stream (`awakeProps` → `broadcastSnapshot.props`),
+  and the blindfold data-gate still applies as-is.
+- **Scope (deliberate):** disguised **players** are immune (kinematic, script-controlled — no dynamic
+  prop body for the sim to push), so a player hiding as a crate is NOT flung — only loose world objects
+  fly. Matches the request ("existing Rapier physics"). Player-knockback would be a new mechanism —
+  DEFERRED unless asked.
+- **Guard:** `check-grenade.mjs` §I — a MOCK physics records `applyBlastImpulse` calls: props inside
+  fly (CENTER + MID), a prop past `outer` does NOT, speed = `flingSpeed × falloff` (full at centre,
+  half at mid — linear), closer > edge, every call passes the centre; `flingSpeed=0` disables; no
+  physics → still damages + skips fling (no throw); plus source asserts for the physics primitive
+  (outward/mass-scaled/wake/guarded) + the offline-safe host gating.
+
 ## Netcode (host-authoritative, matches the rifle)
 
 `C2S.GRENADE {dx,dy,dz}` → `referee.applyGrenade`:

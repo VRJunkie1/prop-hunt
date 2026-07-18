@@ -128,6 +128,9 @@ export function wrongGuessPenalty(cfg) {
 //   baseDamage      : FRACTION of full health (0.45 = 45%). The referee scales by startHealth.
 //   fullDamageRadius: metres of MAX damage (d <= this => full).
 //   falloffDistance : metres ADDED past fullDamageRadius over which damage lerps to ~0.
+//   flingSpeed      : TARGET outward physics-shove speed (m/s) for a loose DYNAMIC prop at FULL
+//                     damage (blast centre); scaled by the same falloff, so it lerps to ~0 at the
+//                     outer edge. Mass-scaled in physics so tiny props aren't launched. 0 disables.
 // Authored as fullDamageRadius + falloffDistance (1 + 2), NEVER as an outer radius of 3 —
 // VRmike wants the two knobs editable independently without doing the 1+2 math by hand.
 export function resolveGrenadeCfg(g) {
@@ -137,6 +140,7 @@ export function resolveGrenadeCfg(g) {
     baseDamage: num(c.baseDamage, 0.45),
     fullDamageRadius: num(c.fullDamageRadius, 1),
     falloffDistance: num(c.falloffDistance, 2),
+    flingSpeed: num(c.flingSpeed, 8),
   };
 }
 

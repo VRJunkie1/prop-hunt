@@ -312,7 +312,11 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   system is otherwise UNTOUCHED. The victims taunt positionally for everyone through the existing 3D
   taunt path. Cooldown `rules.finderCooldownSeconds` (20 s) is host-enforced (a hacked client can't
   skip it) and reset to ready in `startMatch`/`resetToLobby`. The host replies `S2C.EVENT kind:'find'`
-  privately to the acting hunter (`ok:true` cooldownMs/hits, or `ok:false` remainMs). Client
+  privately to the acting hunter (`ok:true` cooldownMs/hits, or `ok:false` remainMs). **SOUND FOR ALL
+  (2026-07-18):** a successful activation ALSO broadcasts `S2C.EVENT kind:'finderPing' {by,x,y,z}`
+  (position only, no prop data) so EVERY client plays the ping positionally through the combat-SFX /
+  master-limiter path (`case 'finderPing'`); the activating hunter ignores its own echo (`by===selfId`)
+  and keeps the instant local ping. Client
   (`js/main.js`): `tryFinder` (LEFT-CLICK / mobile fire button while selected), a translucent AOE
   cylinder that follows the hunter (`scene.updateFinderZone`, green ready / grey cooling), the
   "Finder (14s)" countdown on the tool button (`ui.setToolCooldown`), a synthesized denied buzz on a
@@ -341,7 +345,12 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   stored outer of 3 (VRmike's ask); pure `grenadeFalloff` in `shared/damage.js` (d≤1 full, d=2 half,
   d=2.99 ~0, d≥3 zero). Broadcasts `S2C.EVENT kind:'grenade'` for everyone's 3D explosion
   (`scene.spawnExplosion`) + a distance-scaled local screen flash (`scene.blastFlashAt` →
-  `ui.flashScreen`). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
+  `ui.flashScreen`). **FLING (2026-07-18):** step (4) of `_resolveGrenadeBlast` also shoves every loose
+  DYNAMIC prop in range OUTWARD via NEW `physics.applyBlastImpulse(id,center,flingSpeed×falloff)` —
+  speed LINEAR to the damage (close=big fling, edge=nudge), mass-scaled (+0.35 up bias), reusing the
+  same `outer`/`grenadeFalloff` (no new balance math); host-authoritative on the Rapier bodies, rides
+  the existing awake-prop snapshot stream (no new netcode). Disguised PLAYERS are kinematic → never
+  flung (only world objects fly). `rules.grenade.flingSpeed` (8; 0 disables). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
 
 ## Shared (`shared/`)
 

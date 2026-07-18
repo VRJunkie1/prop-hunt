@@ -1208,6 +1208,46 @@ export class PhysicsWorld {
     }
   }
 
+  // GRENADE FLING (2026-07-18, VRmike). When a grenade goes off, give each loose DYNAMIC prop in
+  // the blast an OUTWARD physics shove (away from the blast `center`) so caught props visibly fly.
+  // HOST-ONLY by construction — it acts on the host's authoritative body, so the motion replicates
+  // to everyone through the normal prop snapshot stream (no new netcode). `speed` is a TARGET linear
+  // speed (m/s) the referee has ALREADY scaled by the grenade damage falloff (close = big fling,
+  // edge = a nudge), so the force is LINEAR to the damage that prop took. Mass-scaled like the shot
+  // kick so a heavy table and a light burger both react without launching the tiny props. A small
+  // UPWARD bias makes props pop-and-tumble rather than skid flat along the floor. No-op on a guest
+  // predictor / a capped-static or fixed prop (no dynamic body for that id) and for speed <= 0.
+  // Returns true if a shove was applied. Disguised PLAYERS have no dynamic prop body here, so they
+  // are never flung (they're kinematic, script-controlled) — only loose world objects fly.
+  applyBlastImpulse(propId, center, speed) {
+    if (!this.dynamicProps || !center) return false; // guests have no dynamic prop bodies
+    const s = Number.isFinite(speed) ? speed : 0;
+    if (!(s > 0)) return false;
+    const pb = this.propBodies.find((b) => b.id === propId);
+    if (!pb || !pb.body) return false;
+    try {
+      const t = pb.body.translation();
+      let dx = t.x - center.x, dy = t.y - center.y, dz = t.z - center.z;
+      let len = Math.hypot(dx, dy, dz);
+      if (!(len > 1e-4)) { dx = 0; dy = 1; dz = 0; len = 1; } // dead-centre => straight up
+      dx /= len; dy /= len; dz /= len;
+      dy += 0.35; // upward bias: props pop up and tumble rather than sliding flat
+      const nlen = Math.hypot(dx, dy, dz) || 1;
+      dx /= nlen; dy /= nlen; dz /= nlen;
+      const m = (typeof pb.body.mass === 'function' ? pb.body.mass() : 1) || 1; // guard 0/NaN
+      const j = s * m; // impulse magnitude so the velocity change ≈ `s` m/s along dir
+      if (pb.body.wakeUp) pb.body.wakeUp(); // an asleep body ignores impulses until awake
+      if (typeof pb.body.applyImpulse === 'function') {
+        pb.body.applyImpulse({ x: dx * j, y: dy * j, z: dz * j }, true);
+      } else {
+        return false; // API gap: no impulse method — leave the prop untouched
+      }
+      return true;
+    } catch {
+      return false; // never let a cosmetic fling throw into the grenade resolver
+    }
+  }
+
   // ---- step ----------------------------------------------------------------
   // Advance the sim by dt (seconds) in FIXED _fixedDt substeps only — never a
   // variable partial step. Real elapsed time is banked in _acc and drained one
