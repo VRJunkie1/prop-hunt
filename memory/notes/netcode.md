@@ -1,5 +1,13 @@
 # netcode
 
+## 2026-07-18 HELD-TOOL SYNC — snapshot gains `tool` (B7, VRmike)
+The hunter's selected tool now travels over the wire so others render the right held item.
+NEW `C2S.SELECT_TOOL {tool}` (client → host, deduped, living-hunter-only) + NEW snapshot player
+field `tool` (host-authoritative: validated against `HUNTER_TOOL_IDS`, coerced, null for
+non-hunters). Rides all snapshot variants free (`blindHunterSnapshot`/`hunterSafeSnapshot` spread
+`...full` players). Purely cosmetic — no gameplay/damage; the fire path is unchanged. Full detail:
+`notes/hunter-tool-visibility.md`.
+
 ## 2026-07-18 GHOST PLAYERS — leave detection + recount (B2, VRmike)
 A player who LEFT used to persist as an uncontrolled GHOST until a new game. Two gaps, both fixed
 HOST-SIDE in `shared/referee.js` (no protocol change); guard: `tools/check-lifecycle.mjs`.

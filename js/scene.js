@@ -742,6 +742,9 @@ export class Scene3D {
       entry.target.z = p.z;
       entry.target.yaw = p.yaw;
       entry.mesh.visible = p.alive;
+      // HELD-TOOL VISIBILITY (B7): show the tool this hunter has selected (host-synced `tool`).
+      // Cheap no-op when unchanged; only hunter entries carry a hunterCtl.
+      if (entry.hunterCtl) this._applyHeldTool(entry.hunterCtl, p.tool);
     }
     // Remove players no longer present.
     for (const [id, entry] of this.players) {
@@ -1259,46 +1262,52 @@ export class Scene3D {
     group.userData.baseY = 0; // feet on the ground; the caller adds jump-y
     group.userData.sizeChecked = false; // ?debug=1 tripwire fires once after the first frame
 
-    // Rifle: parent to the named wrist bone with the config grip nudge (hot-tunable).
+    // HELD TOOLS (B7): the rifle + the grenade + the prop-finder, all parented to the named
+    // wrist bone. A remote hunter's model shows WHICH tool they've selected (host-synced `tool`)
+    // — _applyHeldTool toggles which of the three is visible per snapshot. Before B7 only the
+    // rifle was ever attached, so props saw a gun no matter what the hunter actually held.
     let weaponRoot = null;
+    const heldTools = { rifle: null, finder: null, grenade: null };
     const wcfg = cm.weapon;
-    if (wcfg && wcfg.model) {
-      const wc = this._charCache.get('/assets/' + wcfg.model);
+    // Tolerant bone lookup — GLTFLoader sanitizes "Wrist.R" to "WristR", so a strict name match
+    // would silently drop the held item (see findBone). Shared with the check.
+    const bone = wcfg && wcfg.attachBone ? findBone(inner, wcfg.attachBone) : null;
+    const gripPos = (wcfg && wcfg.position) || {};
+    if (wcfg && bone) {
+      // --- Rifle: the real weapon GLB (unchanged sizing/orientation math) ---
+      const wc = wcfg.model ? this._charCache.get('/assets/' + wcfg.model) : null;
       if (wc && wc !== 'failed' && wc !== 'loading') {
-        // Tolerant bone lookup — GLTFLoader sanitizes "Wrist.R" to "WristR", so a strict
-        // name match would silently drop the rifle (see findBone). Shared with the check.
-        const bone = findBone(inner, wcfg.attachBone);
-        if (bone) {
-          weaponRoot = wc.scene.clone(true); // static mesh: plain clone is fine (no skin)
-          const pos = wcfg.position || {};
-          const rot = wcfg.rotationDeg || {};
-          const D = Math.PI / 180;
-          weaponRoot.position.set(pos.x || 0, pos.y || 0, pos.z || 0);
-          weaponRoot.rotation.set((rot.x || 0) * D, (rot.y || 0) * D, (rot.z || 0) * D);
-          // WEAPON SIZING — normalise to a WORLD length, independent of the rig scale.
-          // The wrist bone's world scale changed with the sizing fix (the group scale is
-          // now bone-derived, not the old ~450× geometry factor) and it also carries the
-          // armature's baked [100,100,100], so a bare config `scale` would blow the rifle
-          // up or shrink it away. Measure the weapon's native size, read the bone's world
-          // scale (group scale × armature × parent bones), and scale so the rifle's longest
-          // axis lands at wcfg.worldLength metres (× the hot-tunable `scale` nudge). This is
-          // correct-by-construction whatever the rig scale becomes.
-          group.updateMatrixWorld(true); // resolve bone world scale under the sized group
-          const boneScaleV = new THREE.Vector3();
-          bone.getWorldScale(boneScaleV);
-          const boneScale = (Math.abs(boneScaleV.x) + Math.abs(boneScaleV.y) + Math.abs(boneScaleV.z)) / 3 || 1;
-          const wsize = new THREE.Vector3();
-          new THREE.Box3().setFromObject(weaponRoot).getSize(wsize); // native (scale still 1)
-          const nativeLen = Math.max(wsize.x, wsize.y, wsize.z) || 1;
-          const worldLen = (wcfg.worldLength > 0 ? wcfg.worldLength : 0.7) * (wcfg.scale > 0 ? wcfg.scale : 1);
-          weaponRoot.scale.setScalar(worldLen / (boneScale * nativeLen));
-          weaponRoot.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-          weaponRoot.visible = this._weaponVisible;
-          bone.add(weaponRoot);
-        } else {
-          console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
-        }
+        weaponRoot = wc.scene.clone(true); // static mesh: plain clone is fine (no skin)
+        const rot = wcfg.rotationDeg || {};
+        const D = Math.PI / 180;
+        weaponRoot.position.set(gripPos.x || 0, gripPos.y || 0, gripPos.z || 0);
+        weaponRoot.rotation.set((rot.x || 0) * D, (rot.y || 0) * D, (rot.z || 0) * D);
+        // WEAPON SIZING — normalise to a WORLD length, independent of the rig scale.
+        // The wrist bone's world scale changed with the sizing fix (the group scale is
+        // now bone-derived, not the old ~450× geometry factor) and it also carries the
+        // armature's baked [100,100,100], so a bare config `scale` would blow the rifle
+        // up or shrink it away. Measure the weapon's native size, read the bone's world
+        // scale (group scale × armature × parent bones), and scale so the rifle's longest
+        // axis lands at wcfg.worldLength metres (× the hot-tunable `scale` nudge). This is
+        // correct-by-construction whatever the rig scale becomes. Shared by the grenade +
+        // finder primitives below via _scaleHeldToBone.
+        const worldLen = (wcfg.worldLength > 0 ? wcfg.worldLength : 0.7) * (wcfg.scale > 0 ? wcfg.scale : 1);
+        this._scaleHeldToBone(weaponRoot, worldLen, bone, group);
+        bone.add(weaponRoot);
+        heldTools.rifle = weaponRoot;
       }
+      // --- Grenade + prop-finder: cheap primitives matching the first-person viewmodels
+      // (no new asset files). Same wrist bone, same grip anchor, scaled to a small in-hand
+      // world size. Hidden until _applyHeldTool selects them from the host-synced tool. ---
+      for (const toolId of ['finder', 'grenade']) {
+        const root = this._buildHeldPrimitive(toolId);
+        root.position.set(gripPos.x || 0, gripPos.y || 0, gripPos.z || 0);
+        this._scaleHeldToBone(root, toolId === 'finder' ? 0.22 : 0.14, bone, group);
+        bone.add(root);
+        heldTools[toolId] = root;
+      }
+    } else if (wcfg && wcfg.model && !bone) {
+      console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
     }
 
     // AnimationMixer + the movement actions, clips matched by SUFFIX so the file's
@@ -1316,6 +1325,8 @@ export class Scene3D {
       mixer,
       actions,
       weaponRoot,
+      heldTools,      // B7: { rifle, finder, grenade } meshes on the wrist bone (any may be null)
+      heldTool: null, // the tool currently shown; set by _applyHeldTool (below + per snapshot)
       current: null,
       refSpeed: a.refSpeed > 0 ? a.refSpeed : 6,
       moveThreshold: a.moveThreshold >= 0 ? a.moveThreshold : 0.6,
@@ -1326,6 +1337,9 @@ export class Scene3D {
     group.userData.hunterCtl = ctl;
     // Start on idle so a fresh hunter isn't frozen in bind pose for a beat.
     this._playHunterState(ctl, 'idle', 1);
+    // B7: show the rifle by default (host `tool` starts on rifle); syncPlayers re-applies each
+    // snapshot, so a hunter who joined already holding the finder/grenade updates immediately.
+    this._applyHeldTool(ctl, 'rifle');
     return group;
   }
 
@@ -1405,12 +1419,72 @@ export class Scene3D {
   }
 
   // Show/hide the rifle on EVERY hunter (current + future), keeping the gun-holding
-  // pose. Default visible; later tool-switching can call this to hide the weapon.
+  // pose. SUPERSEDED by the per-hunter held-tool swap (B7, _applyHeldTool) which is what
+  // syncPlayers drives now; kept only as a manual override and unused in normal play.
   setWeaponVisible(visible) {
     this._weaponVisible = !!visible;
     for (const entry of this.players.values()) {
       const ctl = entry.hunterCtl;
       if (ctl && ctl.weaponRoot) ctl.weaponRoot.visible = this._weaponVisible;
+    }
+  }
+
+  // ---- HELD-TOOL VISIBILITY (B7): show WHICH tool a remote hunter has selected -----------
+  // Other players should see the grenade / prop-finder in the hunter's hand — not always a gun.
+  // Three held meshes are pre-built on the wrist bone in _buildHunterModel; these helpers build
+  // the cheap grenade/finder primitives, size them to the bone, and toggle which is visible.
+
+  // Build a small held mesh for the grenade or prop-finder, matching the look of the
+  // first-person viewmodel (see _buildViewModel) so the hand item reads the same in both views.
+  // Native-sized (~real proportions); _scaleHeldToBone normalises it into the hand afterwards.
+  _buildHeldPrimitive(toolId) {
+    const g = new THREE.Group();
+    if (toolId === 'finder') {
+      // PROP FINDER — the blue handheld device (matches the first-person 0.3 m box).
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), new THREE.MeshLambertMaterial({ color: 0x49b6ff }));
+      g.add(box);
+    } else {
+      // GRENADE — a dark-green sphere with a lighter cap (matches the first-person viewmodel).
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), new THREE.MeshLambertMaterial({ color: 0x3c5a34 }));
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.05, 8), new THREE.MeshLambertMaterial({ color: 0x9aa0aa }));
+      cap.position.set(0, 0.12, 0);
+      g.add(body, cap);
+    }
+    // ANTI-FLICKER (defence in depth): the whole hunter model already routes through
+    // preparePlayerModel (culling OFF) via meshForPlayer, but flag these hand-built meshes too
+    // so a held tool can never blink at the screen edge like the strobe bug we fixed.
+    g.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+    return g;
+  }
+
+  // Scale a held mesh so its longest axis lands at `worldLen` METRES in the wrist bone's frame,
+  // independent of the rig scale. Same normalisation the rifle uses (see _buildHunterModel):
+  // the bone carries the sized group scale × the armature's baked [100,100,100], so a bare local
+  // scale would blow the item up or shrink it away. Also enables shadows + disables culling.
+  _scaleHeldToBone(root, worldLen, bone, group) {
+    group.updateMatrixWorld(true); // resolve bone world scale under the sized group
+    const bs = new THREE.Vector3();
+    bone.getWorldScale(bs);
+    const boneScale = (Math.abs(bs.x) + Math.abs(bs.y) + Math.abs(bs.z)) / 3 || 1;
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(root).getSize(size); // native (local scale still 1)
+    const nativeLen = Math.max(size.x, size.y, size.z) || 1;
+    root.scale.setScalar(worldLen / (boneScale * nativeLen));
+    root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  }
+
+  // Show ONLY the mesh for `toolId` on this hunter's wrist (host-synced `tool`; unknown/missing
+  // → rifle). Per-hunter — different hunters can hold different tools at once. Cheap: it only
+  // toggles .visible on the pre-built held meshes (no rebuild). Called from _buildHunterModel
+  // (initial) and every snapshot in syncPlayers (a tool switch / a mid-game joiner's tool).
+  _applyHeldTool(ctl, toolId) {
+    if (!ctl || !ctl.heldTools) return;
+    const id = ctl.heldTools[toolId] ? toolId : 'rifle';
+    if (ctl.heldTool === id) return;
+    ctl.heldTool = id;
+    for (const k in ctl.heldTools) {
+      const m = ctl.heldTools[k];
+      if (m) m.visible = k === id;
     }
   }
 

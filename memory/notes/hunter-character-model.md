@@ -1,5 +1,17 @@
 # Hunter character model (v1) — animated SWAT soldier
 
+## 2026-07-18 B7 — HELD TOOL now visible on the model (VRmike)
+
+The remote hunter's held item is no longer always the rifle. The hunter's SELECTED tool is now
+synced (host-authoritative `C2S.SELECT_TOOL` → snapshot `tool`), and `_buildHunterModel` builds
+all three held meshes (rifle GLB + grenade/finder primitives) on the `Wrist.R` bone; `_apply
+HeldTool` toggles which is visible per hunter each snapshot (`syncPlayers`). This SUPERSEDES the
+"tool state is NOT networked / a remote hunter always animates gun-up" note below — the ANIMATION
+still forces the gun-up clips (there's no grenade/finder-specific run clip in the asset), but the
+HELD ITEM now matches the tool. Full detail: `notes/hunter-tool-visibility.md`. `setWeaponVisible`
+is superseded by `_applyHeldTool` (kept as an unused manual override).
+
+
 Built 2026-07-11 (VRmike task "HUNTER CHARACTER MODEL v1"). Gives remote **hunters**
 an animated third-person soldier body — what OTHER players (props) see. The LOCAL
 hunter stays first-person and never renders their own body. Props are

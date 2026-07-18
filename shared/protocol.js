@@ -69,6 +69,16 @@ export const C2S = {
   // non-player DECOY props only — never other hunters, never direct self-damage. If the blast
   // kills a prop player the thrower is REDEEMED to full HP. See shared/referee.js applyGrenade.
   GRENADE: 'grenade', // { dx, dy, dz }
+  // HELD-TOOL VISIBILITY (B7, 2026-07-18). A hunter tells the host which tool it has selected
+  // ({ tool: 'rifle'|'finder'|'grenade' }) so OTHER players can see the right item in the
+  // hunter's hands on their third-person model. Host-authoritative RELAY, not a client fact
+  // forced on anyone else: the host validates the sender is a LIVING HUNTER and the tool id is
+  // real (HUNTER_TOOL_IDS), stores it on the player, and rides it in that player's snapshot
+  // entry (`tool`). So a modified client can only change ITS OWN held item (legal — it's their
+  // choice), never spoof another player's. Non-hunters / a bogus id are ignored (stays rifle).
+  // Purely cosmetic — it changes NO damage/hitbox/gameplay; which tool actually FIRES is still
+  // the client-only fire path (SHOOT/FIND/GRENADE). See shared/referee.js applySelectTool.
+  SELECT_TOOL: 'selectTool', // { tool }
   // PAUSE-MENU TEAM SWITCH (2026-07-17, VRmike). No payload — the host knows the sender's current
   // team. The host respawns the sender as a FRESH player on the OPPOSITE team (prop→hunter or
   // hunter→prop): full HP, no disguise (a new disguise if they become a prop and re-disguise),
@@ -100,9 +110,11 @@ export const S2C = {
   //   but never wearable. Presence of `qx` marks the live-transform form.
   ROLE: 'role', // { role }                     -> your secret role for the round
   SNAPSHOT: 'snapshot', // authoritative world state. players:[{id,name,x,y,z,yaw,alive,
-  //   hunter,disguise,health,ack}] + awake dynamic-prop transforms props:[{id,x,y,z,qx,qy,qz,qw}]
+  //   hunter,disguise,health,tool,ack}] + awake dynamic-prop transforms props:[{id,x,y,z,qx,qy,qz,qw}]
   //   (sleeping props omitted — they haven't moved). `health` = 0..100 % (HUNTER-TOOLS v1);
-  //   `ack` = last INPUT.seq the host consumed from that player, for client reconciliation.
+  //   `tool` = the hunter's selected held item ('rifle'|'finder'|'grenade'), for the third-person
+  //   held-item render (B7); null for non-hunters. `ack` = last INPUT.seq the host consumed
+  //   from that player, for client reconciliation.
   EVENT: 'event', // { kind, ... }               -> discrete game events
   //   kind:'shot'       { by, ox,oy,oz, ix,iy,iz, hit } -> draw muzzle flash + tracer from
   //                     the rifle muzzle (o*) to the host-confirmed impact point (i*).
@@ -140,6 +152,12 @@ export const S2C = {
   //                     kind:'hurt' / kind:'eliminated' events + the health snapshot.
   ERROR: 'error', // { msg }
 };
+
+// The canonical hunter tool ids (HELD-TOOL VISIBILITY, B7). The ONE source of truth for what
+// a hunter's `tool` (snapshot) / C2S.SELECT_TOOL may be, so the referee's validation and the
+// client's tool bar can't drift. js/main.js's HUNTER_TOOLS UI array carries the same ids +
+// their key bindings; the guard asserts that array stays a subset of this list.
+export const HUNTER_TOOL_IDS = ['rifle', 'finder', 'grenade'];
 
 // Game phases owned by the server.
 export const PHASE = {

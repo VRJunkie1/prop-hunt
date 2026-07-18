@@ -13,7 +13,7 @@
 // speaks the same C2S/S2C protocol it always did — the transport underneath is
 // the only thing that moved. Authority now lives on the host, not a server; see
 // memory/architecture.md for why that trade was made.
-import { C2S, S2C, PHASE, ROLE } from './protocol.js';
+import { C2S, S2C, PHASE, ROLE, HUNTER_TOOL_IDS } from './protocol.js';
 import { loadRapier, PhysicsWorld, isFixedBodyEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
 import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius } from './damage.js';
@@ -148,6 +148,10 @@ export class Referee {
     // PROP FINDER: timestamp of this player's last finder activation (PER-HUNTER cooldown, never
     // shared). 0 = ready. Reset each match (startMatch) and on resetToLobby. See applyFind.
     player._lastFindAt = 0;
+    // HELD-TOOL VISIBILITY (B7): the hunter's currently-selected tool, rebroadcast in the
+    // snapshot so others render the right item in their hands. Defaults to the rifle; updated
+    // by C2S.SELECT_TOOL (applySelectTool) and reset to rifle on every fresh spawn.
+    player.tool = 'rifle';
 
     player._lastSeen = Date.now(); // GHOST-PLAYER TIMEOUT: fresh join is "seen now" (see tick sweep)
     this.players.set(player.id, player);
@@ -357,6 +361,9 @@ export class Referee {
       case C2S.GRENADE:
         this.applyGrenade(player, msg);
         break;
+      case C2S.SELECT_TOOL:
+        this.applySelectTool(player, msg.tool);
+        break;
       case C2S.SWITCH_TEAM:
         this.applySwitchTeam(player);
         break;
@@ -456,6 +463,7 @@ export class Referee {
     player.rotUnlock = false;
     player.tauntUncancellable = false;
     player._lastFindAt = 0;
+    player.tool = 'rifle'; // HELD-TOOL VISIBILITY (B7): a fresh spawn starts on the rifle
     player.input = { mx: 0, mz: 0, jump: false };
     if (role === ROLE.HUNTER) {
       player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
@@ -493,6 +501,19 @@ export class Referee {
     // all already dead). checkRoundOver counts by CURRENT role, so it never fires a false win — the
     // switcher is no longer counted on their old team.
     this.checkRoundOver();
+  }
+
+  // HELD-TOOL VISIBILITY (B7). A hunter reports which tool it has selected so its third-person
+  // model shows the right item to everyone else. Host-authoritative relay: accept it only from a
+  // LIVING HUNTER and only a REAL tool id (HUNTER_TOOL_IDS) — otherwise ignore and keep the
+  // current value, so a hacked client can't push a bogus/other-player tool. Stored on the player
+  // and rebroadcast in that player's snapshot entry (broadcastSnapshot `tool`). Purely cosmetic:
+  // it changes no damage/hitbox/gameplay — which tool actually fires stays the client-only fire
+  // path. No broadcast here; the change rides the next snapshot like every other player field.
+  applySelectTool(player, tool) {
+    if (!player || player.role !== ROLE.HUNTER || !player.alive) return;
+    if (!HUNTER_TOOL_IDS.includes(tool)) return;
+    player.tool = tool;
   }
 
   applyInput(player, msg) {
@@ -1157,6 +1178,7 @@ export class Referee {
       player.dispYaw = player.yaw;
       player.tauntUncancellable = false; // fresh round: no forced taunt in flight
       player._lastFindAt = 0; // PROP FINDER: fresh round → cooldown reset to ready (no stuck grey)
+      player.tool = 'rifle'; // HELD-TOOL VISIBILITY (B7): fresh round → back to the rifle
       if (player.role === ROLE.HUNTER) {
         player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
       } else {
@@ -1315,6 +1337,7 @@ export class Referee {
       p.rotUnlock = false;
       p.tauntUncancellable = false; // no forced taunt survives a round teardown
       p._lastFindAt = 0; // PROP FINDER: cooldown resets to ready across round/lobby transitions
+      p.tool = 'rifle'; // HELD-TOOL VISIBILITY (B7): reset to the rifle on a round/lobby teardown
     }
     this.broadcastLobby();
   }
@@ -1583,6 +1606,10 @@ export class Referee {
       // see memory/architecture.md.
       hunter: p.role === ROLE.HUNTER,
       disguise: p.disguise,
+      // HELD-TOOL VISIBILITY (B7): the hunter's selected held item, so everyone renders the
+      // right thing in their hands. Only meaningful for hunters (null otherwise). Coerced to a
+      // valid id so a never-set/garbage value can't reach the renderer as an unknown tool.
+      tool: p.role === ROLE.HUNTER ? (HUNTER_TOOL_IDS.includes(p.tool) ? p.tool : 'rifle') : null,
     }));
     const propsTotal = [...this.players.values()].filter((p) => p.role === ROLE.PROP).length;
     const propsAlive = [...this.players.values()].filter((p) => p.role === ROLE.PROP && p.alive).length;

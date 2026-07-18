@@ -256,8 +256,16 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   `state.tool`). An always-on `#toolbar` for a live hunter (tap / click / number keys 1–2,
   current highlighted). Tool switching is made visible to the first-person shooter by a
   weapon **viewmodel** parented to the camera (`scene.setViewModel`: rifle GLB or a ~0.3 m
-  box). Only the FIRE event crosses the wire; which tool a hunter holds is deliberately not
-  synced in v1.
+  box). **HELD-TOOL VISIBILITY (B7, 2026-07-18):** the SELECTED tool is now also synced so OTHER
+  players see the right item in the hunter's hands on their third-person model (was: always a
+  rifle). Host-authoritative RELAY: the client reports its selection (`C2S.SELECT_TOOL`, deduped,
+  living-hunter-only), the referee validates (living hunter + `HUNTER_TOOL_IDS`) and rides a
+  coerced `tool` in each player's snapshot entry; `scene._buildHunterModel` pre-builds all three
+  held meshes (rifle GLB + cheap grenade/finder primitives) on the `Wrist.R` bone and
+  `_applyHeldTool` toggles which is visible per hunter each snapshot. Purely cosmetic — the FIRE
+  path (`SHOOT`/`FIND`/`GRENADE`) is unchanged and still client-driven. New meshes route through
+  the `preparePlayerModel` anti-flicker choke point. Guard: `tools/check-tool-visibility.mjs`.
+  Detail: `notes/hunter-tool-visibility.md`.
 - **The rifle is host-authoritative** (same client-suggests/host-validates model as
   disguising). Client sends only its aim DIRECTION (`C2S.SHOOT`, from `scene.aimDirection()`
   = the SAME screen-centre ray as the disguise pick). `referee.applyShot` re-casts from the

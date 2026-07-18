@@ -102,6 +102,16 @@ ok(/frustumCulled\s*=\s*false/.test(buildHunter), '_buildHunterModel marks the S
 const buildVM = extractFn(sceneSrc, '_buildViewModel');
 ok(/frustumCulled\s*=\s*false/.test(buildVM), '_buildViewModel marks the first-person viewmodel frustumCulled=false');
 
+// (c) B7 HELD-TOOL SWAP: the third-person grenade/finder meshes on the hunter's wrist are new
+//     player-attached models — they MUST also opt out of culling or a switched-to tool would
+//     blink at the screen edge exactly like the strobe bug. Both the primitive builder and the
+//     bone-scaler flag them (belt-and-braces on top of the meshForPlayer choke point).
+const buildHeld = extractFn(sceneSrc, '_buildHeldPrimitive');
+ok(buildHeld.length > 0, 'scene.js defines _buildHeldPrimitive() (the B7 grenade/finder held meshes)');
+ok(/frustumCulled\s*=\s*false/.test(buildHeld), '_buildHeldPrimitive marks the held grenade/finder frustumCulled=false (no strobe on a tool swap)');
+const scaleHeld = extractFn(sceneSrc, '_scaleHeldToBone');
+ok(/frustumCulled\s*=\s*false/.test(scaleHeld), '_scaleHeldToBone marks the scaled held tool frustumCulled=false (covers the rifle path too)');
+
 // ---------------------------------------------------------------------------
 // 4) WORLD PROPS ARE LEFT ALONE (the fix is surgical — only player-attached models opt
 //    out of culling; scenery keeps the optimization). The scenery/prop builders and the

@@ -134,9 +134,13 @@ const state = {
   // each frame by the render loop and consumed by tryDisguise() on Action. See frame().
   aimPropId: null,
 
-  // HUNTER-TOOLS v1: the hunter's currently selected tool (see HUNTER_TOOLS). Local-only
-  // (not networked); the rifle fires, the prop finder activates its AOE. Defaults to the rifle.
+  // HUNTER-TOOLS v1: the hunter's currently selected tool (see HUNTER_TOOLS). The rifle fires,
+  // the prop finder activates its AOE, the grenade throws. Defaults to the rifle. As of B7 the
+  // SELECTION is reported to the host (C2S.SELECT_TOOL) so other players see the right item in
+  // this hunter's hands on their third-person model; toolSynced is the last value we sent (so we
+  // don't re-send it every snapshot). null → force a re-send (e.g. after becoming a hunter).
   tool: 'rifle',
+  toolSynced: null,
   alive: true, // local player's authoritative alive flag (for the tool bar + spectator view)
 
   // PROP FINDER (hunter tool #2). finderCooldownUntil = performance.now() time this hunter's own
@@ -706,6 +710,23 @@ function applyToolView() {
   if (scene && scene.setViewModel) scene.setViewModel(liveHunter ? state.tool : null);
   ui.setToolbar(liveHunter, state.tool);
   updateTauntUi(); // AUDIO TAUNTS: the taunt button follows role/alive (props only) as well
+  syncSelectedTool(); // B7: report the held tool to the host so others see it on our model
+}
+
+// HELD-TOOL VISIBILITY (B7). Tell the host which tool we hold so it rebroadcasts it in our
+// snapshot entry and other players render the right item in our hands. Sent only for a LIVING
+// HUNTER and only when the value CHANGES (deduped via state.toolSynced), so this is safe to call
+// from applyToolView every snapshot without spamming the wire. When we're not a live hunter we
+// clear toolSynced so becoming a hunter again re-sends the current tool (the host reset us to
+// rifle on our fresh spawn; our local state may differ). Purely cosmetic — no gameplay effect.
+function syncSelectedTool() {
+  const liveHunter = state.role === ROLE.HUNTER && state.alive;
+  if (!liveHunter) { state.toolSynced = null; return; }
+  if (state.toolSynced === state.tool) return;
+  if (session && session.send) {
+    session.send({ t: C2S.SELECT_TOOL, tool: state.tool });
+    state.toolSynced = state.tool;
+  }
 }
 
 // ---- network handling -----------------------------------------------------
@@ -746,6 +767,7 @@ function handleGameMessage(msg) {
           ui.setToolbar(false);
           setSpectating(false);
           state.tool = 'rifle';
+          state.toolSynced = null; // B7: re-sync the held tool next time we're a live hunter
           state.alive = true;
           resetFinderState(); // PROP FINDER: cooldown/zone/lock reset to ready between rounds
           resetDebugView(); // drop free cam / focus box between rounds
@@ -895,6 +917,7 @@ function backToMenu(msg) {
   ui.setToolbar(false); // HUNTER-TOOLS v1: hide the tool bar + spectator on the way out
   setSpectating(false); // B6: exit spectator (fly/follow cam) + hide its hint/controls
   state.tool = 'rifle';
+  state.toolSynced = null; // B7: re-sync the held tool next time we're a live hunter
   state.alive = true;
   resetFinderState(); // PROP FINDER: clear cooldown/zone/taunt-lock on the way out
   resetDebugView(); // drop free cam / focus box so they don't bleed into the next match
