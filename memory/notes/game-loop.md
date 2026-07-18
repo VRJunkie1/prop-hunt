@@ -32,16 +32,20 @@ a zero-hunter round just runs on the timer and the surviving prop "wins" at expi
 ## Mid-game join (the referee's single add-player gate)
 `addPlayer` is the ONE entry point for every newcomer (host loopback + each guest
 DataConnection), so it's where lobby-join vs mid-round-join is decided. If the
-phase is HIDING/HUNTING it calls **`admitMidGame(player)`**, which:
-- assigns the newcomer as a **HUNTER** (joining as a prop mid-hunt is unfair — no
-  time to hide — and hunter is the convention), spawns them at `map.hunterSpawn`;
-- sends the **same filtered catch-up every guest gets**: `STARTED{mapId, props}`,
-  a private `ROLE`, an `event{kind:'phase'}` carrying the current phase + seconds
-  left, then the normal per-tick snapshot. Never the host's full state, so the
-  role-hiding invariant holds for late joiners too.
+phase is HIDING/HUNTING it calls **`admitMidGame(player)`**, which (as of
+2026-07-17):
+- assigns the newcomer to the team with the **FEWER players** (coin-flip on a tie —
+  was "always hunter"), then spawns them FRESH via the shared `_spawnOnTeam(player,
+  role)` routine (full HP, no disguise, physics body + private ROLE);
+- sends the **same filtered catch-up every guest gets**: `STARTED{mapId, props}`
+  (FIRST, so the client is in the running world before it hears its role), the
+  private `ROLE` (from `_spawnOnTeam`), an `event{kind:'phase'}` with the current
+  phase + seconds left, then the normal per-tick snapshot. Never the host's full
+  state, so the role-hiding invariant holds for late joiners too;
+- broadcasts a public `event{kind:'log'}` ("X joined the props/hunters").
 Joins during the brief ENDING window fall to the lobby branch and just wait the
-few seconds until `resetToLobby`. The guest side needs no game logic — `STARTED`
-already switches it into the running game (see `main.js`).
+few seconds until the next round starts. The guest side needs no game logic —
+`STARTED` already switches it into the running game (see `main.js`).
 
 ## Map selection (lobby)
 The host picks the map before starting via `C2S.PICK_MAP{mapId}` →
@@ -50,15 +54,26 @@ must exist). Stored in `this.mapId` and echoed in every `S2C.LOBBY` (so late
 joiners see it). `startMatch`/`integrate` read `this.mapId` without re-validating.
 Full detail in `memory/notes/map-selection.md`.
 
-## startMatch
-1. Guard: LOBBY + ≥ minPlayers.
-2. Build authoritative prop instances from `maps[this.mapId].props` (assign ids) —
-   `this.mapId` is the host's lobby pick, trusted (validated at pick time).
-3. Shuffle players; `hunterCount = min(max(1, round(n*hunterRatio)), n-1)` (always
-   ≥1 prop; solo → 0 hunters). First N are hunters (spawn at `map.hunterSpawn`),
-   rest are props (round-robin `map.spawns`). Send each a private `role`.
-4. Broadcast `started{mapId, props}`; `setPhase(HIDING)`. Also clears
-   `this.lastResult` (a new round supersedes the previous result).
+## startMatch → _launchRound (refactored 2026-07-17 for endless rounds)
+`startMatch` now only: guard LOBBY + ≥ minPlayers; shuffle + `hunterCount =
+min(max(1, round(n*hunterRatio)), n-1)` (always ≥1 prop; solo → 0 hunters) → SET
+each player's `role`; then delegate to **`_launchRound()`**. `_launchRound()` is the
+shared round-start flow (used by both a fresh match AND each flipped round), assuming
+roles are already assigned:
+1. Clear `this.lastResult` (a new round supersedes the previous result).
+2. Build authoritative prop instances (hide-spot removal pass) from
+   `maps[this.mapId]` — byte-identical to the old startMatch body.
+3. Spawn EVERY player FRESH by their assigned role: hunters at `map.hunterSpawn`,
+   props round-robin `map.spawns`; full reset (alive, full HP, no disguise, cleared
+   taunt/finder). Send each a private `role`.
+4. Broadcast `started{mapId, props}`; `setPhase(HIDING)`; stand up physics.
+
+## Endless flipped rounds (2026-07-17)
+A round END no longer returns to the lobby. `tick()`'s ENDING-expiry calls
+**`startFlippedRound()`** (flip every player's team prop↔hunter, ≥1-prop solo guard,
+then `_launchRound()`) instead of `resetToLobby()`. Rounds chain while the host (=
+the referee's tab) is connected; `resetToLobby()` stays as the empty-room fallback.
+The lobby is now only used for the FIRST round's start.
 
 ## Disguise (`applyDisguise`)
 Prop only, alive, phase HIDING/HUNTING, target prop within `disguiseRange` of the

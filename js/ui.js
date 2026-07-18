@@ -41,6 +41,11 @@ export class UI {
       pauseExit: $('pauseExit'),
       pauseHelpPanel: $('pauseHelpPanel'),
       pauseHelpBody: $('pauseHelpBody'),
+      // PAUSE-MENU (2026-07-17): team-switch button + the room-code display & copy button (add players
+      // mid-game). Callbacks injected by main.js — the UI holds no game logic.
+      pauseSwitch: $('pauseSwitch'),
+      pauseRoomCode: $('pauseRoomCode'),
+      pauseCopyRoom: $('pauseCopyRoom'),
       // AUDIO TAUNTS (props): the taunt button, the (while-playing) stop button, and the
       // scrolling menu with its list + close + empty-state note.
       tauntBtn: $('tauntBtn'),
@@ -55,9 +60,13 @@ export class UI {
     // the pointer / dismisses the menu; Exit leaves the match.
     this.onPauseResume = () => {};
     this.onPauseExit = () => {};
+    this.onPauseSwitch = () => {};   // PAUSE-MENU TEAM SWITCH
+    this.onPauseCopyRoom = () => {}; // COPY ROOM CODE (mid-game join)
     if (this.el.pauseResume) this.el.pauseResume.addEventListener('click', () => this.onPauseResume());
     if (this.el.pauseExit) this.el.pauseExit.addEventListener('click', () => this.onPauseExit());
     if (this.el.pauseHelp) this.el.pauseHelp.addEventListener('click', () => this._togglePauseHelp());
+    if (this.el.pauseSwitch) this.el.pauseSwitch.addEventListener('click', () => this.onPauseSwitch());
+    if (this.el.pauseCopyRoom) this.el.pauseCopyRoom.addEventListener('click', () => this.onPauseCopyRoom());
     // HUNTER-TOOLS v1: the hunter tool bar calls this when a tool button is tapped/clicked.
     // main.js injects the real handler (selectTool). No game logic lives in the UI.
     this.onSelectTool = () => {};
@@ -468,10 +477,15 @@ export class UI {
   // A menu OVERLAY, not a real pause — the world runs on the host. Shows a live scoreboard
   // (everyone + health), a controls/help panel, Resume, and Exit. main.js drives visibility
   // and feeds the roster from each snapshot while it's open.
-  showPause(players, selfId) {
-    this.updatePauseScoreboard(players, selfId);
+  showPause(players, selfId, selfIsHunter) {
+    this.updatePauseScoreboard(players, selfId, selfIsHunter);
     if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden'); // help starts collapsed
     if (this.el.pauseMenu) this.el.pauseMenu.classList.remove('hidden');
+  }
+
+  // Show the room code in the pause menu (for the copy button — adding players mid-game).
+  setPauseRoom(code) {
+    if (this.el.pauseRoomCode) this.el.pauseRoomCode.textContent = code || '----';
   }
 
   hidePause() {
@@ -479,8 +493,12 @@ export class UI {
     if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden');
   }
 
-  // Rebuild the scoreboard rows: every player with their role/disguise + current health.
-  updatePauseScoreboard(players, selfId) {
+  // Rebuild the scoreboard rows: every player with their role + current health. DISGUISE-INFO LEAK
+  // FIX: the disguise label ("prop · burger") is shown ONLY when the VIEWER is a prop — a HUNTER never
+  // sees what any prop is disguised as. (The host also withholds disguised props' NAMES from hunters,
+  // so a hunter's data can't tie a name to a disguise even in devtools; here a name-less prop entry
+  // renders anonymously as "a prop".) selfIsHunter gates the client half.
+  updatePauseScoreboard(players, selfId, selfIsHunter) {
     const list = this.el.pauseScores;
     if (!list) return;
     list.innerHTML = '';
@@ -488,8 +506,10 @@ export class UI {
       const li = document.createElement('li');
       const who = document.createElement('span');
       who.className = 'ps-name';
-      const roleTxt = p.disguise ? `prop · ${p.disguise}` : p.hunter ? 'hunter' : 'prop';
-      who.textContent = `${p.name || (p.id || '').slice(0, 4)}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
+      const showDisguise = p.disguise && !selfIsHunter; // hunters never see prop disguises
+      const roleTxt = showDisguise ? `prop · ${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+      const nm = p.id === selfId ? (p.name || 'you') : (p.name || 'a prop'); // host may strip a disguised prop's name for hunters
+      who.textContent = `${nm}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
       if (!p.alive) who.classList.add('ps-dead');
       const hp = document.createElement('span');
       hp.className = 'ps-hp';

@@ -69,6 +69,13 @@ export const C2S = {
   // non-player DECOY props only — never other hunters, never direct self-damage. If the blast
   // kills a prop player the thrower is REDEEMED to full HP. See shared/referee.js applyGrenade.
   GRENADE: 'grenade', // { dx, dy, dz }
+  // PAUSE-MENU TEAM SWITCH (2026-07-17, VRmike). No payload — the host knows the sender's current
+  // team. The host respawns the sender as a FRESH player on the OPPOSITE team (prop→hunter or
+  // hunter→prop): full HP, no disguise (a new disguise if they become a prop and re-disguise),
+  // fresh tools. Host-authoritative; active-round only (HIDING/HUNTING). NO cooldown / anti-abuse
+  // (accepted per VRmike — it's an intentional, abusable-for-laughs feature). The host broadcasts a
+  // PUBLIC log line everyone sees (S2C.EVENT kind:'log'). See shared/referee.js applySwitchTeam.
+  SWITCH_TEAM: 'switchTeam', // {}
   // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
   // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
   // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
@@ -102,6 +109,8 @@ export const S2C = {
   //   kind:'hurt'       { victim, by, self, dmg, health } -> a player took damage.
   //   kind:'eliminated' { by, victim, name, hunter } -> a player died (hunter=true if a hunter).
   //   kind:'roundOver'  { winner } -> ROLE.HUNTER or ROLE.PROP (props win if all hunters die).
+  //   kind:'log'        { text } -> a PUBLIC log line for EVERY player's feed (a team switch or a
+  //                     mid-round join, e.g. "VRmike switched to hunters" / "Sam joined the props").
   //   kind:'taunt'      { by, id, uncancellable } -> play taunt clip `id` as 3D positional
   //                     audio at player `by`'s live position for everyone. A new taunt from the
   //                     same `by` cuts off their previous one (one voice per prop; different

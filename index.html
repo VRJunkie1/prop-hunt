@@ -150,6 +150,13 @@
         <div class="pause-card">
           <h2>PAUSED</h2>
           <p class="pause-sub">The match is still running &mdash; this is just a menu.</p>
+          <!-- ROOM CODE + copy, so new players can be added mid-game (mid-round joins land on the
+               smaller team). Populated by ui.setPauseRoom(); copy handled by main.js onPauseCopyRoom. -->
+          <div class="pause-room">
+            <span class="pause-room-label">Room code</span>
+            <code id="pauseRoomCode" class="pause-room-code">----</code>
+            <button id="pauseCopyRoom" class="ghost" type="button">Copy</button>
+          </div>
           <div class="pause-sec-label">Scoreboard</div>
           <ul id="pauseScores" class="pause-scores"></ul>
           <div id="pauseHelpPanel" class="pause-help hidden">
@@ -158,6 +165,8 @@
           </div>
           <div class="pause-btns">
             <button id="pauseResume" class="primary" type="button">Resume</button>
+            <!-- TEAM SWITCH: respawn on the opposite team (host-authoritative; broadcasts a public log). -->
+            <button id="pauseSwitch" type="button">Switch teams</button>
             <button id="pauseHelp" type="button">Controls</button>
             <button id="pauseExit" class="warn" type="button">Exit to menu</button>
           </div>

@@ -1,5 +1,18 @@
 # Pause menu + rapid fire + mouse lock (2026-07-12, VRmike)
 
+## Pause-menu additions (2026-07-17, VRmike — team switch / room copy / leak fix)
+Full detail: `notes/team-switch-flipped-rounds.md`. Three pause-menu-facing changes:
+- **Switch teams** (`#pauseSwitch`) → `main.js ui.onPauseSwitch` sends `C2S.SWITCH_TEAM` + `closePause(true)`.
+  Host respawns you FRESH on the opposite team (`applySwitchTeam` → `_spawnOnTeam`) + a public log line.
+  No cooldown/anti-abuse (accepted). The new `ROLE` re-runs `applyRoleView`/`applyToolView` + banner.
+- **Room code + Copy** (`#pauseRoomCode` set by `ui.setPauseRoom(state.room)` in `openPause`; `#pauseCopyRoom`
+  → `main.js ui.onPauseCopyRoom`, `navigator.clipboard` with a feed fallback) — so friends can be added
+  mid-game (mid-round joins land on the smaller team).
+- **Disguise-leak fix in the scoreboard:** `ui.updatePauseScoreboard(players, selfId, selfIsHunter)` shows a
+  prop's disguise label ONLY to a PROP viewer; a HUNTER sees "prop" (and disguised props arrive name-blanked
+  from the host — `hunterSafeSnapshot` — so they render anonymously as "a prop"). `main.js` passes
+  `state.role === ROLE.HUNTER` from both `openPause` (showPause) and the live snapshot refresh.
+
 ## PC pause is ESCAPE-ONLY — ambient focus loss never pauses (2026-07-13, VRmike)
 
 **The rule:** on desktop, ONLY an explicit Escape pauses. Losing pointer lock by itself —

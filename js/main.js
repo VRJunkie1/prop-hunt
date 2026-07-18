@@ -271,7 +271,10 @@ function openPause() {
   state.paused = true;
   if (document.pointerLockElement) document.exitPointerLock(); // release the mouse (no-op on touch)
   ui.setClickToPlay(false);
-  ui.showPause(state.lastPlayers || [], state.selfId);
+  ui.setPauseRoom(state.room); // room code + copy button, for adding players mid-game
+  // Pass our OWN role so a HUNTER's pause roster hides prop disguises (client half of the leak fix;
+  // the host also withholds disguised props' names from hunters — hunterSafeSnapshot).
+  ui.showPause(state.lastPlayers || [], state.selfId, state.role === ROLE.HUNTER);
 }
 function closePause(relock) {
   if (!state.paused) return;
@@ -854,7 +857,7 @@ function onSnapshot(msg) {
   // Newest roster for the pause scoreboard; refresh it live if the pause menu is open (the
   // world keeps running underneath, so health/roster keep updating behind the overlay).
   state.lastPlayers = msg.players;
-  if (state.paused) ui.updatePauseScoreboard(msg.players, state.selfId);
+  if (state.paused) ui.updatePauseScoreboard(msg.players, state.selfId, state.role === ROLE.HUNTER);
   if (debugMenu) debugMenu.onSnapshot(msg); // feed the debug panel (roster/states)
   if (scene) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
@@ -1005,6 +1008,10 @@ function onEvent(msg) {
       break;
     case 'miss':
       ui.feed('Missed — nothing there.');
+      break;
+    case 'log':
+      // PUBLIC log line broadcast by the host (a team switch or a mid-round join). Everyone sees it.
+      if (msg.text) ui.feed(msg.text);
       break;
     case 'disguised':
       ui.feed(`Disguised as a ${msg.type}.`);
@@ -1459,6 +1466,24 @@ function wireMenu() {
   // touch (and works on desktop when unlocked); Escape opens it on desktop via onLockChange.
   ui.onPauseResume = () => closePause(true);
   ui.onPauseExit = () => backToMenu('Left the match.');
+  // PAUSE-MENU TEAM SWITCH: ask the host to respawn us on the opposite team (host-authoritative; it
+  // broadcasts the public "X switched to …" log). Close the menu + re-lock so we drop back into play.
+  ui.onPauseSwitch = () => {
+    session.send({ t: C2S.SWITCH_TEAM });
+    closePause(true);
+  };
+  // COPY ROOM CODE from the pause menu, so new players can be added mid-game. navigator.clipboard with
+  // a phone-friendly fallback (show the code in the feed if clipboard access is denied / insecure ctx).
+  ui.onPauseCopyRoom = async () => {
+    const code = state.room;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      ui.feed(`Room code ${code} copied — share it so friends can join mid-game.`);
+    } catch {
+      ui.feed(`Room code: ${code} (copy it manually to invite players).`);
+    }
+  };
   const pauseBtn = document.getElementById('pauseBtn');
   if (pauseBtn) pauseBtn.addEventListener('click', () => openPause());
   ui.el.copyLinkBtn.addEventListener('click', async () => {

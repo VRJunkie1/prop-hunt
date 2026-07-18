@@ -519,17 +519,29 @@ win if the hunt timer expires with any prop alive.
 ≥1 prop (`hunterCount = min(max(1,round(n*hunterRatio)), n-1)`), so a solo host is
 a prop; a zero-hunter round has no instant win and just runs on the timer.
 
-**Mid-game join**: `addPlayer` is the single gate for everyone (host loopback +
-each guest DataConnection). During HIDING/HUNTING it routes to `admitMidGame`,
-which slots the newcomer in as a **hunter**, spawns them, and sends the SAME
-filtered catch-up every guest gets (`STARTED` + private `ROLE` + current
+**Mid-game join** (smaller-team, 2026-07-17): `addPlayer` is the single gate for
+everyone (host loopback + each guest DataConnection). During HIDING/HUNTING it
+routes to `admitMidGame`, which assigns the newcomer to the team with **fewer
+players** (coin-flip on a tie — was "always hunter"), spawns them FRESH via the
+shared `_spawnOnTeam` routine, broadcasts a public `kind:'log'` line, and sends the
+SAME filtered catch-up every guest gets (`STARTED` + private `ROLE` + current
 phase/clock + normal snapshots) — never the host's full state. Guest side is pure
 presentation (`STARTED` drops it into the running game). See
-`memory/notes/game-loop.md`.
+`memory/notes/game-loop.md` + `team-switch-flipped-rounds.md`.
 
-**Persistent lobby**: nothing tears down between rounds — peers stay open, players
-survive, host stays host, map stays picked. `endRound` stores `lastResult`, which
-rides `S2C.LOBBY` so the lobby shows the previous winner for back-to-back rounds.
+**Pause-menu TEAM SWITCH** (2026-07-17): `C2S.SWITCH_TEAM` → `applySwitchTeam`
+respawns the sender FRESH on the opposite team via the same `_spawnOnTeam` routine
++ a public `kind:'log'` line. Host-authoritative, active-round only, NO
+cooldown/anti-abuse (accepted per VRmike). `_spawnOnTeam` is the ONE shared
+fresh-spawn-onto-a-team routine (team switch + mid-join can't drift).
+
+**Endless flipped rounds** (2026-07-17): a round END no longer returns to the
+lobby — `tick()`'s ENDING-expiry calls `startFlippedRound()` (flip every team, then
+the shared `_launchRound()`) instead of `resetToLobby()`. `startMatch` was
+refactored into assign-roles + `_launchRound()`; `_launchRound()` is the shared
+round-start flow (props build, fresh spawn-by-role, ROLEs, STARTED, HIDING,
+physics). `resetToLobby()` remains the empty-room fallback. `lastResult`/`S2C.LOBBY`
+still exist for the (now first-round-only) lobby path.
 
 ## Lobby map selection (host-authoritative, single gate)
 
@@ -591,3 +603,15 @@ undisguised prop still renders as a neutral capsule and so is visible while
 moving — acceptable for the skeleton; see project-state open threads. Mid-game
 joiners are guests too: `admitMidGame` sends them the same filtered
 `STARTED`/`ROLE`/snapshot path, so late entry doesn't leak the host's full state.
+
+**DISGUISE-INFO LEAK FIX** (2026-07-17): the pause-menu roster used to reveal what
+every prop is disguised as ("VRmike — burger") to EVERYONE incl. hunters. The
+render-facing `disguise` field MUST stay for hunters (a prop disguised as a burger
+has to draw AS a burger on the hunter's screen — `scene.meshForPlayer` reads it), so
+we can't strip it. Instead `broadcastSnapshot` sends HUNTER recipients (in HUNTING)
+`hunterSafeSnapshot(full)` — identical EXCEPT every DISGUISED prop entry has its
+`name` BLANKED. So a hunter's data keeps the render shape byte-for-byte but never
+pairs a real NAME with a disguise (the roster leak). During HIDING the blindfold
+already withholds all prop entries. Client `updatePauseScoreboard(…, selfIsHunter)`
+also hides disguise labels from hunter viewers (belt-and-suspenders). Detail:
+`memory/notes/team-switch-flipped-rounds.md`.

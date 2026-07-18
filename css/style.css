@@ -691,6 +691,25 @@ button.ghost:hover { background: #3d2a66; }
   color: #ff8ae8;
   text-align: left;
 }
+/* Room code row (copy-to-clipboard for mid-game joins). */
+.pause-room {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  background: #ffffff0e;
+  border-radius: 8px;
+}
+.pause-room-label { font: bold 11px/1 monospace; letter-spacing: 1px; text-transform: uppercase; color: #ff8ae8; }
+.pause-room-code {
+  flex: 1 1 auto;
+  text-align: left;
+  font: bold 18px/1 monospace;
+  letter-spacing: 3px;
+  color: #ece3ff;
+}
+.pause-room button { min-height: 34px; }
 .pause-scores { list-style: none; margin: 0; padding: 0; text-align: left; }
 .pause-scores li {
   display: flex;

@@ -85,6 +85,10 @@ export class Referee {
     // same fixtures' LOCAL scenery mesh AND static collider, and passed to the physics world so
     // its `_buildStatic` skips them. Empty until startMatch runs. See startMatch.
     this.removedFixtures = [];
+    // Round-robin cursor for placing a MID-ROUND entrant (team switch / mid-game join) at a prop
+    // spawn, so successive drop-ins spread across the map's spawn points instead of stacking. See
+    // _spawnOnTeam. Persists across rounds (harmless — it's only a spawn-point index).
+    this._propSpawnRR = 0;
     // ---- physics (Rapier) ----------------------------------------------------
     // The authoritative simulation. Built LAZILY at match start (loadRapier pulls
     // the WASM from a CDN on demand — never at boot, so the headless load check
@@ -160,35 +164,33 @@ export class Referee {
   // per-tick snapshot) — never the host's full unfiltered state, so the "guests
   // never learn who's an undisguised prop" rule holds for late joiners too.
   admitMidGame(player) {
-    const map = this.maps[this.mapId];
-    player.role = ROLE.HUNTER;
-    player.alive = true;
-    player.health = this._startHealth();
-    player.disguise = null;
-    player.input = { mx: 0, mz: 0, jump: false };
-    player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
-    player.spawn = { x: player.pos.x, z: player.pos.z }; // fall-through failsafe target (fix #4)
-    player.dispYaw = player.yaw;
-    // If the world's physics is already up, give the newcomer a body immediately
-    // (otherwise integrate() adds it on the next tick via the join-race guard).
-    if (this.physics) {
-      this.physics.addPlayer(player.id, player.pos);
-      // HITBOX ACCURACY: give the newcomer a shot sensor matching their current look
-      // (disguise-shaped if already disguised, capsule-matching otherwise) so bullets test
-      // against what they visibly are, not the raw movement capsule.
-      if (this.physics.setShotCollider) this.physics.setShotCollider(player.id, player.disguise || null);
+    // MID-ROUND JOIN (2026-07-17, VRmike): a player joining a live round drops STRAIGHT into it on the
+    // team with the FEWER players — a coin-flip when the teams are even — instead of always as a hunter.
+    // Count the CURRENT teams (this newcomer isn't slotted in yet); ties → random. Host-authoritative.
+    let hunters = 0, props = 0;
+    for (const p of this.players.values()) {
+      if (p === player) continue;
+      if (p.role === ROLE.HUNTER) hunters++;
+      else if (p.role === ROLE.PROP) props++;
     }
+    const role =
+      hunters < props ? ROLE.HUNTER :
+      props < hunters ? ROLE.PROP :
+      (Math.random() < 0.5 ? ROLE.HUNTER : ROLE.PROP); // even teams → random
 
-    // Catch-up: with a knockable world, a late joiner must receive the CURRENT
-    // position of every prop that has moved (resting or not), or they'd see kicked
-    // chairs/tables back at their spawn — an instant desync (fix #8). Props that
-    // never moved (or are capped-static) fall back to their spawn entry.
+    // Catch-up FIRST: with a knockable world, a late joiner must receive the CURRENT position of every
+    // prop that has moved (resting or not), or they'd see kicked chairs/tables back at their spawn — an
+    // instant desync (fix #8). STARTED must precede ROLE/phase so the client switches into the running
+    // world before it learns its role. Props that never moved (or are capped-static) fall back to spawn.
     send(player, { t: S2C.STARTED, mapId: this.mapId, props: this._propsCatchup(), removedFixtures: this.removedFixtures });
-    send(player, { t: S2C.ROLE, role: player.role });
+    // Fresh spawn on the assigned team via the SHARED routine (same one the pause-menu team switch
+    // uses, so mid-join and switch can't drift): full HP, no disguise, a physics body + private ROLE.
+    this._spawnOnTeam(player, role);
     const seconds = Math.max(0, (this.phaseEndsAt - Date.now()) / 1000);
     send(player, { t: S2C.EVENT, kind: 'phase', phase: this.phase, seconds });
-    // Refresh the (hidden-during-play) lobby list so names stay in sync for when
-    // everyone returns to the persistent lobby.
+    // Public log line for EVERYONE ("X joined the hunters") + refresh the (hidden-during-play) lobby
+    // list so names stay in sync for when everyone returns to the persistent lobby.
+    this.broadcastLog(`${player.name} joined the ${role === ROLE.HUNTER ? 'hunters' : 'props'}`);
     this.broadcastLobby();
   }
 
@@ -300,6 +302,9 @@ export class Referee {
       case C2S.GRENADE:
         this.applyGrenade(player, msg);
         break;
+      case C2S.SWITCH_TEAM:
+        this.applySwitchTeam(player);
+        break;
       case C2S.DEBUG:
         this.handleDebug(player, msg);
         break;
@@ -369,6 +374,60 @@ export class Referee {
     if (this.physics && this.physics.setShotCollider) this.physics.setShotCollider(player.id, type); // disguise-shaped shot sensor
     player.dispYaw = player.yaw;
     send(player, { t: S2C.EVENT, kind: 'disguised', type });
+  }
+
+  // ---- shared fresh-spawn onto a team (team switch + mid-round join) -------
+  // FRESH-spawn a SINGLE player onto `role`'s team, mid-round, host-authoritatively. The ONE routine
+  // both the pause-menu TEAM SWITCH (applySwitchTeam) and the MID-ROUND JOIN (admitMidGame) use, so
+  // the two can never drift. Full reset — the newcomer/switcher starts a clean life: alive, full HP,
+  // NO disguise (a new prop re-disguises by aiming; a fresh hunter gets its default tools client-side),
+  // cleared taunt/finder state, motion zeroed. Placed at the team's spawn (hunters share hunterSpawn;
+  // props round-robin the map spawns). The physics body is repositioned (or created) and its movement
+  // collider + shot sensor are reset to a plain capsule (a hunter, or an undisguised prop). Finally the
+  // player is handed its new private ROLE. Guarded so it works on the 2D fallback (physics not up).
+  _spawnOnTeam(player, role) {
+    const map = this.maps[this.mapId];
+    player.role = role;
+    player.alive = true;
+    player.health = this._startHealth();
+    player.disguise = null;
+    player.rotUnlock = false;
+    player.tauntUncancellable = false;
+    player._lastFindAt = 0;
+    player.input = { mx: 0, mz: 0, jump: false };
+    if (role === ROLE.HUNTER) {
+      player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
+    } else {
+      const s = map.spawns[this._propSpawnRR++ % map.spawns.length];
+      player.pos = { x: s.x, y: 0, z: s.z };
+    }
+    player.spawn = { x: player.pos.x, z: player.pos.z }; // fall-through failsafe target (fix #4)
+    player.dispYaw = player.yaw;
+    if (this.physics) {
+      if (this.physics.hasPlayer(player.id)) this.physics.setPlayerPosition(player.id, player.pos);
+      else this.physics.addPlayer(player.id, player.pos);
+      // Back to a base capsule: drop any disguise girth + a disguise-shaped shot sensor (a fresh
+      // hunter or an undisguised fresh prop is collided/shot on their plain body shape).
+      if (this.physics.setPlayerCollider) this.physics.setPlayerCollider(player.id, null);
+      if (this.physics.setShotCollider) this.physics.setShotCollider(player.id, null);
+    }
+    send(player, { t: S2C.ROLE, role });
+  }
+
+  // PAUSE-MENU TEAM SWITCH (2026-07-17, VRmike). The sender clicks "Switch teams" and is respawned as
+  // a FRESH player on the OPPOSITE team via the shared _spawnOnTeam routine, then a PUBLIC log line is
+  // broadcast to everyone ("X switched to hunters"). Host-authoritative; active-round only (a switch
+  // in the lobby/ending window is ignored). NO cooldown / anti-abuse — accepted per VRmike.
+  applySwitchTeam(player) {
+    if (!player) return;
+    if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
+    const newRole = player.role === ROLE.HUNTER ? ROLE.PROP : ROLE.HUNTER;
+    this._spawnOnTeam(player, newRole);
+    this.broadcastLog(`${player.name} switched to ${newRole === ROLE.HUNTER ? 'hunters' : 'props'}`);
+    // A switch changes team COUNTS, so it can legitimately end a round (e.g. the remaining props were
+    // all already dead). checkRoundOver counts by CURRENT role, so it never fires a false win — the
+    // switcher is no longer counted on their old team.
+    this.checkRoundOver();
   }
 
   applyInput(player, msg) {
@@ -849,6 +908,9 @@ export class Referee {
   }
 
   // ---- match lifecycle ----------------------------------------------------
+  // Start the FIRST round from the lobby (host START). Randomly split into hunters/props, then hand
+  // off to the shared round-start flow. After this, rounds chain ENDLESSLY with flipped teams
+  // (startFlippedRound) instead of returning to the lobby — see tick()'s ENDING branch.
   startMatch() {
     if (this.phase !== PHASE.LOBBY) return;
     const ids = [...this.players.keys()];
@@ -857,7 +919,39 @@ export class Referee {
       if (host) send(host, { t: S2C.ERROR, msg: `Need at least ${this.rules.minPlayers} players to start.` });
       return;
     }
+    // Randomly split into Hunters and Props (the host referee decides). Always keep at least one prop:
+    // hunters are capped at players-1, so a SOLO launch (n===1) yields 0 hunters (the lone host is a
+    // prop and can walk/disguise while testing a map). Roles are assigned here; _launchRound spawns them.
+    shuffle(ids);
+    const hunterCount = Math.min(
+      Math.max(1, Math.round(ids.length * this.rules.hunterRatio)),
+      Math.max(0, ids.length - 1),
+    );
+    ids.forEach((id, i) => { this.players.get(id).role = i < hunterCount ? ROLE.HUNTER : ROLE.PROP; });
+    this._launchRound();
+  }
 
+  // ENDLESS FLIPPED ROUNDS (2026-07-17, VRmike): when a round ends, instead of returning to the lobby,
+  // immediately start the next round with every team FLIPPED — every prop becomes a hunter and every
+  // hunter becomes a prop — then run the SAME round-start flow (fresh spawns, disguises re-rolled,
+  // physics reset). Rounds keep chaining while the host (= the referee's tab) is connected; the host
+  // leaving tears the match down (no host migration yet). Called from tick() when ENDING expires.
+  startFlippedRound() {
+    const players = [...this.players.values()];
+    if (players.length === 0) { this.resetToLobby(); return; }
+    for (const p of players) p.role = p.role === ROLE.HUNTER ? ROLE.PROP : ROLE.HUNTER;
+    // A round needs >=1 prop to be meaningful (mirrors startMatch). The only zero-prop flip is a lone
+    // host who was a prop (solo → 0 hunters → flip → 0 props); keep one player a prop in that case.
+    if (!players.some((p) => p.role === ROLE.PROP)) players[0].role = ROLE.PROP;
+    this._launchRound();
+  }
+
+  // Shared round-start flow for BOTH a fresh match (startMatch) and each flipped round
+  // (startFlippedRound). Assumes every player's `role` is ALREADY assigned. Builds the authoritative
+  // prop instances (hide-spot removal pass), spawns each player FRESH by role (full HP, no disguise,
+  // cleared taunt/finder state), sends each a private ROLE, broadcasts STARTED, enters HIDING, and
+  // stands up the physics world. Clears lastResult (a new round supersedes the previous result).
+  _launchRound() {
     this.lastResult = null; // a fresh round supersedes the previous result
 
     const map = this.maps[this.mapId];
@@ -976,41 +1070,31 @@ export class Referee {
     // tick (see integrate). Read by applyDisguise for range against the real position.
     this.propLive = new Map(this.props.map((p) => [p.id, { x: p.x, z: p.z }]));
 
-    // Randomly split into Hunters and Props (the host referee decides).
-    shuffle(ids);
-    // Always keep at least one prop (a round with nobody to hunt is pointless),
-    // so hunters are capped at players-1. For a SOLO launch (ids.length === 1)
-    // that cap is 0 → the lone host is a prop and can walk/disguise while testing
-    // a map; the win-checker treats "zero hunters" as no instant win, so the round
-    // just runs on the timer (surviving props win when it expires). See
-    // checkRoundOver.
-    const hunterCount = Math.min(
-      Math.max(1, Math.round(ids.length * this.rules.hunterRatio)),
-      Math.max(0, ids.length - 1),
-    );
+    // Spawn every player FRESH for their already-assigned role (startMatch shuffled the split;
+    // startFlippedRound flipped it). Props round-robin the map's prop spawns; hunters share the hunter
+    // spawn. Full reset so a flipped player starts a clean round: alive, full HP, no disguise, cleared
+    // taunt/finder state, motion zeroed. A zero-hunter (solo) round just runs on the timer
+    // (checkRoundOver treats "no hunters" as no instant win; the surviving prop wins at expiry).
     let spawnIdx = 0;
-    ids.forEach((id, i) => {
-      const player = this.players.get(id);
+    for (const player of this.players.values()) {
       player.alive = true;
       player.health = this._startHealth();
       player.disguise = null;
       player.input = { mx: 0, mz: 0, jump: false };
+      player.rotUnlock = false;
       player.dispYaw = player.yaw;
       player.tauntUncancellable = false; // fresh round: no forced taunt in flight
       player._lastFindAt = 0; // PROP FINDER: fresh round → cooldown reset to ready (no stuck grey)
-      if (i < hunterCount) {
-        player.role = ROLE.HUNTER;
+      if (player.role === ROLE.HUNTER) {
         player.pos = { x: map.hunterSpawn.x, y: 0, z: map.hunterSpawn.z };
       } else {
-        player.role = ROLE.PROP;
         const s = map.spawns[spawnIdx++ % map.spawns.length];
         player.pos = { x: s.x, y: 0, z: s.z };
       }
-      // Remember this player's spawn so the fall-through failsafe can send them back
-      // here if they slip below the floor (fix #4).
+      // Remember this player's spawn so the fall-through failsafe can send them back here (fix #4).
       player.spawn = { x: player.pos.x, z: player.pos.z };
       send(player, { t: S2C.ROLE, role: player.role });
-    });
+    }
 
     this.broadcast({ t: S2C.STARTED, mapId: this.mapId, props: this.props, removedFixtures: this.removedFixtures });
     this.setPhase(PHASE.HIDING, this.rules.hidingSeconds);
@@ -1142,7 +1226,11 @@ export class Referee {
       } else if (this.phase === PHASE.HUNTING) {
         this.endRound(ROLE.PROP); // time ran out, surviving props win
       } else if (this.phase === PHASE.ENDING) {
-        this.resetToLobby();
+        // ENDLESS FLIPPED ROUNDS: chain straight into the next round with teams flipped instead of
+        // returning to the lobby, as long as the host (= the referee's tab, so always, while this
+        // runs) still has players. resetToLobby stays as the empty-room fallback.
+        if (this.players.size > 0) this.startFlippedRound();
+        else this.resetToLobby();
       }
     }
 
@@ -1341,6 +1429,12 @@ export class Referee {
     for (const p of this.players.values()) send(p, obj);
   }
 
+  // Broadcast a PUBLIC log line to EVERY player's kill/event feed. Used for team switches and
+  // mid-round joins (S2C.EVENT kind:'log' → js/main.js onEvent → ui.feed). Not a game-state change.
+  broadcastLog(text) {
+    this.broadcast({ t: S2C.EVENT, kind: 'log', text });
+  }
+
   broadcastLobby() {
     const players = [...this.players.values()].map((p) => ({ id: p.id, name: p.name, ready: p.ready }));
     // mapId rides along so every lobby screen (including a late joiner) shows the
@@ -1410,11 +1504,24 @@ export class Referee {
     // full stream, so full prop data resumes the instant the host flips HIDING→HUNTING.
     // This is per-recipient dispatch — the SAME single filter path, computed once per
     // tick and reused. See memory/notes/anti-cheat-blindfold.md.
-    let blinded = null;
+    //
+    // DISGUISE-INFO LEAK FIX (2026-07-17, VRmike). The pause-menu roster used to reveal what every
+    // prop is disguised as (e.g. "VRmike — burger") to EVERYONE, incl. hunters — a trivial cheat. The
+    // render-facing `disguise` field MUST stay for hunters (a prop disguised as a burger has to render
+    // AS a burger on the hunter's screen — that IS the game), so we can't strip it. What we CAN strip,
+    // host-side, is the ROSTER IDENTITY LABEL: for a hunter recipient we blank the `name` on every
+    // DISGUISED prop entry (hunterSafeSnapshot), so a hunter's data never pairs a real player NAME with
+    // a disguise — the render shape stays byte-for-byte intact, but "which burger is a person" is gone.
+    // Undisguised props + hunters keep their names. During HIDING the blindfold already withholds ALL
+    // prop entries, so the leak can't happen there; this covers HUNTING (and any non-blind hunter view).
+    let blinded = null, hunterView = null;
     for (const p of this.players.values()) {
       if (p.role === ROLE.HUNTER && this.phase === PHASE.HIDING) {
         if (!blinded) blinded = blindHunterSnapshot(full);
         send(p, blinded);
+      } else if (p.role === ROLE.HUNTER) {
+        if (!hunterView) hunterView = hunterSafeSnapshot(full);
+        send(p, hunterView);
       } else {
         send(p, full);
       }
@@ -1497,6 +1604,19 @@ function mulberry32(a) {
 // show normally in the HUD anyway). Pure so tools/check-features.mjs can assert it.
 export function blindHunterSnapshot(full) {
   return { ...full, players: full.players.filter((pl) => pl.hunter), props: [] };
+}
+
+// Hunter-safe snapshot (DISGUISE-INFO LEAK FIX, HUNTING phase) — the roster half of the anti-cheat.
+// Keeps EVERY field the renderer needs (each prop's `disguise` shape/appearance is preserved byte-for-
+// byte, so disguised props still draw AS their disguise on the hunter's screen), but BLANKS the `name`
+// on every disguised prop entry so a hunter's data can't tie a real player NAME to a disguise (the
+// pause-menu roster leak). Undisguised props and hunters keep their names. Pure, so the offline guard
+// (tools/check-team-flip.mjs) can assert BOTH halves: zero name↔disguise labels AND intact render shapes.
+export function hunterSafeSnapshot(full) {
+  return {
+    ...full,
+    players: full.players.map((pl) => (!pl.hunter && pl.disguise ? { ...pl, name: null } : pl)),
+  };
 }
 
 // Rough footprint volume of a catalog entry, for prioritising which knockable
