@@ -13,14 +13,16 @@
 // PeerJS's 'close'/'error' events cover a LOUD disconnect; they never fire for a silent stall.
 // This watchdog is the heartbeat check that catches the silent case.
 //
-// THE RULE. The host broadcasts a snapshot at rules.snapshotRate (15 Hz ≈ one every ~66 ms) the
-// whole time a match is live — a connected guest is fed continuously regardless of role/phase
-// (even a blindfolded hunter gets a filtered snapshot every tick). So if NO snapshot arrives for
-// a multiple of that interval, the host has genuinely dropped. The timeout is derived from the
-// netcode's published rate (main.js hostSilenceMs()): rules.leaveTimeoutSeconds (5 s) — the SAME "no
-// traffic = genuinely gone" threshold the HOST uses to sweep silent guests (referee
-// _sweepSilentPlayers), which is ≈ 75 missed 15 Hz snapshots. One shared silence threshold, both
-// directions.
+// THE RULE (CONNECTION LIVENESS, 2026-07-19, VRmike). The watchdog is fed by ANY proof the host is
+// alive: the snapshot stream (rules.snapshotRate 15 Hz ≈ one every ~66 ms) during an active round,
+// AND the dedicated ~1Hz host→guest keepalive ping (net.js → main.js session.onKeepalive → feed())
+// which keeps flowing even in the gaps where snapshots don't — a between-round seam or a briefly-
+// throttled host. So only if NEITHER a snapshot NOR a keepalive arrives for the whole timeout has the
+// host genuinely dropped. The timeout is derived (main.js hostSilenceMs()) from rules.leaveTimeoutSeconds
+// (15 s) — the SAME "connection genuinely dead" threshold the HOST uses to sweep silent guests (referee
+// _sweepSilentPlayers). 15 s tolerates the multi-second jitter of a backgrounded WebRTC tab so an
+// AFK-but-connected peer is never false-booted; see notes/disconnect-diagnosis.md. One shared threshold,
+// both directions.
 //
 // This module owns ONLY the timing + fire-once latch (mirrors HudTimer's split). main.js decides
 // WHEN to arm/disarm (a GUEST that is in a match — never the host, whose loopback always feeds and

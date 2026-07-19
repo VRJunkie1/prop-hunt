@@ -142,6 +142,10 @@ function makeClient(timeoutMs) {
     started(now) { this.inMatch = true; this.screen = 'game'; wd.arm(now, timeoutMs); },
     // main.js onSnapshot: prove the link is alive.
     snapshot(now) { wd.feed(now); },
+    // main.js session.onKeepalive: a dedicated ~1Hz host→guest keepalive ping proves the link is
+    // alive EVEN WHEN no snapshots are streaming (a between-round seam / a briefly-throttled host).
+    // Feeds the SAME watchdog as a snapshot — pings and snapshots are interchangeable proof of life.
+    ping(now) { wd.feed(now); },
     // main.js frame loop (visible tab): trip => shared reset + tear the dead session down.
     tick(now) { if (wd.poll(now)) { this.sessionClosed = true; this.reset('Lost connection to host.'); } },
     // main.js handleStatus('closed'): the LOUD path (graceful close / post-ready error).
@@ -190,6 +194,36 @@ function makeClient(timeoutMs) {
   // Even if the frame loop runs once more before teardown, the disarmed watchdog cannot double-boot.
   for (let t = 2100; t <= 2100 + 20000; t += 16) c.tick(t);
   ok(c.resets === 1, 'C2: the watchdog does not also trip after an explicit close (single boot)');
+}
+
+// C3 — KEEPALIVE-FED WATCHDOG (CONNECTION LIVENESS, 2026-07-19, VRmike). The guest is armed (in a
+// live match) but NO snapshots arrive for a long stretch — a between-round seam, or a host whose
+// snapshot stream is briefly throttled while the tab is backgrounded. The dedicated ~1Hz host→guest
+// keepalive ALONE keeps the watchdog fed, so the guest is NEVER booted while the host is genuinely
+// alive. Then the host truly dies (pings stop too): the watchdog trips one timeout later, exactly as
+// a snapshot stall would. This is the guest-side mirror of the host's AFK-but-connected sweep test.
+{
+  const T = 5000;
+  const c = makeClient(T);
+  c.started(0);
+  // 60 s with ZERO snapshots — only the 1 Hz host keepalive feeds the watchdog. Poll every frame.
+  let lastPing = 0;
+  for (let t = 0; t <= 60000; t += 16) {
+    if (t % 1000 === 0) { c.ping(t); lastPing = t; } // host→guest keepalive at ~1 Hz, no snapshots at all
+    c.tick(t);
+  }
+  ok(c.resets === 0 && c.inMatch && c.screen === 'game',
+     'C3: pings alone (no snapshots) hold the guest in the match for 60 s — a throttled/seam host is not false-booted');
+  // Now the host genuinely dies — pings stop too. The watchdog trips one timeout after the last ping.
+  let flaggedAt = null;
+  for (let t = lastPing + 16; t <= lastPing + 20000; t += 16) {
+    c.tick(t);
+    if (c.resets && flaggedAt === null) flaggedAt = t;
+  }
+  ok(c.resets === 1 && c.screen === 'menu' && c.inMatch === false,
+     'C3: once the keepalive also stops (host truly dead), the guest is booted to the lobby exactly once');
+  ok(flaggedAt !== null && (flaggedAt - lastPing) <= T + 50,
+     `C3: booted within the timeout of the last ping (~${flaggedAt - lastPing}ms, <= ${T}ms)`);
 }
 
 // ---------------------------------------------------------------------------

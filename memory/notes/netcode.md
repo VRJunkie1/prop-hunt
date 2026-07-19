@@ -40,9 +40,10 @@ control frame intercepted below the referee). No physics/damage/render/referee-g
 
 **GUARDS.** `tools/check-lifecycle.mjs` §A′ (markSeen stamps liveness; AFK-with-pings-only survives 5
 simulated minutes; ping-silence past 15s still sweeps + announces the leave; a peer 0.5s under the
-threshold is NOT swept). `tools/check-host-disconnect.mjs` §D (onKeepalive→watchdog feed, always-on
-`_startKeepalive`, `_markAlive`, `referee.markSeen` wiring). `tools/check-debug-menu.mjs` (keepalive is
-always-on; RTT is a by-product).
+threshold is NOT swept). `tools/check-host-disconnect.mjs` §C3 BEHAVIORAL (guest armed but NO snapshots —
+only the ~1Hz host→guest keepalive feeds the watchdog → not booted across 60s; then pings stop → booted
+once within the timeout) + §D source wiring (onKeepalive→watchdog feed, always-on `_startKeepalive`,
+`_markAlive`, `referee.markSeen`). `tools/check-debug-menu.mjs` (keepalive is always-on; RTT is a by-product).
 
 ## 2026-07-19 HOST-DISCONNECT → BOOT TO LOBBY + STALE-SESSION GHOST FIX (VRmike)
 Playtest: two windows both spawned as PROPS, an uncontrolled hunter stood in the world that players
@@ -90,6 +91,9 @@ is a valid game).**
   `Session.close()` = `_teardown()` for the watchdog's silent-stall teardown (the close/error paths
   teardown internally; the watchdog fires with no PeerJS event, so it needs this).
 
+> SUPERSEDED 2026-07-19 by CONNECTION LIVENESS (top of this file): the watchdog is now fed by keepalive
+> PINGS as well as snapshots, and the threshold is **15 s** (not 5 s). The derivation below still holds.
+
 **TIMEOUT — derived from the documented rate, not hardcoded.** `main.js hostSilenceMs()` =
 `max(3000, rules.leaveTimeoutSeconds*1000)` = **5 s** at ship config. That reuses the SAME "no traffic
 = genuinely gone" threshold the HOST already applies to sweep silent guests (`referee
@@ -119,6 +123,11 @@ non-hunters). Rides all snapshot variants free (`blindHunterSnapshot`/`hunterSaf
 `notes/hunter-tool-visibility.md`.
 
 ## 2026-07-18 GHOST PLAYERS — leave detection + recount (B2, VRmike)
+> SUPERSEDED 2026-07-19 by CONNECTION LIVENESS (top of this file): liveness is no longer judged off the
+> INPUT stream and the threshold is 15 s, but a dedicated ~1Hz keepalive ping now stamps the SAME
+> `_lastSeen` so `_sweepSilentPlayers` / `removePlayer` machinery below is unchanged — only the SIGNAL
+> feeding `_lastSeen` (pings, not input) and the window (5→15 s) changed.
+
 A player who LEFT used to persist as an uncontrolled GHOST until a new game. Two gaps, both fixed
 HOST-SIDE in `shared/referee.js` (no protocol change); guard: `tools/check-lifecycle.mjs`.
 
