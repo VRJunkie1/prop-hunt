@@ -401,7 +401,8 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   (`scene.spawnExplosion`) + a distance-scaled local screen flash (`scene.blastFlashAt` →
   `ui.flashScreen`). **FLING (2026-07-18):** `_resolveGrenadeBlast` also shoves every loose
   DYNAMIC prop in range OUTWARD via NEW `physics.applyBlastImpulse(id,center,flingSpeed×falloff)` —
-  speed LINEAR to the damage (close=big fling, edge=nudge), mass-scaled (+0.35 up bias), reusing the
+  speed LINEAR to the damage (close=big fling, edge=nudge), SIZE-WEIGHTED via `_nudgeImpulseMag` (see
+  Prop weight below; +0.35 up bias), reusing the
   same `outer`/`grenadeFalloff` (no new balance math); host-authoritative on the Rapier bodies, rides
   the existing awake-prop snapshot stream (no new netcode). Disguised PLAYERS are kinematic → never
   flung (only world objects fly). `rules.grenade.flingSpeed` (32 since 2026-07-19 ×4 balance tweak, VRmike; was 8; 0 disables).
@@ -591,6 +592,17 @@ Full detail in `notes/physics.md` + `notes/netcode.md`. The one-paragraph shape:
   floating-fixed-props bug); clutter is dynamic, seated on its support, and spawns asleep. A
   phone-safety cap (`rules.maxDynamicProps`, now 150; ordered biggest-first) keeps the smallest overflow
   props as static colliders (seated, so resting not floating). See `notes/physics.md` (2026-07-17).
+- **PROP WEIGHT — size-based (2026-07-19, VRmike).** Each dynamic prop body is created with
+  `.setDensity(rules.propDensity)` so Rapier bakes `mass = density × collider VOLUME`; volume ∝ size³ ⇒
+  a prop 2× bigger is ~8× heavier (cubic). Discrete hits — the rifle shot (`applyShotImpulse`) and the
+  grenade fling (`applyBlastImpulse`) — route through **`_nudgeImpulseMag(m,s)`**: an impulse of
+  `s×NUDGE_REFERENCE_MASS` (0.35 kg module const, the mass where a hit's target speed lands 1:1) makes
+  Δv = `s×(REF/mass)` — **big props resist, small props fly** — floored by
+  `min(rules.minNudgeSpeed, s)×mass` so even the heaviest prop always budges (a fridge is sluggish,
+  never immovable) without amplifying a weak far-edge hit above its own `s`. Two hot-tunable knobs:
+  `propDensity` (heaviness dial) + `minNudgeSpeed` (0.6, the nudge floor). Hunters (`characterMass`) and
+  the mass-scaled walk-into-a-prop shove are unchanged. Host-side only, no netcode. Guard:
+  `tools/check-prop-mass.mjs`. Detail: `notes/balance-tuning.md`.
 - **Collider shapes** are chosen by the ONE selector `physics.shapeFor()` in this order:
   **convex hull → measured cuboid → primitive**. (1) HULL: model-bearing, non-`arch`,
   box-shaped props/fixtures use a `ColliderDesc.convexHull` baked from the model's real mesh

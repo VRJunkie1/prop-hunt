@@ -28,6 +28,18 @@ let _loadPromise = null;
 // it in the first few frames. See fix #3 (calm match start).
 const SPAWN_EPS = 0.02;
 
+// SIZE-BASED PROP WEIGHT — nudge reference mass (2026-07-19, VRmike). A discrete hit (a rifle
+// shot, a grenade fling) is authored as a TARGET speed `s` (m/s). We turn it into a REAL impulse
+// so the resulting velocity change scales INVERSELY with the prop's mass — a big disguise (heavy:
+// mass = propDensity × collider volume, the cubic size law Rapier bakes from setDensity) barely
+// scoots, a small disguise (light) goes flying. This constant is the mass at which a hit delivers
+// its full target speed 1:1; a prop LIGHTER than it flies faster, HEAVIER slower. It is NOT a
+// balance knob — propDensity is the single heaviness dial (raising it makes every prop heavier
+// relative to this fixed anchor, so even small props resist more); this is just the internal scale
+// that keeps the tuned shotImpulse/flingSpeed values in intuitive m/s units. The never-immovable
+// guarantee is the SEPARATE nudge floor (rules.minNudgeSpeed), not this. See notes/balance-tuning.md.
+const NUDGE_REFERENCE_MASS = 0.35;
+
 // THE floor plane. Every map's ground/floor surface sits at y=0 (the ground slab's
 // TOP face, and where every spawn is placed). The un-throttled per-substep player
 // clamp (Bug 2, solidity pass #3 relaunch) and the host's referee failsafe both key
@@ -345,6 +357,13 @@ export class PhysicsWorld {
     this._nudgeSpeed = this.rules.heavyNudgeSpeed != null ? this.rules.heavyNudgeSpeed : 0.8; // m/s
     this._nudgeContactSkin = this.rules.heavyNudgeContactSkin != null ? this.rules.heavyNudgeContactSkin : 0.12;
     this._nudgeWarmup = this.rules.heavyNudgeWarmupFrames != null ? this.rules.heavyNudgeWarmupFrames : 3;
+    // SIZE-BASED PROP WEIGHT — minimum-nudge floor (2026-07-19, VRmike). The minimum velocity change
+    // (m/s) a prop is guaranteed from ANY discrete hit, even one its size/mass would otherwise swallow
+    // almost entirely — the "even a fridge budges" rule. Both discrete-impulse sources (rifle shot +
+    // grenade fling) route through _nudgeImpulseMag, so this ONE floor covers them. It never exceeds the
+    // hit's own intended speed, so a weak far-edge grenade shove is not amplified. HOT-TUNABLE (dial the
+    // "nudgeability" of huge props without a rebuild). See notes/balance-tuning.md.
+    this._minNudgeSpeed = this.rules.minNudgeSpeed != null ? this.rules.minNudgeSpeed : 0.6;
     // SPAWN/TELEPORT OVERLAP (seam D3). Max metres resolveSpawnOverlap may push a freshly
     // spawned player to clear another player it materialised inside (team-switch respawn,
     // mid-join, shared hunter spawn), so nobody fuses together. Iteration-bounded + wall-clamped.
@@ -1179,16 +1198,32 @@ export class PhysicsWorld {
     return { kind: 'world' };
   }
 
+  // SIZE-BASED PROP WEIGHT — impulse magnitude for a discrete hit (2026-07-19, VRmike). Turns a
+  // TARGET speed kick `s` (m/s) into the Rapier impulse to apply to a body of mass `m`, so the
+  // resulting velocity change scales INVERSELY with mass: a heavy (big-disguise) prop resists, a
+  // light (small-disguise) prop flies — VRmike's "a burger yeets, a fridge barely scoots". The
+  // minimum-nudge floor (_minNudgeSpeed) guarantees even the heaviest prop still visibly budges (a
+  // fridge can't be immovable), but is capped at `s` itself so a weak far-edge hit is never amplified.
+  // Shared by both discrete-hit sources — the rifle shot and the grenade fling — so BOTH obey the SAME
+  // size-weight + floor rule: the "route every prop impulse through one nudge floor" audit made one line.
+  _nudgeImpulseMag(m, s) {
+    const mass = Number.isFinite(m) && m > 1e-6 ? m : NUDGE_REFERENCE_MASS;
+    const refJ = s * NUDGE_REFERENCE_MASS;                   // Δv = s·(REF/mass): big => slow, small => fast
+    const floorJ = Math.min(this._minNudgeSpeed, s) * mass;  // guarantee a visible scoot, never above `s`
+    return Math.max(refJ, floorJ);
+  }
+
   // SHOT IMPULSE (2026-07, VRmike). When a shot lands on a DYNAMIC prop, give its rigid body
   // a small physics KICK at the hit point along the shot direction, so shot items visibly
   // react (a nudge + a little spin), not a rocket launch. HOST-ONLY by construction: it acts
   // on the host's authoritative body, so the motion replicates to everyone through the normal
   // prop snapshot stream — no new netcode. No-op on a guest predictor / a capped-static prop
   // (no dynamic body for that id) and for a zero/degenerate magnitude or direction.
-  //   `speed` is interpreted as a TARGET linear speed kick in m/s and scaled by the body's
-  //   mass (impulse = mass * speed * dir), so the visible nudge is consistent across a heavy
-  //   table and a light burger instead of launching the tiny props. An ASLEEP body is woken
-  //   first (a sleeping body ignores impulses). Returns true if a kick was applied.
+  //   `speed` is a TARGET linear speed kick in m/s. SIZE-BASED WEIGHT (2026-07-19, VRmike): it is
+  //   routed through _nudgeImpulseMag so the velocity change scales INVERSELY with the prop's mass
+  //   (big/heavy disguises barely nudge, small/light ones fly) with a minimum-nudge floor so even a
+  //   huge prop still scoots. An ASLEEP body is woken first (a sleeping body ignores impulses).
+  //   Returns true if a kick was applied.
   applyShotImpulse(propId, point, dir, speed) {
     if (!this.dynamicProps) return false; // guests have no dynamic prop bodies
     const s = Number.isFinite(speed) ? speed : 0;
@@ -1202,7 +1237,7 @@ export class PhysicsWorld {
     dx /= len; dy /= len; dz /= len;
     try {
       const m = (typeof pb.body.mass === 'function' ? pb.body.mass() : 1) || 1; // guard 0/NaN
-      const j = s * m; // impulse magnitude so the velocity change ≈ `s` m/s along dir
+      const j = this._nudgeImpulseMag(m, s); // size-based weight + minimum-nudge floor (big resists, small flies, all budge)
       const imp = { x: dx * j, y: dy * j, z: dz * j };
       if (pb.body.wakeUp) pb.body.wakeUp(); // an asleep body ignores impulses until awake
       if (point && typeof pb.body.applyImpulseAtPoint === 'function') {
@@ -1223,9 +1258,11 @@ export class PhysicsWorld {
   // HOST-ONLY by construction — it acts on the host's authoritative body, so the motion replicates
   // to everyone through the normal prop snapshot stream (no new netcode). `speed` is a TARGET linear
   // speed (m/s) the referee has ALREADY scaled by the grenade damage falloff (close = big fling,
-  // edge = a nudge), so the force is LINEAR to the damage that prop took. Mass-scaled like the shot
-  // kick so a heavy table and a light burger both react without launching the tiny props. A small
-  // UPWARD bias makes props pop-and-tumble rather than skid flat along the floor. No-op on a guest
+  // edge = a nudge), so the force is LINEAR to the damage that prop took. SIZE-BASED WEIGHT
+  // (2026-07-19, VRmike): routed through _nudgeImpulseMag like the shot kick, so a light burger flies
+  // far and a heavy table barely scoots (mass = propDensity × volume), with a minimum-nudge floor so
+  // even the biggest prop still budges from any blast. A small UPWARD bias makes props pop-and-tumble
+  // rather than skid flat along the floor. No-op on a guest
   // predictor / a capped-static or fixed prop (no dynamic body for that id) and for speed <= 0.
   // Returns true if a shove was applied. Disguised PLAYERS have no dynamic prop body here, so they
   // are never flung (they're kinematic, script-controlled) — only loose world objects fly.
@@ -1245,7 +1282,7 @@ export class PhysicsWorld {
       const nlen = Math.hypot(dx, dy, dz) || 1;
       dx /= nlen; dy /= nlen; dz /= nlen;
       const m = (typeof pb.body.mass === 'function' ? pb.body.mass() : 1) || 1; // guard 0/NaN
-      const j = s * m; // impulse magnitude so the velocity change ≈ `s` m/s along dir
+      const j = this._nudgeImpulseMag(m, s); // size-based weight + minimum-nudge floor (big resists, small flies, all budge)
       if (pb.body.wakeUp) pb.body.wakeUp(); // an asleep body ignores impulses until awake
       if (typeof pb.body.applyImpulse === 'function') {
         pb.body.applyImpulse({ x: dx * j, y: dy * j, z: dz * j }, true);

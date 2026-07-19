@@ -4,6 +4,65 @@ Central record of deliberate PLAYTEST-TUNING values (not arbitrary defaults). A 
 session/planner should treat these as intentional balance decisions, freely re-tunable, and
 NOT "restore to some prettier round number." All are HOT-TUNABLE config/CSS — no rebuild.
 
+## SIZE-BASED PROP WEIGHT + KNOCKABILITY (2026-07-19, VRmike, branch build/195-prop-size-based-weight)
+
+**One line:** a burger flies when hit, a fridge barely scoots — but *everything* budges at least a
+little, no matter how big. Big props hard for hunters to move around, but never immovable. Hunters
+untouched.
+
+### What actually changed (small, host-side physics only — no netcode/UI)
+1. **Mass already scaled with size — we kept it.** Every dynamic prop's rigid body is created with
+   `.setDensity(rules.propDensity)` in `shared/physics.js _buildProps`, and Rapier computes
+   `mass = density × collider VOLUME`. Volume grows with size³, so a prop twice as big is ~8× heavier
+   — exactly the cubic relationship VRmike asked for, already in place and automatic (no per-prop
+   authoring; a body rebuilt from a bigger footprint gets the bigger mass immediately). **We did NOT
+   add a separate mass field** — that would have duplicated what setDensity already does.
+2. **The real fix: discrete hits now RESPECT mass.** The rifle shot (`applyShotImpulse`) and grenade
+   fling (`applyBlastImpulse`) used to be **mass-COMPENSATED** (`impulse = speed × mass` → the SAME
+   velocity change for every prop, so a fridge and a burger flew identically — the opposite of the new
+   spec). Both now route through one helper **`_nudgeImpulseMag(m, s)`**:
+   - `refJ = s × NUDGE_REFERENCE_MASS` → resulting Δv = `s × (REF/mass)`: **heavy props resist,
+     light props fly**. `NUDGE_REFERENCE_MASS` (module const, **0.35 kg**) is the mass at which a hit
+     delivers its full target speed `s` 1:1; it is NOT a balance knob (density is the heaviness dial),
+     just the internal scale that keeps `shotImpulse`/`flingSpeed` in intuitive m/s units. ≈ a small
+     food prop, so anything bigger than a burger resists.
+   - `floorJ = min(minNudgeSpeed, s) × mass` → the **minimum-nudge floor**: even a huge prop gets a
+     visible Δv (≥ `minNudgeSpeed`) from any hit. Capped at `s` so a weak far-edge grenade shove is
+     never amplified into a launch.
+   - `J = max(refJ, floorJ)`.
+
+### The two tuning knobs (rules.json — HOT-TUNABLE, no rebuild)
+- **`propDensity` = 1.0** — THE heaviness dial. Raise → every prop heavier (harder to shove/fling,
+  small props included, and harder for a walking hunter to push); lower → everything lightens. Left at
+  1.0 this build (already-playtested settle/walk feel undisturbed; the size *spread* is what VRmike
+  wanted and that comes free from the cubic mass). Expanded `_propWeightComment` documents it.
+- **`minNudgeSpeed` = 0.6 m/s** (NEW) — the "even a fridge budges" floor. Up → huge props more
+  nudgeable; down → more stubborn heavies. `_minNudgeSpeedComment` documents it.
+
+No mass floor/ceiling clamps (Rapier's own tiny-mass guard is the only hidden safety, kept off the
+balance surface so the light end stays lively). No Δv ceiling either — light props flinging fast from a
+grenade IS the "easy to yeet" feel; if it's ever too wild, raise `propDensity` (it tames the light end
+too). The continuous **walk-into-a-prop** shove already scales with mass via Rapier's
+`setApplyImpulsesToDynamicBodies` + `characterMass` (unchanged) and always imparts motion, so it needs
+no floor — the two discrete-impulse sources were the only stragglers, and both now share the one floor.
+
+### Measured defaults (from `tools/check-prop-mass.mjs`, real Rapier, density 1.0)
+- masses: burger 0.26 kg, kitchen_table 2.53, fridge-sized box 4.74 (cubic: 2× dims = 8× mass, exact).
+- rifle shot (s=1.5): burger Δv **2.0 m/s** (flies), fridge Δv **0.6 m/s** (floored — a slight scoot).
+- grenade fling at centre (s=32): burger Δv **43 m/s** / travels ~18 m, fridge Δv **2.4 m/s** / ~0.18 m
+  (**18× spread**). Weak fling (s=0.15) on fridge → Δv 0.15 (NOT amplified to the 0.6 floor). ✓
+
+### Guard
+`tools/check-prop-mass.mjs` (new; SKIPs if the Rapier dev-dep is absent, like check-physics-live):
+stands up the REAL PhysicsWorld and asserts cubic mass, mass-tracks-footprint, burger-flies-vs-fridge-
+resists (Δv + travel), everything-budges (floor), floor-not-amplified, and characterMass unchanged.
+`check-grenade.mjs` I-block updated: asserts the fling routes through `_nudgeImpulseMag` (was: asserts
+"mass-scaled, both react the same") and its body-extraction regex now anchors on the 2-space-indented
+method decl so a comment mentioning the method name can't fool it. `check-combat.mjs` / `check-physics-
+live.mjs` unchanged and still green (the shot Δv on a medium crate is now the floored 0.6, still > their
+0.2 threshold). Round-trip: nothing new over the wire — mass is host-side only; peers interpolate
+positions as before.
+
 ## B4 — RUN SPEED +50% (2026-07-18, VRmike, branch build/144-b4-pc-feel-controls)
 
 **`shared/config/rules.json` → `moveSpeed` 6 → 9 m/s** (+50%, playtest feel). This is the SINGLE

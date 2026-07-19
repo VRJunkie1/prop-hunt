@@ -406,9 +406,11 @@ ok(Number.isFinite(gcfg.flingSpeed) && gcfg.flingSpeed > 0, `resolveGrenadeCfg e
   // Source: the physics fling primitive + the referee gating.
   const phys = readText('shared', 'physics.js');
   ok(/applyBlastImpulse\s*\(/.test(phys), 'physics.js provides applyBlastImpulse (the grenade fling primitive)');
-  const fn = (phys.match(/applyBlastImpulse\s*\([\s\S]*?\n  \}/) || [''])[0];
+  // Anchor on the 2-space-indented METHOD declaration (not a prose mention of the name in a nearby
+  // comment) so the body extraction is robust to comments that reference applyBlastImpulse.
+  const fn = (phys.match(/\n  applyBlastImpulse\s*\([\s\S]*?\n  \}/) || [''])[0];
   ok(/translation\(\)/.test(fn) && /center/.test(fn), 'applyBlastImpulse derives an OUTWARD direction from the body position vs the blast centre');
-  ok(/mass\s*\(\)/.test(fn), 'the fling impulse is mass-scaled (heavy table vs light burger both react, no tiny-prop launch)');
+  ok(/mass\s*\(\)/.test(fn) && /_nudgeImpulseMag/.test(fn), 'the fling impulse is size-weighted via _nudgeImpulseMag (heavy resists, light flies, minimum-nudge floor keeps every prop budging)');
   ok(/wakeUp\s*\(\)/.test(fn), 'an asleep body is woken before the fling impulse (else it is ignored)');
   ok(/applyImpulse\b/.test(fn), 'the fling applies a real Rapier impulse');
   ok(/return false/.test(fn), 'applyBlastImpulse is guarded (no-op for a missing body / non-positive speed / API gap)');
