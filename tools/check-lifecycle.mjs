@@ -301,4 +301,10 @@ if (RAPIER) {
 }
 
 console.log(fails ? `\nFAILED (${fails})` : '\nAll lifecycle checks passed.');
-process.exit(fails ? 1 : 0);
+// Set the exit code and let Node drain the event loop and CLOSE its handles on its own instead
+// of forcing a synchronous process.exit(). On Windows, exit() mid-teardown races the Rapier WASM /
+// libuv async handles as they close and trips `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`
+// (src/win/async.c:76 → abort 0xC0000409). By this point every Referee interval is cleared (destroy())
+// and every PhysicsWorld is freed, so nothing keeps the loop alive — the process exits cleanly with
+// this code once the last handle finishes closing. See memory/notes/tooling-exit.md.
+process.exitCode = fails ? 1 : 0;
