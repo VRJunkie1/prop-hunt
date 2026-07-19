@@ -4,6 +4,39 @@ Central record of deliberate PLAYTEST-TUNING values (not arbitrary defaults). A 
 session/planner should treat these as intentional balance decisions, freely re-tunable, and
 NOT "restore to some prettier round number." All are HOT-TUNABLE config/CSS — no rebuild.
 
+## PROP HEALTH SCALING — SIZE-COMPARISON FACTOR (2026-07-19, VRmike, branch build/196-prop-player-health-scaling)
+
+**One line:** bigger prop players were too easy to kill — the disguise-damage curve is now a size
+RATIO to the player, with a 0.6× pivot, so mid/large props (fridge/table) get properly tanky. One knob.
+
+### What changed (host-side damage formula only — no netcode/UI/physics)
+- **`shared/damage.js sizeMultiplier` replaced the old size LERP with a ratio:**
+  `mult = 1 / (propSize / (playerSize * sizeComparisonFactor)) = (playerSize*factor)/propSize`, clamped
+  to `[largeMult, smallMult]`. Neutral (mult 1.0 = plain base) at `propSize == playerSize*factor`.
+- **Why the old lerp was wrong for VRmike's complaint:** it only gave the tanky `largeMult` (0.34×) to
+  props ≥ `largeSize` 2.2 m, so a fridge (1.88 m) sat at **2.43×** — took MORE than base, died in ~9 hits.
+  The ratio pins the fridge at **0.57×** (~35 hits). Burger 0.72 m → **1.5×** (~14 hits, still faster than
+  the 20-hit plain player), table 2.25 m → **0.48×** (~42 hits). Monotonic: bigger ⇒ tankier.
+- **`playerSize` is derived, not authored:** `playerSizeFromRules(rules)=2*(playerRadius+playerHalfHeight)`
+  = 1.8 m, injected live by `referee._damageCfg()` (rifle + grenade both use it). No new authored field.
+
+### The one tuning knob (rules.json `damage` block — HOT-TUNABLE, no rebuild)
+- **`sizeComparisonFactor` = 0.6** (NEW). Lower ⇒ pivot drops ⇒ EVERY (unclamped) prop tankier, big props
+  gaining the most. This is the single lever if hunts run long/short. `_damageComment` documents it.
+- **Side effect flagged to VRmike:** this buffs *every* prop's effective health (neutral moved from
+  ~player-size down to 0.6× player), so all props are tankier and hunts run a bit longer. Intended; if it
+  overshoots, drop this one number.
+- **`smallMult` 10 / `largeMult` 0.34 kept as pure guardrail clamps** (ceiling/floor); neither binds for any
+  real catalog prop now. **`smallSize`/`largeSize` kept in config but NO LONGER read by the damage curve** —
+  they still anchor the prop-"ouch" pitch curve only (don't delete; `check-combat-sfx.mjs` A2 depends on them).
+
+### Guard
+`tools/check-combat.mjs` **section A** rewritten to assert the ratio formula (pivot ⇒ 1.0, exact
+`1/(propSize/(playerSize*factor))` unclamped, both clamps, monotonic, lower-factor-⇒-tankier lever, and
+VRmike's three named cases burger HIGH / fridge LOW / table<fridge). Sections B–G untouched + green.
+`check-grenade.mjs` / `check-combat-sfx.mjs` green (grenade rides the same `multiplierForDisguise`; ouch is
+independent). Page boots clean. See `notes/hunter-tools-combat.md` (2026-07-19 head section).
+
 ## SIZE-BASED PROP WEIGHT + KNOCKABILITY (2026-07-19, VRmike, branch build/195-prop-size-based-weight)
 
 **One line:** a burger flies when hit, a fridge barely scoots — but *everything* budges at least a

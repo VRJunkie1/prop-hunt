@@ -1,5 +1,35 @@
 # Hunter Tools v1 + Health / Damage (2026-07-12, VRmike)
 
+## 2026-07-19 — PROP HEALTH SCALING: SIZE-COMPARISON FACTOR (VRmike balance tweak)
+- **The disguise damage curve is no longer a lerp between size anchors — it's a size RATIO to the
+  player.** VRmike: bigger prop players were too easy to kill (the old lerp gave a fridge ~1.88 m a
+  2.43× multiplier — MORE than base — because only ≥`largeSize` 2.2 m hit the tanky `largeMult`).
+- **New `sizeMultiplier(size, cfg)` (shared/damage.js):**
+  `mult = 1 / (propSize / (playerSize * sizeComparisonFactor)) = (playerSize * sizeComparisonFactor) / propSize`,
+  then CLAMPED to `[largeMult, smallMult]`. Neutral (mult 1.0 = plain base) is a prop whose size ==
+  `playerSize * sizeComparisonFactor`. With the default **0.6** that's 0.6× the player (~1.08 m).
+  Real outcomes at base 5: burger 0.72 m → **1.5×** (7.5/hit, ~14 hits — fragile, still faster than
+  the 20-hit undisguised player), fridge 1.88 m → **0.57×** (~35 hits), table 2.25 m → **0.48×**
+  (~42 hits). Monotonic: bigger prop ⇒ tankier.
+- **`sizeComparisonFactor`** is THE tunable, `rules.json` `damage.sizeComparisonFactor` (default 0.6).
+  Lower it ⇒ pivot drops ⇒ every prop tankier (big props gain most). One-number hot-tune, no rebuild.
+- **`playerSize`** is derived, not authored: `playerSizeFromRules(rules) = 2*(playerRadius+playerHalfHeight)`
+  = 1.8 m (the capsule's longest dimension, same "longest full dimension" `entrySize` gives a prop).
+  The referee injects the LIVE value via `_damageCfg()` (used by both `_playerHitDamage` and the grenade
+  blast) so the pivot tracks the real capsule if those dims are retuned. `resolveDamageCfg` defaults it
+  to 1.8 for pure/offline callers.
+- **Clamps are unchanged guardrails:** `smallMult` (10) = multiplier CEILING (a prop < pivot/10 ≈ 0.11 m
+  can't be one-shot-vaporised), `largeMult` (0.34) = FLOOR (a huge prop can't go immortal). Neither binds
+  for any real catalog prop now — they're pure safety rails.
+- **`smallSize`/`largeSize` (0.72 / 2.2) are KEPT in `rules.damage`** but are NO LONGER read by the damage
+  curve. They now anchor ONLY the prop-"ouch" pitch curve (`resolveOuchCfg`, `js/main.js` → `dcfg.smallSize/
+  largeSize`; `check-combat-sfx.mjs` A2 asserts ouch==damage anchors). Don't delete them.
+- **Nothing else changed:** wrong-guess penalty still flat `base`; grenade prop-player damage rides the same
+  `multiplierForDisguise` (so it retuned automatically — `check-grenade.mjs` still green). `check-combat.mjs`
+  **section A** rewritten to assert the ratio formula: pivot ⇒ 1.0, the exact `1/(propSize/(playerSize*factor))`
+  in the unclamped band, both clamps, monotonic, the lower-factor-⇒-tankier lever, and VRmike's three named
+  cases (burger HIGH, fridge LOW, table < fridge). Sections B–G untouched and green; page boots clean.
+
 ## 2026-07-12 addendum — damage-multiplier PROOF + RAPID FIRE
 
 - **Size-multiplier "bug" — the referee was already correct; proven, not re-patched.** VRmike

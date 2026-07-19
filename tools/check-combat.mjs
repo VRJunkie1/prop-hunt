@@ -25,7 +25,7 @@ import { Referee } from '../shared/referee.js';
 import { isArchEntry } from '../shared/physics.js';
 import {
   resolveDamageCfg, entrySize, sizeMultiplier, multiplierForDisguise, damageForPlayerHit,
-  wrongGuessPenalty,
+  wrongGuessPenalty, playerSizeFromRules,
 } from '../shared/damage.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,44 +48,69 @@ const props = readJSON('shared', 'config', 'props.json');
 const fixtures = readJSON('shared', 'config', 'fixtures.json');
 const catalog = { ...props, ...fixtures };
 const dcfg = resolveDamageCfg(rules.damage);
+// Inject the LIVE playerSize exactly as the referee does (playerSizeFromRules) so the pivot the
+// check asserts is the pivot the game uses — not the module's static default.
+dcfg.playerSize = playerSizeFromRules(rules);
 const startHealth = rules.startHealth != null ? rules.startHealth : 100;
 
 // ---------------------------------------------------------------------------
-// A) SIZE → MULTIPLIER LERP (pure damage.js — the same module the referee uses).
+// A) SIZE → MULTIPLIER CURVE — the SIZE-COMPARISON FACTOR (2026-07-19, VRmike). The disguise
+//    multiplier is 1 / (propSize / (playerSize * sizeComparisonFactor)) clamped to [largeMult,
+//    smallMult]. Neutral (multiplier 1.0) at propSize == playerSize * sizeComparisonFactor.
+//    Same pure damage.js the referee uses.
 // ---------------------------------------------------------------------------
-console.log('\nA) size → multiplier curve');
+console.log('\nA) size → multiplier curve (size-comparison factor)');
 ok(dcfg.base > 0 && dcfg.smallMult > dcfg.largeMult, `damage config sane (base ${dcfg.base}, smallMult ${dcfg.smallMult} > largeMult ${dcfg.largeMult})`);
+ok(dcfg.sizeComparisonFactor > 0 && dcfg.sizeComparisonFactor <= 2, `sizeComparisonFactor (${dcfg.sizeComparisonFactor}) is set and in a sane band`);
+ok(dcfg.playerSize > 0, `playerSize derived from the capsule (${dcfg.playerSize.toFixed(2)} m)`);
 
-// Anchor clamps.
-ok(near(sizeMultiplier(dcfg.smallSize, dcfg), dcfg.smallMult), `at smallSize (${dcfg.smallSize} m) => smallMult (${dcfg.smallMult})`);
-ok(near(sizeMultiplier(dcfg.smallSize / 2, dcfg), dcfg.smallMult), 'below smallSize clamps to smallMult');
-ok(near(sizeMultiplier(dcfg.largeSize, dcfg), dcfg.largeMult), `at largeSize (${dcfg.largeSize} m) => largeMult (${dcfg.largeMult})`);
-ok(near(sizeMultiplier(dcfg.largeSize * 2, dcfg), dcfg.largeMult), 'above largeSize clamps to largeMult');
+// The PIVOT: a prop exactly sizeComparisonFactor× the player's size takes the neutral base multiplier.
+const pivotSize = dcfg.playerSize * dcfg.sizeComparisonFactor;
+ok(near(sizeMultiplier(pivotSize, dcfg), 1.0, 1e-9), `a prop at the pivot (${pivotSize.toFixed(2)} m = ${dcfg.sizeComparisonFactor}× player) => multiplier 1.0 (base damage)`);
 
-// Midpoint lerp value + strict monotonic decrease across a sweep.
-const mid = (dcfg.smallSize + dcfg.largeSize) / 2;
-ok(near(sizeMultiplier(mid, dcfg), (dcfg.smallMult + dcfg.largeMult) / 2, 1e-6), 'midpoint size => midpoint multiplier (true lerp)');
+// The exact formula holds where the clamps don't bind (a mid-sized prop between the two anchors).
+const probe = pivotSize * 1.3;
+ok(near(sizeMultiplier(probe, dcfg), 1 / (probe / pivotSize), 1e-9), 'multiplier == 1 / (propSize / (playerSize * sizeComparisonFactor)) in the unclamped band');
+
+// Guardrail clamps: a prop far below the pivot pins to smallMult (ceiling); far above pins to largeMult (floor).
+ok(near(sizeMultiplier(pivotSize / dcfg.smallMult / 2, dcfg), dcfg.smallMult), `a tiny prop clamps to the smallMult ceiling (${dcfg.smallMult})`);
+ok(near(sizeMultiplier(pivotSize / dcfg.largeMult * 2, dcfg), dcfg.largeMult), `a huge prop clamps to the largeMult floor (${dcfg.largeMult})`);
+
+// Strict monotonic decrease across a size sweep (bigger prop => never more damage).
 let monotonic = true;
 let prev = Infinity;
-for (let s = dcfg.smallSize; s <= dcfg.largeSize + 1e-9; s += (dcfg.largeSize - dcfg.smallSize) / 20) {
+for (let s = 0.3; s <= 3.0 + 1e-9; s += 0.1) {
   const m = sizeMultiplier(s, dcfg);
   if (m > prev + 1e-9) monotonic = false;
   prev = m;
 }
-ok(monotonic, 'multiplier is monotonically non-increasing as size grows (smooth lerp)');
+ok(monotonic, 'multiplier is monotonically non-increasing as size grows (bigger => tankier)');
 
-// Real catalog entries — the actual gameplay outcomes the brief specified.
+// Lowering sizeComparisonFactor makes EVERY (unclamped) prop tankier — the balance lever VRmike asked for.
+const tankier = resolveDamageCfg({ ...rules.damage, sizeComparisonFactor: dcfg.sizeComparisonFactor * 0.5 });
+tankier.playerSize = dcfg.playerSize;
+ok(sizeMultiplier(probe, tankier) < sizeMultiplier(probe, dcfg), 'halving sizeComparisonFactor lowers the multiplier (props get tankier) — the one-knob balance lever');
+
+// Real catalog entries — VRmike's three named cases: burger (tiny) HIGH, ~0.6× player pivot BASE, fridge (big) LOW.
 const burgerSize = entrySize(catalog.burger);
+const fridgeSize = entrySize(catalog.fridge);
 const tableSize = entrySize(catalog.kitchen_table);
-ok(burgerSize > 0 && tableSize > burgerSize, `entrySize reads the physics footprint (burger ${burgerSize.toFixed(2)} m < table ${tableSize.toFixed(2)} m)`);
+ok(burgerSize > 0 && fridgeSize > burgerSize && tableSize > fridgeSize,
+  `entrySize reads the physics footprint (burger ${burgerSize.toFixed(2)} < fridge ${fridgeSize.toFixed(2)} < table ${tableSize.toFixed(2)} m)`);
 
 const dmgBurger = damageForPlayerHit('burger', catalog, dcfg);
+const dmgFridge = damageForPlayerHit('fridge', catalog, dcfg);
 const dmgTable = damageForPlayerHit('kitchen_table', catalog, dcfg);
 const dmgDefault = damageForPlayerHit(null, catalog, dcfg); // undisguised player
 ok(multiplierForDisguise(null, catalog, dcfg) === dcfg.defaultMult, 'an UNDISGUISED player uses defaultMult (plain base hit)');
 ok(hitsToKill(dmgDefault) === Math.ceil(startHealth / dcfg.base), `undisguised player dies in ${hitsToKill(dmgDefault)} base hits`);
-ok(hitsToKill(dmgBurger) <= 2, `tiny disguise (burger, ${dmgBurger.toFixed(1)}/hit) dies in ~2 hits (${hitsToKill(dmgBurger)})`);
-ok(hitsToKill(dmgTable) >= 2.5 * hitsToKill(dmgDefault), `big disguise (table, ${dmgTable.toFixed(1)}/hit) soaks ~3× the default player's bullets (${hitsToKill(dmgTable)} vs ${hitsToKill(dmgDefault)})`);
+// TINY prop (burger, smaller than the pivot) => HIGH damage: takes MORE than base, dies FASTER than an undisguised player.
+ok(dmgBurger > dmgDefault && hitsToKill(dmgBurger) < hitsToKill(dmgDefault),
+  `tiny disguise (burger, ${dmgBurger.toFixed(1)}/hit) takes HIGH damage — more than base, dies faster than a plain player (${hitsToKill(dmgBurger)} < ${hitsToKill(dmgDefault)} hits)`);
+// BIG props (fridge, table — bigger than the pivot) => LOW damage: take LESS than base, soak more bullets.
+ok(dmgFridge < dmgDefault && hitsToKill(dmgFridge) > hitsToKill(dmgDefault),
+  `big disguise (fridge, ${dmgFridge.toFixed(1)}/hit) takes LOW damage — less than base, soaks more bullets (${hitsToKill(dmgFridge)} > ${hitsToKill(dmgDefault)} hits)`);
+ok(dmgTable < dmgFridge, `an even bigger disguise (table, ${dmgTable.toFixed(1)}/hit) takes LESS than the fridge — monotonic by size`);
 
 // ---------------------------------------------------------------------------
 // Build a Referee driving the REAL shared code paths (no Rapier, no browser). The

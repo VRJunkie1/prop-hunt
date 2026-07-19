@@ -16,7 +16,7 @@
 import { C2S, S2C, PHASE, ROLE, HUNTER_TOOL_IDS } from './protocol.js';
 import { loadRapier, PhysicsWorld, isFixedBodyEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
-import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius } from './damage.js';
+import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius, playerSizeFromRules } from './damage.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -811,8 +811,18 @@ export class Referee {
   // this reads target.disguise at the instant damage is applied and re-runs the size curve.
   // tools/check-combat.mjs proves it across a small->large re-disguise. See shared/damage.js.
   _playerHitDamage(target) {
-    const d = resolveDamageCfg(this.rules.damage);
+    const d = this._damageCfg();
     return d.base * multiplierForDisguise(target.disguise, this._combatCatalog(), d);
+  }
+
+  // Resolved damage config with the LIVE playerSize injected from the real movement-capsule dims
+  // (playerRadius/playerHalfHeight), so the size-comparison pivot (playerSize * sizeComparisonFactor)
+  // tracks the actual player instead of the module's static default. ONE source of truth for the
+  // disguise-damage curve, used by both the rifle (_playerHitDamage) and the grenade blast.
+  _damageCfg() {
+    const d = resolveDamageCfg(this.rules.damage);
+    d.playerSize = playerSizeFromRules(this.rules);
+    return d;
   }
 
   // Fire the rifle. The client sends only its AIM direction (dx,dy,dz — the camera-forward
@@ -1109,7 +1119,7 @@ export class Referee {
       if (d >= outer) continue;
       const f = grenadeFalloff(d, g);
       if (f <= 0) continue;
-      const mult = multiplierForDisguise(p.disguise, catalog, this.rules.damage);
+      const mult = multiplierForDisguise(p.disguise, catalog, this._damageCfg());
       const dmg = baseHP * mult * f;
       if (dmg > 0) playerHits.push({ player: p, dmg });
     }

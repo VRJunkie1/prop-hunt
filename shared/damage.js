@@ -15,13 +15,34 @@ export function resolveDamageCfg(d) {
   const num = (v, dflt) => (Number.isFinite(v) ? v : dflt);
   return {
     base: num(c.base, 10),
+    // playerSize + sizeComparisonFactor drive the SIZE→multiplier curve (see sizeMultiplier).
+    // The neutral point (multiplier 1.0) is at prop size == playerSize * sizeComparisonFactor.
+    // playerSize defaults to the shipping capsule height 2*(playerRadius+playerHalfHeight)=1.8;
+    // the referee injects the LIVE value (playerSizeFromRules) so the pivot tracks the real player.
+    playerSize: num(c.playerSize, 1.8),
+    sizeComparisonFactor: num(c.sizeComparisonFactor, 0.6),
+    // smallSize/largeSize are NO LONGER read by the damage curve (that's a size-ratio now); they are
+    // KEPT because the prop-"ouch" pitch curve (resolveOuchCfg / main.js) still anchors to them.
     smallSize: num(c.smallSize, 0.72),
     largeSize: num(c.largeSize, 2.2),
+    // smallMult/largeMult are now the multiplier CLAMPS (guardrails): smallMult = ceiling (a tiny
+    // prop can't be one-shot-vaporised), largeMult = floor (a huge prop can't become immortal).
     smallMult: num(c.smallMult, 5.0),
     largeMult: num(c.largeMult, 0.34),
     defaultMult: num(c.defaultMult, 1.0),
     selfScalesWithSize: c.selfScalesWithSize !== false, // default ON
   };
+}
+
+// The player's characteristic SIZE (metres) — the longest dimension of the movement capsule,
+// = 2*(playerRadius+playerHalfHeight), the same "longest full dimension" entrySize gives a prop.
+// The referee derives the disguise-damage pivot (playerSize * sizeComparisonFactor) from this so
+// "same source of truth" holds: retune the capsule dims and the neutral prop size moves with it.
+export function playerSizeFromRules(rules) {
+  const num = (v, dflt) => (Number.isFinite(v) ? v : dflt);
+  const r = num(rules && rules.playerRadius, 0.4);
+  const h = num(rules && rules.playerHalfHeight, 0.5);
+  return 2 * (r + h);
 }
 
 // Characteristic SIZE (metres) of a catalog entry's footprint — the longest full
@@ -33,17 +54,24 @@ export function entrySize(c) {
   return 2 * Math.max(h.hx, h.hy, h.hz);
 }
 
-// Map a size (metres) to a damage multiplier by lerping between the two anchor points,
-// clamped outside them. smallSize -> smallMult (tiny things die fast), largeSize ->
-// largeMult (big things soak bullets). Monotonic decreasing when smallMult > largeMult.
+// SIZE-COMPARISON DAMAGE CURVE (2026-07-19, VRmike). Map a prop's characteristic size (metres) to a
+// damage multiplier by comparing it to the PLAYER's size, shrunk by sizeComparisonFactor:
+//
+//     multiplier = 1 / (size / (playerSize * sizeComparisonFactor))    (== pivot / size)
+//
+// So the NEUTRAL point (multiplier 1.0 — the disguise takes plain base damage) is a prop whose size
+// equals playerSize * sizeComparisonFactor. With the default 0.6 that's 0.6× the player: SMALLER props
+// (burger) take MORE than base (multiplier > 1, fragile), LARGER props (fridge/table) take LESS
+// (multiplier < 1, tanky). Lowering sizeComparisonFactor moves the pivot down and makes every prop
+// tankier; it's the ONE tunable in rules.json. The result is CLAMPED to [largeMult, smallMult] — the
+// same guardrails as before (tiny props stay fragile-not-vaporised, huge props never immortal).
 export function sizeMultiplier(size, cfg) {
   const c = resolveDamageCfg(cfg); // idempotent: accepts a resolved or a raw config
-  const { smallSize, largeSize, smallMult, largeMult } = c;
+  const { smallMult, largeMult, playerSize, sizeComparisonFactor } = c;
   if (!(size > 0)) return c.defaultMult; // unknown size => treat as a default player
-  if (size <= smallSize) return smallMult;
-  if (size >= largeSize) return largeMult;
-  const t = (size - smallSize) / (largeSize - smallSize);
-  return smallMult + (largeMult - smallMult) * t;
+  const pivot = playerSize * sizeComparisonFactor; // prop size that yields the neutral multiplier 1.0
+  const mult = pivot / size; // = 1 / (size / (playerSize * sizeComparisonFactor))
+  return Math.min(smallMult, Math.max(largeMult, mult)); // clamp to the [largeMult, smallMult] guardrails
 }
 
 // Multiplier for a player wearing `disguiseType` (null/unknown => defaultMult, i.e. an
