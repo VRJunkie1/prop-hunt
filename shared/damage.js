@@ -140,7 +140,7 @@ export function resolveGrenadeCfg(g) {
     baseDamage: num(c.baseDamage, 0.45),
     fullDamageRadius: num(c.fullDamageRadius, 1),
     falloffDistance: num(c.falloffDistance, 2),
-    flingSpeed: num(c.flingSpeed, 8),
+    flingSpeed: num(c.flingSpeed, 32),
   };
 }
 

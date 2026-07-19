@@ -63,6 +63,6 @@
     "baseDamage": 0.45,
     "fullDamageRadius": 0.6,
     "falloffDistance": 1.2,
-    "flingSpeed": 8
+    "flingSpeed": 32
   }
 }

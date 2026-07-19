@@ -54,7 +54,8 @@ Grenades now FLING loose dynamic props caught in the blast, with force LINEAR to
   `this.props`, and for each in range (`d < outer`, `grenadeFalloff(d) > 0`) calls
   `physics.applyBlastImpulse(prop.id, center, g.flingSpeed * f)`. Speed = `flingSpeed × falloff`, so
   it's LINEAR to the same falloff the damage uses — close hit = big fling, edge = a nudge.
-- **Config:** `rules.grenade.flingSpeed` (default **8** m/s target speed at full damage; **0 disables**).
+- **Config:** `rules.grenade.flingSpeed` (**32** m/s target speed at full damage — was 8, scaled ×4 on
+  2026-07-19 as a VRmike balance tweak, whole curve up, linear-with-damage shape unchanged; **0 disables**).
   Added to `resolveGrenadeCfg` (`shared/damage.js`). Hot-tunable; rides the B3-tuned radii for free
   (the fling loop reads the same `outer`/`grenadeFalloff` as the damage loops — no new balance math).
 - **Physics primitive:** NEW `physics.applyBlastImpulse(propId, center, speed)` (`shared/physics.js`,

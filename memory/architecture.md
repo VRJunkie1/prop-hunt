@@ -398,7 +398,7 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   speed LINEAR to the damage (close=big fling, edge=nudge), mass-scaled (+0.35 up bias), reusing the
   same `outer`/`grenadeFalloff` (no new balance math); host-authoritative on the Rapier bodies, rides
   the existing awake-prop snapshot stream (no new netcode). Disguised PLAYERS are kinematic → never
-  flung (only world objects fly). `rules.grenade.flingSpeed` (8; 0 disables). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
+  flung (only world objects fly). `rules.grenade.flingSpeed` (32 since 2026-07-19 ×4 balance tweak, VRmike; was 8; 0 disables). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
 
 ## Shared (`shared/`)
 
