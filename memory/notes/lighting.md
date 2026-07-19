@@ -77,7 +77,7 @@ a perf readout in the debug menu. This note is the map of the pieces.
 
 | Tier | shProbe | contactShadow (map) | angledFill | ssao | bloom |
 |------|---------|---------------------|-----------|------|-------|
-| T0   | –       | –                   | –         | –    | –     |  today's look, potato mode
+| T0   | –       | –                   | –         | –    | –     |  potato mode (no shadows); base HemisphereLight now LOW ambient too (2026-07-19 washout fix), so slightly darker than the original build's T0
 | T1   | ✓       | ✓ (512)             | –         | –    | –     |  contact shadows for jump accuracy
 | T2   | ✓       | ✓ (1024)            | ✓         | ✓    | –     |
 | T3   | ✓       | ✓ (2048)            | ✓         | ✓    | ✓     |
@@ -92,15 +92,65 @@ the same `renderer.toneMapping` at the very end — no double-apply.
 
 ## OWED — live pass (visual effects can't be headless-checked)
 
-- Boot-clean verified on desktop + phone profiles (menu). NOT yet verified in a live match: SH probe
-  ambient fill on map load, contact shadows under props/players (T1 jump accuracy), SSAO (T2), bloom
-  (T3), the tonemap A/B + exposure feel, and the auto-tier FPS probe actually stepping a slow phone
-  down + saving. Also: confirm an OLD phone survives T0/T1 (T1's whole justification), and the phone
+- The RENDER PATH is now verified per-tier on desktop + phone via `js/lighting-selftest.js` (all four
+  tiers render, not black; shadows read on T1+) — see the HOTFIX section. Still owes a human PLAYTEST
+  in a real match (a real map's props/players, the actual "Get ready…" SH bake, disguise swaps): the
+  tonemap A/B + exposure feel, bloom (T3) on real emissive-ish surfaces, and the auto-tier FPS probe
+  actually stepping a slow phone down + saving. Also confirm an OLD phone survives T0/T1 and the phone
   tab-switch context-loss path rebuilds shadows + the probe. If T1 tanks on a phone, auto-tiering
   demotes to T0 (nobody gets stuck).
 
+## HOTFIX — black screen on T2/T3 + ambient washout (VRmike, 2026-07-19, follows bb40a2e)
+
+Two playtest-blocking bugs from the first build, both purely visual (a headless check can't see them):
+
+### 1) BLACK SCREEN on the top two tiers (T2/T3) — ROOT CAUSE + FIX
+Symptom: T2/T3 rendered normally for ~1s then went SOLID BLACK (UI/DOM stayed up → 3D only).
+- The ~1s is the LAZY CDN import of the postprocessing addons; until it resolves `render()` falls back
+  to a direct `renderer.render()` (fine). The instant the composer built and took over → black.
+- **Root cause:** `_buildComposer()` used `SSAOPass` as the FIRST pass with NO `RenderPass` ahead of
+  it. In three **r161**, `SSAOPass.OUTPUT.Default` does **not** render the scene beauty — it reads the
+  incoming colour from `readBuffer.texture` and composites AO over it (verified against the r161
+  SSAOPass source + the official `webgl_postprocessing_ssao` example, which is RenderPass → SSAOPass →
+  OutputPass). With nothing feeding `readBuffer`, the beauty was an empty (black) buffer → whole frame
+  black.
+- **Fix:** `_buildComposer()` now ALWAYS adds `RenderPass` first, then `SSAOPass` (if `ssao`), then
+  bloom, then `OutputPass`. Guarded by `check-lighting.mjs` §5 (RenderPass index < SSAOPass index).
+- **Tier-switch rebuild is safe:** `autoTier.tick()` runs at the END of `frame()` AFTER
+  `scene.render()`, so tier changes (manual or auto) happen BETWEEN frames, never mid-frame, and the
+  rebuilt composer always leads with a RenderPass. The old "one frame then black" was the lazy import
+  completing into a structurally-broken chain, NOT a mid-frame rebuild.
+
+### 2) AMBIENT washout — the floor was near-white, shadows drowned
+Inventory of every "flat fill from everywhere" source found (there were TWO, both at full 1.0):
+- the base **HemisphereLight** in `scene.buildWorld()` (intensity 1.0, all tiers), and
+- the **SH ambient probe** in `lighting.js` (`_probe.intensity = 1`, T1+).
+(There is NO `AmbientLight`, `scene.environment`, or material `envMap` — those were checked and ruled
+out. The `sun`/contact/angled lights are DIRECTIONAL, not ambient.)
+- **Fix:** ONE tunable — `AMBIENT_INTENSITY_DEFAULT = 0.3` (LOW) in `lighting-tiers.js`, per-map
+  overridable via `map.ambientIntensity` (`resolveAmbientIntensity(map)`, clamped 0..2). BOTH ambient
+  sources route through it: `scene.buildWorld` sets the HemisphereLight intensity from it, and
+  `LightingRig` stores `this._ambient` per-reattach and uses it for the SH probe intensity (override +
+  bake paths). Editor preview (`editor.js`) uses the same helper so it matches the game.
+- **Shadow readability:** the contact (straight-down, shadow-casting) light was bumped **0.5 → 1.0** so
+  the down-shadow — the only shadow, and the whole point of that light — reads CLEARLY once ambient is
+  low (a soft 0.5 was drowned by the fill lights). Straight-down = the shadow sits under a resting prop
+  (mostly hidden) and separates onto the floor when the prop is AIRBORNE — that's the jump-accuracy cue.
+
+### Render self-test — `js/lighting-selftest.js` (DEV-ONLY, gated `?lightingtest=…`)
+Because both bugs are visual, `main.js` lazy-loads this harness ONLY when `?lightingtest` is in the URL
+(never in normal play). It boots the real `Scene3D` render path, forces each tier for >3s (past the
+composer's lazy-import window), then READS BACK canvas pixels and asserts (a) not-black (`mean>20`,
+`fracBlack<0.9`) on all four tiers and (b) shadows read on T1+ (lit floor − shadowed floor > 16, using
+grey-only pixels inside the projected prop-ring so the bright sky / empty floor can't mask a washout).
+The test props FLOAT (`p.y` offset) so their straight-down shadows land on open floor — the jump case.
+`?lightingtest=all` sweeps T0–T3; `?lightingtest=2` holds one tier for a screenshot. Failures →
+`console.error` (surfaced by `browser_check`). VERIFIED: 4/4 tiers pass on desktop + phone profiles.
+
 ## Guard
 
-`tools/check-lighting.mjs` — 8 sections, all headless: tier resolution, device heuristic, tonemap,
-SH override, persistence+wiring (source), the LightingRig THREE mapping (mock renderer), PerfMon, and
-the AutoTier state machine. Run: `node tools/check-lighting.mjs`.
+`tools/check-lighting.mjs` — headless: tier resolution, device heuristic, tonemap, SH override, AMBIENT
+intensity tunable (§4b), persistence+wiring incl. the two hotfix source guards (RenderPass-before-SSAO,
+ambient routing) in §5, the LightingRig THREE mapping (mock renderer), PerfMon, and the AutoTier state
+machine. Run: `node tools/check-lighting.mjs`. The VISUAL half rides `js/lighting-selftest.js` via
+`browser_check` (see above) — headless GL can't be exercised from node.

@@ -2057,6 +2057,20 @@ function newSession() {
 
 // ---- boot -----------------------------------------------------------------
 (async function boot() {
+  // LIGHTING HOTFIX (2026-07-19, VRmike): DEV-ONLY in-browser render self-test, gated behind
+  // `?lightingtest=…` and lazy-imported so it's never touched in normal play. It boots the real
+  // Scene3D render path, forces each Lighting Quality tier, and reads back canvas pixels to assert
+  // no tier renders black (the SSAO/bloom composer bug) and shadows read on T1+ (the ambient fix).
+  // Short-circuits the normal game boot entirely. See js/lighting-selftest.js.
+  if (typeof URLSearchParams !== 'undefined' && new URLSearchParams(location.search).has('lightingtest')) {
+    try {
+      const { runLightingSelfTest } = await import('./lighting-selftest.js');
+      await runLightingSelfTest(canvas);
+    } catch (e) {
+      console.error('[lightingtest] harness failed to start:', e);
+    }
+    return;
+  }
   state.cfg = await loadConfig();
   // Build the in-game debug menu — ON BY DEFAULT now (no ?debug=1 needed). Lazy import so
   // it stays out of the initial parse, but it's constructed unconditionally. It reads live

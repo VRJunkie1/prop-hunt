@@ -26,6 +26,7 @@
 
 import * as THREE from 'three';
 import { makePropMesh, instantiateModel, targetSizeForEntry } from './scene.js';
+import { resolveAmbientIntensity } from './lighting-tiers.js';
 
 const DEG = Math.PI / 180;
 const ROT_STEP = 15 * DEG; // coarse rotate step
@@ -191,7 +192,9 @@ export class Editor {
     const map = this.mapMeta;
     this._owned = []; // geometries/materials the editor created (safe to dispose)
     this.scene.background = new THREE.Color(map.sky || '#87ceeb');
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.0));
+    // AMBIENT WASHOUT FIX (2026-07-19): match the game's LOW ambient fill (per-map tunable) so the
+    // editor preview reads like the live map instead of a washed-out flat white.
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, resolveAmbientIntensity(map)));
     const sun = new THREE.DirectionalLight(0xffffff, 0.8);
     sun.position.set(20, 40, 10);
     this.scene.add(sun);

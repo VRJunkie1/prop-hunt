@@ -24,7 +24,7 @@ import { installMasterLimiter } from '/shared/audio-limiter.js';
 // light, angled fill, SSAO/bloom post, tonemap A/B). LightingRig owns the THREE objects; the pure
 // tier/tonemap/SH math lives in js/lighting-tiers.js (headless-guarded). See notes/lighting.md.
 import { LightingRig } from '/js/lighting.js';
-import { resolveTierConfig, mapSHOverride } from '/js/lighting-tiers.js';
+import { resolveTierConfig, mapSHOverride, resolveAmbientIntensity } from '/js/lighting-tiers.js';
 
 // HRTF BINAURAL PANNING for taunt audio (Jie, 2026-07-18). Web Audio's PannerNode has two
 // panningModels: 'equalpower' (a cheap constant-power L/R pan — THREE's default) and 'HRTF' (a
@@ -531,7 +531,14 @@ export class Scene3D {
     this.scene.background = new THREE.Color(map.sky || '#87ceeb');
     this.scene.fog = new THREE.Fog(new THREE.Color(map.sky || '#87ceeb'), 40, 120);
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, 1.0));
+    // AMBIENT WASHOUT FIX (2026-07-19, VRmike): the base HemisphereLight is a flat "fill from
+    // everywhere" light and was at 1.0 — stacked on the T1+ SH probe (also 1.0) it flooded the
+    // restaurant floor near-white and washed the contact shadows out (see attached screenshots).
+    // Drive it off the SAME LOW ambient tunable as the probe (per-map `ambientIntensity` overridable;
+    // default is intentionally low so the overhead shadow light's down-shadows read for jump accuracy).
+    // The `sun` is a DIRECTIONAL light (shape, not fill) and stays at full strength.
+    const ambient = resolveAmbientIntensity(map);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444466, ambient));
     const sun = new THREE.DirectionalLight(0xffffff, 0.8);
     sun.position.set(20, 40, 10);
     this.scene.add(sun);

@@ -181,7 +181,12 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   **LIGHTING OVERHAUL (VRmike, 2026-07-19):** scene.js owns a `LightingRig` (`this.lighting`, from
   `js/lighting.js`) that drives a 4-tier quality system (T0 potato → T3 bloom). `render()` delegates
   to the rig (direct render on T0/T1, an SSAO/bloom `EffectComposer` on T2/T3, falling back to direct
-  while the addon passes lazy-import). Each lighting feature is an INDEPENDENT switch (SH ambient
+  while the addon passes lazy-import). The composer chain is `RenderPass → SSAOPass(opt) → bloom(opt)
+  → OutputPass` — the leading RenderPass is MANDATORY (r161 `SSAOPass.Default` reads the beauty from
+  `readBuffer`, so without it the frame is BLACK; the 2026-07-19 hotfix). Ambient fill is ONE LOW
+  tunable (`resolveAmbientIntensity(map)`, per-map `ambientIntensity` override, default 0.3) shared by
+  the base HemisphereLight (scene.js) + the SH probe intensity (lighting.js) so shadows read. Each
+  lighting feature is an INDEPENDENT switch (SH ambient
   probe, straight-down contact-shadow light, angled fill, SSAO, bloom, shadow-map size); tiers are
   preset bundles resolved by the PURE `js/lighting-tiers.js`. `buildWorld()` ends with
   `_reattachLighting(map)` (scene.clear() drops the rig's lights → re-add + **bake the SH ambient

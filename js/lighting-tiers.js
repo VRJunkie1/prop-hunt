@@ -142,6 +142,35 @@ export function resolveTonemap(mode, exposure) {
 }
 
 // ---------------------------------------------------------------------------
+// AMBIENT INTENSITY — the one tunable that scales EVERY flat "fill from everywhere" light so the
+// directional light + its down-shadows actually read (VRmike hotfix, 2026-07-19). Two ambient
+// sources stack in the scene: the base HemisphereLight (scene.js, all tiers) and the SH ambient
+// probe (js/lighting.js, T1+). BOTH were at full strength (1.0), which flooded the floor near-white
+// and washed the contact shadows out — defeating the whole point of the overhead shadow light
+// (props' down-shadows are the jump-accuracy cue). This single scalar drives both, default LOW, and
+// is per-map overridable via `map.ambientIntensity` in the map JSON so a specific map can go
+// brighter/moodier without touching code. PURE so the guard can pin the clamp + override path.
+// ---------------------------------------------------------------------------
+export const AMBIENT_INTENSITY_DEFAULT = 0.3; // LOW on purpose — shadows must read; was effectively 1.0+1.0
+export const AMBIENT_INTENSITY_RANGE = { min: 0, max: 2 };
+
+export function clampAmbientIntensity(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return AMBIENT_INTENSITY_DEFAULT;
+  return Math.max(AMBIENT_INTENSITY_RANGE.min, Math.min(AMBIENT_INTENSITY_RANGE.max, n));
+}
+
+// Resolve the ambient intensity for a map: the per-map `ambientIntensity` override if present +
+// valid, else the LOW default. One source of truth for both the HemisphereLight (scene.js) and the
+// SH probe (js/lighting.js).
+export function resolveAmbientIntensity(map) {
+  if (map && typeof map === 'object' && map.ambientIntensity != null) {
+    return clampAmbientIntensity(map.ambientIntensity);
+  }
+  return AMBIENT_INTENSITY_DEFAULT;
+}
+
+// ---------------------------------------------------------------------------
 // SH ambient override — a map JSON may carry PRE-BAKED spherical-harmonic coefficients (9 SH
 // bands × RGB = 27 numbers) to skip the per-map cube bake. Accepts either a flat length-27 array
 // [r0,g0,b0, r1,g1,b1, …] or a nested length-9 array of [r,g,b] triples. Returns a normalized

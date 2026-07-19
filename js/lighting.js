@@ -25,7 +25,7 @@
 import * as THREE from 'three';
 // Relative (not root-absolute) so a node harness can load this module for the headless rig check
 // (tools/check-lighting.mjs §6) — the browser resolves it identically. The sibling is pure.
-import { resolveTierConfig, resolveTonemap } from './lighting-tiers.js';
+import { resolveTierConfig, resolveTonemap, resolveAmbientIntensity, AMBIENT_INTENSITY_DEFAULT } from './lighting-tiers.js';
 
 // Map the pure tonemap descriptor's string to the real THREE tone-mapping constant.
 function threeToneMapping(name) {
@@ -58,6 +58,7 @@ export class LightingRig {
     this._bakeToken = 0;              // bumped on reattach so a stale async bake no-ops
 
     this._size = { w: 1, h: 1 };
+    this._ambient = AMBIENT_INTENSITY_DEFAULT; // SH probe intensity; recomputed per-map in reattach()
     this._tmpV = new THREE.Vector3(); // reused; keeps render()/reattach() allocation-free
 
     // Tonemap applied to the renderer immediately (works before any world is built).
@@ -96,6 +97,12 @@ export class LightingRig {
     if (map) this._map = map;
     const cfg = this._cfg;
 
+    // AMBIENT WASHOUT FIX (2026-07-19): resolve the per-map ambient level (LOW default, JSON
+    // overridable) once per reattach and use it as the SH probe's intensity below, so the probe
+    // fill can never flood the floor / wash out the contact shadows. The base HemisphereLight is
+    // driven off the SAME scalar in scene.buildWorld().
+    this._ambient = resolveAmbientIntensity(this._map);
+
     this._applyProbe(cfg);
     this._applyContactLight(cfg);
     this._applyAngledLight(cfg);
@@ -126,7 +133,7 @@ export class LightingRig {
     if (!this._probe || !Array.isArray(triples) || triples.length !== 9) return;
     const coeffs = this._probe.sh.coefficients;
     for (let i = 0; i < 9; i++) coeffs[i].set(triples[i][0], triples[i][1], triples[i][2]);
-    this._probe.intensity = 1;
+    this._probe.intensity = this._ambient; // LOW ambient fill (per-map tunable) — not a flat 1.0
   }
 
   // Bake a ~64px cubemap from the room center and convert to a LightProbe (9 SH coefficients).
@@ -147,7 +154,6 @@ export class LightingRig {
       this.scene.add(cubeCam);
       // Hide the probe's own contribution during the bake so we sample the lit surfaces, not a
       // feedback loop (a fresh probe is neutral, but be safe on a re-bake).
-      const prevIntensity = this._probe.intensity;
       this._probe.intensity = 0;
       cubeCam.update(this.renderer, this.scene);
       const baked = gen.fromCubeRenderTarget(this.renderer, rt);
@@ -156,7 +162,7 @@ export class LightingRig {
       if (token !== this._bakeToken || !this._probe) return; // superseded mid-bake
       const coeffs = this._probe.sh.coefficients;
       for (let i = 0; i < 9; i++) coeffs[i].copy(baked.sh.coefficients[i]);
-      this._probe.intensity = prevIntensity || 1;
+      this._probe.intensity = this._ambient; // LOW ambient fill (per-map tunable) — not a flat 1.0
     } catch (e) {
       // Baking must never break the game — leave the probe neutral.
       if (!LightingRig._loggedBake) { console.warn('[lighting] SH probe bake failed (continuing):', e); LightingRig._loggedBake = true; }
@@ -173,7 +179,11 @@ export class LightingRig {
       return;
     }
     if (!this._contactLight) {
-      const l = new THREE.DirectionalLight(0xffffff, 0.5);
+      // 1.0 (was 0.5): this is the ONLY shadow-casting light, and a prop's down-shadow only darkens
+      // by however much of the total light THIS light contributes. With ambient now LOW, a strong
+      // contact light makes the down-shadow read CLEARLY (the jump-accuracy cue VRmike asked for)
+      // instead of the soft wash the old 0.5 gave once the fill lights were counted.
+      const l = new THREE.DirectionalLight(0xffffff, 1.0);
       l.castShadow = true;
       this._contactLight = l;
     }
@@ -262,27 +272,34 @@ export class LightingRig {
     const { w, h } = this._size;
     const composer = new M.EffectComposer(this.renderer);
     composer.setSize(w, h);
-    // SSAO renders the scene itself (beauty + depth + normal), so it replaces RenderPass when on.
-    // Our composer tiers (T2/T3) always include SSAO, but keep the RenderPass branch for safety.
-    let first;
+    // BLACK-SCREEN FIX (2026-07-19): a RenderPass MUST come first — it renders the scene BEAUTY
+    // (colour) into the composer buffer. In three r161 SSAOPass.OUTPUT.Default does NOT render the
+    // scene itself; it reads the incoming colour from `readBuffer.texture` and composites the AO
+    // over it (verified against the r161 SSAOPass source + the official webgl_postprocessing_ssao
+    // example, which is RenderPass → SSAOPass → OutputPass). The old code used SSAOPass AS the first
+    // pass with nothing feeding readBuffer, so the beauty was an empty (black) buffer → the whole
+    // 3D view went SOLID BLACK the instant the lazy post-import resolved (~1s after entering T2/T3,
+    // while the direct-render fallback covered the load). Always render the scene first, then layer
+    // SSAO / bloom / output on top.
+    const renderPass = new M.RenderPass(this.scene, this.camera);
+    this._renderPass = renderPass;
+    composer.addPass(renderPass);
     if (cfg.ssao) {
       const p = new M.SSAOPass(this.scene, this.camera, w, h);
       p.kernelRadius = 0.8;
       p.minDistance = 0.002;
       p.maxDistance = 0.1;
+      p.output = M.SSAOPass.OUTPUT.Default; // composite AO over the RenderPass beauty (never SSAO-only)
       this._ssaoPass = p;
-      first = p;
-    } else {
-      const p = new M.RenderPass(this.scene, this.camera);
-      this._renderPass = p;
-      first = p;
+      composer.addPass(p);
     }
-    composer.addPass(first);
     if (cfg.bloom) {
       const b = new M.UnrealBloomPass(new THREE.Vector2(w, h), 0.6, 0.4, 0.85);
       this._bloomPass = b;
       composer.addPass(b);
     }
+    // OutputPass applies renderer.toneMapping + sRGB once at the end of the chain (the intermediate
+    // targets stay linear; three skips tonemap when rendering to a render target, so no double-apply).
     const outp = new M.OutputPass();
     this._outputPass = outp;
     composer.addPass(outp);

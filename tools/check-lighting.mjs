@@ -21,6 +21,7 @@ import {
   guessTierFromDevice, resolveTonemap, clampExposure, EXPOSURE_RANGE, MULTIPLY_FACTOR,
   normalizeTonemapMode, TONEMAP_MODES, parseSHCoefficients, mapSHOverride,
   TIER_KEY, TIER_USERSET_KEY, TONEMAP_KEY, EXPOSURE_KEY,
+  resolveAmbientIntensity, clampAmbientIntensity, AMBIENT_INTENSITY_DEFAULT, AMBIENT_INTENSITY_RANGE,
 } from '../js/lighting-tiers.js';
 import { PerfMon } from '../js/perfmon.js';
 import { AutoTier } from '../js/auto-tier.js';
@@ -131,6 +132,21 @@ ok(mapSHOverride({ sh: flat27 }) && mapSHOverride({ shCoefficients: nested9 }) &
   'mapSHOverride reads map.sh / map.shCoefficients, null when absent');
 
 // ---------------------------------------------------------------------------
+// 4b. AMBIENT intensity tunable (VRmike hotfix, 2026-07-19) — the LOW default + per-map override
+//     that keeps the SH probe + HemisphereLight from washing the floor out / drowning the shadows.
+// ---------------------------------------------------------------------------
+console.log('\n [4b] AMBIENT intensity (washout fix)');
+ok(AMBIENT_INTENSITY_DEFAULT <= 0.5, `ambient default is LOW (=${AMBIENT_INTENSITY_DEFAULT}, was effectively ~1.0+1.0)`);
+ok(resolveAmbientIntensity(null) === AMBIENT_INTENSITY_DEFAULT && resolveAmbientIntensity({}) === AMBIENT_INTENSITY_DEFAULT,
+  'no map / no override → the LOW default');
+ok(resolveAmbientIntensity({ ambientIntensity: 0.8 }) === 0.8, 'per-map ambientIntensity override wins');
+ok(resolveAmbientIntensity({ ambientIntensity: 99 }) === AMBIENT_INTENSITY_RANGE.max
+  && resolveAmbientIntensity({ ambientIntensity: -5 }) === AMBIENT_INTENSITY_RANGE.min
+  && resolveAmbientIntensity({ ambientIntensity: 'x' }) === AMBIENT_INTENSITY_DEFAULT,
+  'override clamps out-of-band + falls back on garbage');
+ok(clampAmbientIntensity(1.5) === 1.5 && clampAmbientIntensity(NaN) === AMBIENT_INTENSITY_DEFAULT, 'clampAmbientIntensity clamps/defaults');
+
+// ---------------------------------------------------------------------------
 // 5. PERSISTENCE + source wiring.
 // ---------------------------------------------------------------------------
 console.log('\n [5] PERSISTENCE + wiring');
@@ -153,6 +169,24 @@ ok(/exposureSlider|exposureVal/.test(html), 'index.html carries the exposure sli
 ok(/lighting\.js|LightingRig|_lighting/.test(sceneSrc), 'js/scene.js wires the LightingRig');
 ok(/lightingTier|lightingRow|Lighting Quality/i.test(html), 'index.html carries the Lighting Quality pause-menu row');
 ok(/tonemap|Tonemap|Filmic/i.test(html), 'index.html carries the tonemap A/B toggle');
+
+// HOTFIX (2026-07-19) source guards so the two fixes can't silently regress:
+const lightingSrc = read('js/lighting.js');
+//  a) BLACK-SCREEN: the composer chain MUST add a RenderPass BEFORE the SSAOPass (SSAOPass.Default
+//     reads the beauty from readBuffer.texture — with no RenderPass ahead of it the frame is black).
+{
+  const build = lightingSrc.slice(lightingSrc.indexOf('_buildComposer'));
+  const rpAt = build.indexOf('new M.RenderPass');
+  const ssaoAt = build.indexOf('new M.SSAOPass');
+  ok(rpAt !== -1 && ssaoAt !== -1 && rpAt < ssaoAt,
+    'lighting.js _buildComposer adds RenderPass BEFORE SSAOPass (no black-screen regression)');
+}
+//  b) AMBIENT: both ambient sources route through the ONE tunable — the HemisphereLight (scene.js)
+//     and the SH probe intensity (lighting.js), so a washout can't creep back via either.
+ok(/resolveAmbientIntensity/.test(sceneSrc) && /HemisphereLight\([^)]*ambient/.test(sceneSrc),
+  'scene.js drives the base HemisphereLight off resolveAmbientIntensity (LOW ambient)');
+ok(/resolveAmbientIntensity/.test(lightingSrc) && /_probe\.intensity = this\._ambient/.test(lightingSrc),
+  'lighting.js drives the SH probe intensity off the resolved ambient (not a flat 1.0)');
 
 // ---------------------------------------------------------------------------
 // 6. LightingRig THREE mapping — headless with a MOCK renderer + REAL THREE objects. Can't render
