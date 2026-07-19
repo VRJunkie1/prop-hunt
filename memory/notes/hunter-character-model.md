@@ -1,5 +1,22 @@
 # Hunter character model (v1) — animated SWAT soldier
 
+## 2026-07-19 — HELD-ITEM DOWN NUDGE (#190, VRmike; follows #188 below)
+
+Follow-up to the forward offset. #188's forward-only push (`forwardOffset` 0.2) pulled the item out
+from BEHIND the hand but then read as floating ~0.15-0.2 m ABOVE the outstretched hand (grip hovering
+over the fingers). Mike: "270 rotated forward from the last offset vector" = add a DOWN component,
+keep/slightly-increase forward. Fix, same attachment block in `_buildHunterModel`:
+- New `weapon.downOffset` (m, **0.17**); `forwardOffset` **0.2 → 0.22** (a touch more forward).
+- The offset is now the SUM of two group-frame directions converted to bone-local: forward
+  `_boneLocalDir(bone,group,0,0,-1)` × forwardOffset **+** down `_boneLocalDir(bone,group,0,-1,0)` ×
+  downOffset (group −Y = model-vertical down; the group is only yaw-rotated + upright, so −Y is
+  world-down regardless of pose). Both ×`invBoneScale`. Still bone-local ⇒ rides the pitched arm.
+- **Anchored to the rig, not blind** (`tools/_probe_hand_offset.mjs`, walks the GLB skeleton): rest-pose
+  `Wrist.R` ~1.03 m up, forearm ~0.23 m, shoulder→wrist vertical drop ~0.37 m — so a ~0.17 m drop is a
+  real hand-scale correction. Direction is geometrically guaranteed; exact grip point still OWED a live
+  screenshot (headless can't render a remote hunter). Tune `downOffset` up/down if it floats/sinks.
+- `check-hunter-model.mjs` GREEN (forwardOffset now 0.22); headless boot clean, no console errors.
+
 ## 2026-07-19 — HELD-ITEM FORWARD OFFSET + REMOTE LOOK PITCH (VRmike)
 
 Two remote-model fixes that COMPOSE on one attachment chain (`js/scene.js`, config in

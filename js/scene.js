@@ -1434,13 +1434,28 @@ export class Scene3D {
         bone.add(root);
         heldTools[toolId] = root;
       }
-      // HELD-ITEM FORWARD OFFSET (2026-07-19, VRmike): the held item rendered ~0.2 m BEHIND the
-      // hand on remote views. Nudge ALL three held meshes forward along the hunter's FACING,
-      // expressed in the wrist bone's LOCAL frame (so it rides the arm when it tilts with look
-      // pitch — see _applyLookPitch). Hot-tunable via weapon.forwardOffset (metres; 0 disables).
+      // HELD-ITEM DOWN + FORWARD OFFSET (2026-07-19, VRmike; #190 follows #188). #188 pushed the
+      // held item FORWARD (weapon.forwardOffset) to pull it out from behind the hand, but it then
+      // read as floating ~0.15-0.2 m ABOVE the outstretched hand (grip hovering over the fingers).
+      // #190 adds a DOWN component (weapon.downOffset) so the grip drops INTO the hand, keeping the
+      // forward nudge (a touch more). Both are expressed in the GROUP frame (character-local: -Z =
+      // facing/forward, -Y = model-vertical down) and converted to the wrist bone's LOCAL frame, so
+      // they ride the arm as it tilts with look pitch (see _applyLookPitch) and stay yaw-correct as
+      // the hunter turns. Metres in world space; scene.js divides by the bone world scale. Applies
+      // equally to rifle/grenade/finder (shared wrist grip anchor). Hot-tunable via config; 0 each
+      // disables that axis. Anchored to the rig: rest-pose wrist ~1.03 m up, forearm ~0.23 m, so a
+      // ~0.17 m drop is a real hand-scale correction (tools/_probe_hand_offset.mjs).
       const fwdMeters = wcfg.forwardOffset;
+      const downMeters = wcfg.downOffset;
+      const invBoneScale = 1 / this._boneWorldScale(bone, group);
+      const off = new THREE.Vector3();
       if (Number.isFinite(fwdMeters) && fwdMeters !== 0) {
-        const off = this._boneLocalDir(bone, group, 0, 0, -1).multiplyScalar(fwdMeters / this._boneWorldScale(bone, group));
+        off.add(this._boneLocalDir(bone, group, 0, 0, -1).multiplyScalar(fwdMeters * invBoneScale));
+      }
+      if (Number.isFinite(downMeters) && downMeters !== 0) {
+        off.add(this._boneLocalDir(bone, group, 0, -1, 0).multiplyScalar(downMeters * invBoneScale));
+      }
+      if (off.lengthSq() > 0) {
         for (const toolId of ['rifle', 'finder', 'grenade']) {
           const m = heldTools[toolId];
           if (m) m.position.add(off);
