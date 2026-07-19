@@ -99,6 +99,11 @@ export class UI {
     if (this.el.controlsRefToggle) {
       this.el.controlsRefToggle.addEventListener('click', () => this._toggleControlsRef());
     }
+    // ROLE-FILTERED CONTROLS LIST (B8, 2026-07-18): the controls reference shows ONLY the current
+    // player's role — 'hunter' | 'prop' | 'spectator' | null (pre-role / lobby). main.js pushes the
+    // mode via setControlsRole() whenever the role changes (team switch, round flip, death, respawn),
+    // and _controlsHtml() renders from it. Null before a role is known (shows the shared move/look rows).
+    this._controlsRole = null;
     // SPECTATOR (B6): the on-screen phone controls. Callbacks injected by main.js (no game logic here).
     this.onSpectatePrev = () => {};
     this.onSpectateNext = () => {};
@@ -612,6 +617,23 @@ export class UI {
     panel.classList.remove('hidden'); // visible by default on PC
   }
 
+  // ROLE-FILTERED CONTROLS LIST (B8): set which role's controls the reference shows, and re-render
+  // the (visible) corner panel + the (open) pause "Controls" panel from the SAME _controlsHtml() rows.
+  // `mode` is 'hunter' | 'prop' | 'spectator' | null. Idempotent — a no-op when the mode is unchanged,
+  // so main.js can call it liberally (every snapshot/role event) without thrashing the DOM.
+  setControlsRole(mode) {
+    if (mode === this._controlsRole) return;
+    this._controlsRole = mode;
+    // Re-render the always-visible corner panel if it's shown (PC only; hidden on touch).
+    if (this.el.controlsRef && this.el.controlsRefBody && !this.el.controlsRef.classList.contains('hidden')) {
+      this.el.controlsRefBody.innerHTML = this._controlsHtml();
+    }
+    // Re-render the pause "Controls" panel if it's currently open.
+    if (this.el.pauseHelpPanel && this.el.pauseHelpBody && !this.el.pauseHelpPanel.classList.contains('hidden')) {
+      this.el.pauseHelpBody.innerHTML = this._controlsHtml();
+    }
+  }
+
   _toggleControlsRef() {
     const panel = this.el.controlsRef;
     if (!panel) return;
@@ -637,39 +659,70 @@ export class UI {
     // SAME classification as input.js (pointer-capability, not "can be touched") so the
     // controls-help list can never disagree with which scheme is actually wired.
     const touch = prefersTouchControls();
-    const rows = touch
-      ? [
-          ['Left joystick', 'Move'],
-          ['Drag (right side)', 'Look'],
-          ['ACTION (hold)', 'Hunter: use the selected tool (fire / finder / grenade) · Prop: disguise as what you aim at'],
-          ['Tool buttons', 'Hunter: switch tool — rifle · finder · grenade'],
-          ['JUMP', 'Jump'],
-          ['ROTATE (hold)', 'Turn a disguise'],
-          ['☰', 'This menu'],
-          // SPECTATING (B6) — shown while dead; controls reuse the joystick + drag look.
-          ['Spectating: joystick + drag', 'Fly the free camera around the map'],
-          ['Spectating: JUMP', 'Fly up'],
-          ['Spectating: ◀ / ▶', 'Switch between watching live players'],
-          ['Spectating: FLY', 'Back to the free-fly camera'],
-        ]
-      : [
-          ['WASD / Arrows', 'Move'],
-          ['Mouse', 'Look (click the view to capture the mouse)'],
-          ['Left-click (hold)', 'Hunter: rapid-fire the rifle · Prop: disguise as what you aim at'],
-          ['Right-click (hold)', 'Turn a disguise'],
-          ['Space', 'Jump'],
-          ['E', 'Disguise (prop)'],
-          ['1 / 2 / 3', 'Pick hunter tool (rifle · finder · grenade)'],
-          ['T', 'Taunt menu (prop) — frees the mouse; T or Esc closes it'],
-          ['V', 'Toggle view'],
-          ['`', 'Free the mouse for debug/UI — click the view to resume'],
-          ['Esc', 'Open / close this menu (releases the mouse; re-locks on close)'],
-          // SPECTATING (B6) — the controls a dead player gets (fly cam + player switching).
-          ['Spectating: WASD + mouse', 'Fly the free camera around the map'],
-          ['Spectating: Space / Shift', 'Fly up / down'],
-          ['Spectating: Left-click', 'Cycle between watching live players (past the last → free-fly)'],
-          ['Spectating: Space', 'While following a player, snap back to free-fly'],
-        ];
+    // ROLE-FILTERED (B8): show ONLY the current role's controls (prop OR hunter), or the spectator
+    // controls while dead. Before a role is known (lobby / pre-spawn) `mode` is null → the shared
+    // move/look/menu rows only. main.js re-pushes the mode on every role change so this can't go stale.
+    const mode = this._controlsRole;
+
+    let common, hunter, prop, spectator;
+    if (touch) {
+      common = [
+        ['Left joystick', 'Move'],
+        ['Drag (right side)', 'Look'],
+        ['JUMP', 'Jump'],
+        ['☰', 'This menu'],
+      ];
+      hunter = [
+        ['ACTION (hold)', 'Use the selected tool (fire · finder · grenade)'],
+        ['Tool buttons', 'Switch tool — rifle · finder · grenade'],
+      ];
+      prop = [
+        ['ACTION (hold)', 'Disguise as what you aim at'],
+        ['ROTATE (hold)', 'Turn a disguise'],
+      ];
+      // Spectating (B6) — a dead player's fly cam + player switching (reuses the joystick + drag look).
+      spectator = [
+        ['Joystick + drag', 'Fly the free camera around the map'],
+        ['JUMP', 'Fly up'],
+        ['◀ / ▶', 'Switch between watching live players'],
+        ['FLY', 'Back to the free-fly camera'],
+        ['☰', 'This menu'],
+      ];
+    } else {
+      common = [
+        ['WASD / Arrows', 'Move'],
+        ['Mouse', 'Look (click the view to capture the mouse)'],
+        ['Space', 'Jump'],
+        ['`', 'Free the mouse for debug/UI — click the view to resume'],
+        ['Esc', 'Open / close this menu (releases the mouse; re-locks on close)'],
+      ];
+      hunter = [
+        ['Left-click (hold)', 'Rapid-fire the rifle'],
+        ['1 / 2 / 3', 'Pick hunter tool (rifle · finder · grenade)'],
+        ['V', 'Toggle view'],
+      ];
+      prop = [
+        ['Left-click (hold)', 'Disguise as what you aim at'],
+        ['Right-click (hold)', 'Turn a disguise'],
+        ['E', 'Disguise'],
+        ['T', 'Taunt menu — frees the mouse; T or Esc closes it'],
+        ['V', 'Toggle view'],
+      ];
+      // Spectating (B6) — a dead player's fly cam + player switching.
+      spectator = [
+        ['WASD + mouse', 'Fly the free camera around the map'],
+        ['Space / Shift', 'Fly up / down'],
+        ['Left-click', 'Cycle between watching live players (past the last → free-fly)'],
+        ['Space', 'While following a player, snap back to free-fly'],
+        ['Esc', 'Open / close this menu'],
+      ];
+    }
+
+    const rows =
+      mode === 'spectator' ? spectator :
+      mode === 'hunter' ? [...common, ...hunter] :
+      mode === 'prop' ? [...common, ...prop] :
+      common; // no role yet (lobby / pre-spawn) → shared rows only
     return rows.map(([k, v]) => `<div class="pause-help-row"><b>${k}</b><span>${v}</span></div>`).join('');
   }
 

@@ -383,6 +383,24 @@ function applyRole(role) {
   ui.setRole(role);
   applyRoleView(); // hunters go first-person (own body hidden); props stay third-person
   applyToolView(); // hunter tool bar + held tool, or hidden for a prop; also refreshes the taunt button
+  updateControlsList(); // ROLE-FILTERED CONTROLS (B8): show only THIS role's controls
+}
+
+// ROLE-FILTERED CONTROLS LIST (B8, 2026-07-18, VRmike). The controls reference (corner panel + pause
+// "Controls") shows ONLY the current player's controls: spectator controls while dead, else the live
+// role's (hunter OR prop), else null (lobby / pre-role → the shared move/look rows). This is pushed to
+// the UI on EVERY event that changes what you are — role assignment/self-heal (applyRole), death &
+// respawn (onSnapshot alive flip), and entering/leaving spectator (setSpectating) — so the list can
+// never show the stale merged prop+hunter blob again. ui.setControlsRole is idempotent (no DOM churn
+// when unchanged), so calling it liberally is cheap.
+function controlsMode() {
+  if (state.spectate && state.spectate.on) return 'spectator';
+  if (state.role === ROLE.HUNTER) return 'hunter';
+  if (state.role === ROLE.PROP) return 'prop';
+  return null;
+}
+function updateControlsList() {
+  ui.setControlsRole(controlsMode());
 }
 
 // Ctrl+E: toggle the in-game level editor (desktop debug tool). Available only in
@@ -807,6 +825,20 @@ function handleGameMessage(msg) {
       state.bounds = state.map.size / 2 - state.cfg.rules.mapMargin;
       state.spawned = false;
       state.uiMode = false; // fresh match starts uncaptured, not in the free-mouse state
+      // ROUND-2 BLINDFOLD FIX (B8, 2026-07-18, VRmike). A fresh round arrives as a STARTED — including
+      // an ENDLESS FLIPPED round that chains straight from ENDING without a lobby round-trip. Reset the
+      // transient VIEW-state here so nothing from the previous round bleeds through the flip: drop any
+      // lingering hunter blindfold + look-freeze, and exit any spectator (fly/follow) camera left over
+      // from a death last round. The CORRECT blindfold is re-derived from role+phase by the HIDING phase
+      // event that follows this STARTED (a round-2 hunter re-blinds for HIDING, then releases at HUNTING),
+      // and spectator re-enters off the next snapshot if the player is still dead. Without this belt-and-
+      // suspenders reset, a player who spectated round 1 (or a hunter mid-blindfold) could keep the fly
+      // cam / a frozen look into round 2 until the first snapshot self-heals — read by playtesters as
+      // "permanently blindfolded / unspawned on round 2". Derived state stays authoritative; this only
+      // clears STALE local view-state at the one seam (STARTED) where a brand-new round begins.
+      ui.setBlindfold(false);
+      input.lookFrozen = false;
+      setSpectating(false);
       // PROP FINDER: a fresh match starts with the finder ready (no stuck grey cylinder / countdown)
       // and no forced-taunt lock carried across rounds.
       resetFinderState();
@@ -1015,7 +1047,7 @@ function onSnapshot(msg) {
     ui.setHealth(me.health);
     const wasAlive = state.alive;
     state.alive = me.alive !== false;
-    if (state.alive !== wasAlive) applyToolView();
+    if (state.alive !== wasAlive) { applyToolView(); updateControlsList(); } // B8: death/respawn re-filters controls
     const activePhase = msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING;
     setSpectating(!state.alive && activePhase);
     state.serverSelf.x = me.x;
@@ -1348,6 +1380,7 @@ function setSpectating(on) {
     ui.setSpectator(false);
     ui.setSpectateControls(false, input.touch);
   }
+  updateControlsList(); // ROLE-FILTERED CONTROLS (B8): show spectator controls while dead, role's when live
 }
 
 // Live players a spectator can watch: everyone alive in the latest snapshot except themselves.

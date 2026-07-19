@@ -185,7 +185,10 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   `setSensitivityValue()` reflects the restored value. An always-visible **PC controls reference**
   panel (`#controlsRef`, bottom-right, collapsible) is built by `buildControlsRef()` from the SAME
   `_controlsHtml()` rows the pause "Controls" panel uses (one source of truth — can't drift), hidden
-  on touch. Detail: `notes/pc-feel-controls.md`. The **HUD countdown
+  on touch. **ROLE-FILTERED (B8, 2026-07-18):** `_controlsHtml()` renders ONLY the current player's
+  controls (prop OR hunter, or spectator while dead, or the shared move rows pre-role) off
+  `ui._controlsRole`; `main.js` re-pushes it via `updateControlsList()` on every role change (round
+  flip / team switch / death / respawn). Detail: `notes/pc-feel-controls.md`. The **HUD countdown
   timer is TICKED LOCALLY (2026-07-18, B1):** `setHud`/`setTimer` render via `formatClock` from
   the PURE `js/hud-timer.js` (`HudTimer`), which `main.js` re-anchors on every snapshot + phase
   event and ticks each frame — so a snapshot stall can't freeze/drift the clock (Jie's "5s left"
@@ -214,8 +217,12 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   connection-type is *detected* in `net.js`, never here. Also owns the hunter
   **blindfold** overlay via `setBlindfold(blind, seconds)` — a plain show/hide of the
   `#blindfold` blackout that `main.js` drives from a fresh
-  `role === HUNTER && phase === HIDING` derivation (never latched). Anti-cheat detail:
-  `memory/notes/anti-cheat-blindfold.md`.
+  `role === HUNTER && phase === HIDING` derivation (never latched). **Round-flip hardening
+  (B8, 2026-07-18):** `main.js`'s `S2C.STARTED` handler resets blindfold + `lookFrozen` +
+  spectator at the fresh-round seam so stale round-1 view-state can't bleed into a flipped
+  round 2 (the "permanently blindfolded/unspawned on round 2" report); the server data gate is
+  unchanged. Guard: `tools/check-round-flip-blindfold.mjs`. Anti-cheat detail:
+  `memory/notes/anti-cheat-blindfold.md` (§6).
 - `js/config.js` — fetches `shared/config`; the host passes it into the `Referee`.
 - `js/editor.js` — **in-game level editor (desktop debug tool)**, toggled by
   **Ctrl+E** (`input.js` fires `onToggleEdit`; `main.js` gates + wires). A

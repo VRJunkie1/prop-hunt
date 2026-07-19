@@ -71,6 +71,33 @@ HIDING is the exact leak this blindfold guards. The gate was EXTENDED from *hunt
 Guard: `tools/check-spectator.mjs`. The `tools/check-blindfold.mjs` referee-gate assertion was updated to
 this extended spelling.
 
+## 6. ROUND-2 "permanent blindfold / unspawned" — the flip seam (2026-07-18, B8)
+Playtest: the hunter was "permanently blindfolded / unspawned on ROUND 2, every time". Root-caused
+across the round-flip lifecycle (endless flipped rounds chain ENDING→HIDING with NO lobby round-trip):
+- **The message/state logic is already correct.** `_launchRound` resets `alive=true` for EVERY player
+  before the round-2 HIDING snapshots, the blindfold is DERIVED fresh (`role===HUNTER && phase===HIDING`,
+  never latched), and the HUNTING release hands the world catch-up to `role===HUNTER || !p.alive`. A
+  faithful headless client reducer over the REAL referee's captured stream RELEASES the round-2 hunter
+  every time — including the caught-prop-in-round-1 (dead spectator) → round-2-hunter path that B6's
+  widened data gate made the prime suspect. So none of the three specced suspects (dead-flag starvation,
+  release racing the rebuild, stale-role release) is a live server/logic defect. Proven by
+  `tools/check-round-flip-blindfold.mjs` (scenarios A caught-prop-flip + B no-death-flip).
+- **The real residual was a BROWSER-ONLY transient.** Between round-2 `STARTED`/`phase(HIDING)` and the
+  first round-2 snapshot, stale round-1 view-state — the spectator fly-cam (`state.spectate.on`), the
+  blindfold overlay, and `input.lookFrozen` — wasn't explicitly cleared at the fresh-round seam. The
+  frame loop kept running `updateSpectatorCamera` (fly/follow) or a frozen-look blackout until the next
+  snapshot self-healed (~66 ms) — brief, but exactly "blindfolded/unspawned on round 2" to a player.
+- **Fix (js/main.js `S2C.STARTED` handler):** reset `ui.setBlindfold(false)` + `input.lookFrozen=false`
+  + `setSpectating(false)` at STARTED (the one seam a brand-new round begins), mirroring the existing
+  backToMenu / resetToLobby resets. This clears STALE local view-state only; the CORRECT blindfold is
+  still derived from role+phase by the HIDING phase event that immediately follows (a round-2 hunter
+  re-blinds for HIDING, then releases at HUNTING). **The server data gate is UNTOUCHED** — no
+  anti-cheat weakening; this is a client view-state reset.
+- Guard: `tools/check-round-flip-blindfold.mjs` locks the full round-flip→blindfold→release sequence
+  (server alive-reset + data-gate hold during HIDING + world catch-up at release + the client reducer
+  ending RELEASED + a source guard that STARTED clears blindfold/lookFrozen/spectator). Run it on any
+  round-flip / blindfold / spectator change.
+
 ## Bug history
 Originally the **visual half was entirely missing**: `ui.setBlindfold` was called from
 main.js but never defined in `js/ui.js` (no overlay div / CSS either). So *every* client —

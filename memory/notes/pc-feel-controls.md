@@ -61,6 +61,30 @@ The desktop rows cover everything VRmike listed: move (WASD/Arrows), look (Mouse
 (Left-click), turn-disguise (Right-click), Jump (Space), disguise (E), tools (1/2/3), taunt (T),
 view (V), free-mouse (`` ` ``), pause (Esc).
 
+## 3. ROLE-FILTERED controls list (B8, 2026-07-18, VRmike)
+
+**Complaint:** the panel showed BOTH prop AND hunter controls merged into one list (e.g. one row
+"Left-click — Hunter: rapid-fire · Prop: disguise"). Now it shows ONLY the current player's role.
+
+- `js/ui.js _controlsHtml()` was rewritten to build FOUR row groups per scheme (touch/PC): `common`
+  (move/look/jump/menu — and `` ` ``/Esc on PC), `hunter` (fire · 1/2/3 tools · V), `prop`
+  (disguise · turn-disguise · E · T taunt · V), and `spectator` (fly-cam + player-switch). It composes
+  by `this._controlsRole`: `'spectator'` → spectator rows; `'hunter'`/`'prop'` → `common` + that role;
+  `null` (lobby / pre-spawn) → `common` only. **Single source of truth preserved** — the always-visible
+  corner panel (`buildControlsRef`) and the pause "Controls" panel (`_togglePauseHelp`) both render from
+  `_controlsHtml()`, so they can't drift.
+- `ui.setControlsRole(mode)` stores the mode and, IDEMPOTENTLY (no-op if unchanged → no DOM churn),
+  re-renders the corner panel if visible + the pause panel if open.
+- `js/main.js` pushes the mode on EVERY event that changes what you are, via `updateControlsList()`
+  (`controlsMode()` = `state.spectate.on ? 'spectator' : role`): from `applyRole` (role assign /
+  snapshot self-heal / **round flip** / team switch), the onSnapshot **alive-flip** (death → spectator,
+  respawn → role), and `setSpectating`. So the list re-filters live on team switch, round flip, and death.
+- **Guard compatibility:** `check-pc-controls.mjs` §3 and `check-spectator.mjs` slice the `_controlsHtml`
+  SOURCE and look for literal needles (`WASD`, `Space`, `1 / 2 / 3`, `Left-click`, `T`, `Esc`,
+  `Spectating`) — all four groups live in the function body, so every literal is still present and both
+  checks stay green. The role FILTERING itself isn't headless-visible (DOM at runtime); owed to the live
+  pass. Touch vs PC classification (`prefersTouchControls`) is unchanged.
+
 ## Verify
 
 - **Guard:** `tools/check-pc-controls.mjs` (new, B4) — source + range asserts: moveSpeed is a
