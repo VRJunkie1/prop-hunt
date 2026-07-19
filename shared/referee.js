@@ -951,32 +951,20 @@ export class Referee {
       if (f > 0) backfire += baseHP * f;
     }
 
-    // (2) Apply the prop-player damage; track whether any prop player died from THIS blast.
-    let killedProp = false;
-    for (const h of playerHits) {
-      const wasAlive = h.player.alive;
-      this._damagePlayer(hunter, h.player, h.dmg, false);
-      if (wasAlive && !h.player.alive) killedProp = true;
-    }
-
-    // (3) Redemption vs backfire. A prop-player kill restores the thrower to FULL HP (explicit,
-    // even though _damagePlayer's kill-refill already did it) and the backfire is forgiven. Only
-    // if NOBODY died does the backfire land — possibly fatally.
-    let redeemed = false;
-    if (killedProp) {
-      if (hunter.alive) hunter.health = startHealth; // redeemed to full (backfire never applied)
-      redeemed = true;
-    } else if (backfire > 0) {
-      this._damagePlayer(hunter, hunter, backfire, true); // self-inflicted via decoys; may be lethal
-    }
-
-    // (4) FLING loose props (2026-07-18, VRmike). Every loose DYNAMIC prop caught in the blast gets
-    // an outward physics shove whose target speed scales LINEARLY with the grenade damage at its
-    // distance (falloff): a close hit launches it, an edge hit just nudges it. Host-authoritative —
-    // it acts on the host's Rapier bodies and rides the existing host→peers prop snapshot stream, so
-    // it reaches everyone with no new netcode. No-op offline (the guard has no physics) and for any
-    // prop without a dynamic body (architecture / capped-static). Disguised PLAYERS are kinematic
-    // and have no dynamic prop body, so they are never flung — only loose world objects fly.
+    // (2) FLING loose props (2026-07-18, VRmike) — APPLIED BEFORE ANY DEATH (2026-07-19). Every
+    // loose DYNAMIC prop caught in the blast gets an outward physics shove whose target speed scales
+    // LINEARLY with the grenade damage at its distance (falloff): a close hit launches it, an edge
+    // hit just nudges it. Host-authoritative — it acts on the host's Rapier bodies and rides the
+    // existing host→peers prop snapshot stream, so it reaches everyone with no new netcode. No-op
+    // offline (the guard has no physics) and for any prop without a dynamic body (architecture /
+    // capped-static). Disguised PLAYERS are kinematic and have no dynamic prop body, so they are
+    // never flung — only loose world objects fly.
+    //   ORDERING FIX (self-kill fling, 2026-07-19): the impulses are applied HERE, BEFORE the damage
+    //   that may kill the thrower (step 3/4). A self-kill ends the round (setPhase ENDING), and the
+    //   physics sim keeps stepping through ENDING now (see tick/integrate) so the flung props still
+    //   fly and settle — death never cancels the physics the blast already earned. Applying the
+    //   shove first makes the "everything bounces after a self-kill" outcome explicit and immune to
+    //   any future early-return in the death path.
     if (this.physics && this.physics.applyBlastImpulse && g.flingSpeed > 0) {
       for (const prop of this.props) {
         const pos = this._propBlastPos(prop);
@@ -986,6 +974,26 @@ export class Referee {
         if (f <= 0) continue;
         this.physics.applyBlastImpulse(prop.id, center, g.flingSpeed * f);
       }
+    }
+
+    // (3) Apply the prop-player damage; track whether any prop player died from THIS blast.
+    let killedProp = false;
+    for (const h of playerHits) {
+      const wasAlive = h.player.alive;
+      this._damagePlayer(hunter, h.player, h.dmg, false);
+      if (wasAlive && !h.player.alive) killedProp = true;
+    }
+
+    // (4) Redemption vs backfire. A prop-player kill restores the thrower to FULL HP (explicit,
+    // even though _damagePlayer's kill-refill already did it) and the backfire is forgiven. Only
+    // if NOBODY died does the backfire land — possibly fatally (a self-kill; the props flung in
+    // step 2 keep flying regardless — see tick/integrate ENDING-phase stepping).
+    let redeemed = false;
+    if (killedProp) {
+      if (hunter.alive) hunter.health = startHealth; // redeemed to full (backfire never applied)
+      redeemed = true;
+    } else if (backfire > 0) {
+      this._damagePlayer(hunter, hunter, backfire, true); // self-inflicted via decoys; may be lethal
     }
 
     this.broadcast({
@@ -1380,6 +1388,14 @@ export class Referee {
     if (this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING) {
       this._sweepSilentPlayers(now); // GHOST-PLAYER TIMEOUT: drop peers that went silent mid-round
       this.integrate(dt);
+    } else if (this.phase === PHASE.ENDING) {
+      // Keep the physics world SIMULATING through the end screen (2026-07-19). A round-ending blast —
+      // most notably a hunter's own grenade self-kill — flings loose props at the same instant the
+      // round flips to ENDING; without stepping here those bodies would freeze mid-air (impulse
+      // applied but never integrated) and "nothing goes flying". Players are frozen during ENDING
+      // (the round's decided — see integrate()), so this only lets the already-moving world settle.
+      // No _sweepSilentPlayers here: nobody should be dropped for going quiet on the results screen.
+      this.integrate(dt);
     }
 
     // Timer-driven phase transitions.
@@ -1458,7 +1474,9 @@ export class Referee {
         // it must also track the visible facing — a rotated table must COLLIDE rotated. Twin of
         // the shot-sensor yaw above. No-op for round/undisguised (symmetric) colliders.
         if (p.disguise && this.physics.setPlayerColliderYaw) this.physics.setPlayerColliderYaw(p.id, p.dispYaw);
-        const frozen = p.role === ROLE.HUNTER && this.phase === PHASE.HIDING;
+        // Freeze player movement during ENDING (round decided — the world keeps stepping only so
+        // blast-flung props settle) and hunters during HIDING (blindfolded pre-round).
+        const frozen = this.phase === PHASE.ENDING || (p.role === ROLE.HUNTER && this.phase === PHASE.HIDING);
         this.physics.setPlayerInput(
           p.id,
           frozen
@@ -1635,6 +1653,12 @@ export class Referee {
       // see memory/architecture.md.
       hunter: p.role === ROLE.HUNTER,
       disguise: p.disguise,
+      // LOOK PITCH (2026-07-19): the hunter's up/down look angle (radians, host-clamped ±1.5 in
+      // applyInput), so remote viewers can tilt the hunter model's head + arm to match where the
+      // player is actually aiming (was always dead-horizontal). Purely visual on the REMOTE soldier
+      // — hitboxes/aim stay host-authoritative. Hunters only (props render as their disguise); null
+      // otherwise keeps the field cheap and unambiguous.
+      pitch: p.role === ROLE.HUNTER ? round3(p.pitch || 0) : null,
       // HELD-TOOL VISIBILITY (B7): the hunter's selected held item, so everyone renders the
       // right thing in their hands. Only meaningful for hunters (null otherwise). Coerced to a
       // valid id so a never-set/garbage value can't reach the renderer as an unknown tool.

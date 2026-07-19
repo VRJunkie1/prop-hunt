@@ -1,5 +1,40 @@
 # Hunter character model (v1) — animated SWAT soldier
 
+## 2026-07-19 — HELD-ITEM FORWARD OFFSET + REMOTE LOOK PITCH (VRmike)
+
+Two remote-model fixes that COMPOSE on one attachment chain (`js/scene.js`, config in
+`character-models.json`). Both are cosmetic-only on the REMOTE soldier — hitboxes/aim stay
+host-authoritative; the LOCAL hunter is first-person and renders none of this. Headless can't render,
+so both are HOT-TUNABLE and OWED a live confirm.
+
+**1) Held item floated ~0.2 m BEHIND the hand on remote views.** The rifle/grenade/finder are already
+parented to the `Wrist.R` bone (joint-local, good), so the fix is a forward NUDGE, not a reparent. New
+`weapon.forwardOffset` (m, default **0.2**). `_buildHunterModel` adds it to all three held meshes'
+positions along the **bone-LOCAL forward** direction — derived by `_boneLocalDir(bone, group, 0,0,-1)`
+(the character's world-forward is group −Z at build time; the bone's world orientation and the group
+direction both carry the later yaw, so the local axis is yaw-INDEPENDENT) and converted to bone-local
+units via `_boneWorldScale` (the bone carries the sized group scale × armature 100×). Because it's
+bone-local it RIDES the arm when it tilts with pitch (below) — no world/yaw offset that would break at
+non-level pitch. Tune: raise if it still trails, 0 disables, negative if now too far forward.
+
+**2) Remote hunter models always aimed dead-horizontal.** The snapshot didn't carry look pitch (yaw did,
+so models turned but never looked up/down). Added: `referee.broadcastSnapshot` now rides `pitch` per
+HUNTER player entry (host-clamped ±1.5 rad in `applyInput`; null for props — see `notes/netcode.md`).
+New `hunter.pitch` config block names the bones + clamps. `_buildPitchRig` resolves `Head` +
+`UpperArm.R` (the right upper-arm carries the wrist + held item, so the gun rides the tilt) and
+precomputes each bone's LOCAL rotation axis = the character's left-right axis (`_boneLocalDir(...,1,0,0)`
+= group +X) so pitch is a rig-correct nod without hand-solving Euler angles. `syncPlayers` stashes
+`p.pitch` → `ctl.targetPitch`; `updateAnimations` calls `_applyLookPitch` AFTER `mixer.update` (adds on
+top of the pose — no accumulation, verified both bones ARE animated every clip via
+`tools/_probe_bones.mjs`, so the mixer resets them each frame). It smooths `curPitch`→target, SIGN-corrects,
+and CLAMPS to `maxUpDeg`/`maxDownDeg` (45/40°) so extreme pitch can't fold the model. Tune: flip `sign`
+if up/down inverted, `headFactor`/`armFactor` for follow amount, tighten clamps, `smooth` (0..1/frame).
+
+**Invariant for future model work:** the held item is JOINT-PARENTED to `Wrist.R` with a bone-LOCAL
+forward offset, and pitch tilts the `UpperArm.R`/`Head` bones. Keep the offset bone-local (never
+world/yaw) so the two fixes keep composing. Guard: `tools/check-hunter-model.mjs` §5 (config + bones
+real in GLB + referee broadcasts pitch + scene helpers + offset is bone-local + pitch applied post-mixer).
+
 ## 2026-07-18 B7 — HELD TOOL now visible on the model (VRmike)
 
 The remote hunter's held item is no longer always the rifle. The hunter's SELECTED tool is now

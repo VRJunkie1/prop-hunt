@@ -57,6 +57,15 @@ silence threshold, both directions (host→guest sweep and guest→host watchdog
 recovery path (small + safe; easy follow-up if wanted). Host detecting total peer loss is NOT added
 (host alone is valid). No protocol change; no host/referee change.
 
+## 2026-07-19 LOOK PITCH — snapshot gains `pitch` (VRmike)
+Remote hunter models aimed dead-horizontal (yaw was networked, pitch wasn't). NEW snapshot player
+field `pitch` (radians, host-authoritative — already stored as `player.pitch` from `C2S.INPUT`,
+clamped ±1.5 in `applyInput`; broadcast for HUNTERS only, null otherwise — props render as their
+disguise). One small float/player, negligible bandwidth, no new C2S message (pitch already rode
+INPUT). Rides all snapshot variants free (they spread `...full` players). Purely cosmetic on the
+remote soldier: `scene.js` tilts its head + arm to it (see `notes/hunter-character-model.md`) —
+hitboxes/aim stay host-authoritative. Guard: `tools/check-hunter-model.mjs` §5.
+
 ## 2026-07-18 HELD-TOOL SYNC — snapshot gains `tool` (B7, VRmike)
 The hunter's selected tool now travels over the wire so others render the right held item.
 NEW `C2S.SELECT_TOOL {tool}` (client → host, deduped, living-hunter-only) + NEW snapshot player

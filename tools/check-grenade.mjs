@@ -417,6 +417,53 @@ ok(Number.isFinite(gcfg.flingSpeed) && gcfg.flingSpeed > 0, `resolveGrenadeCfg e
   const blast = (ref.match(/_resolveGrenadeBlast\s*\(hunter, center\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
   ok(/this\.physics\s*&&\s*this\.physics\.applyBlastImpulse/.test(blast), '_resolveGrenadeBlast calls applyBlastImpulse only when physics is present (offline-safe)');
   ok(/flingSpeed\s*\*\s*f/.test(blast), 'the fling speed is flingSpeed × falloff (linear to the damage the prop took)');
+  // ORDERING (2026-07-19 self-kill fling): the fling loop must sit BEFORE the damage that can kill the
+  // thrower, so a round-ending self-kill can't cancel the shove. Assert the applyBlastImpulse loop
+  // precedes the backfire self-damage call in the source.
+  const flingIdx = blast.indexOf('applyBlastImpulse');
+  const backfireIdx = blast.indexOf('this._damagePlayer(hunter, hunter, backfire');
+  ok(flingIdx > -1 && backfireIdx > -1 && flingIdx < backfireIdx,
+    'the fling impulses are applied BEFORE the backfire self-damage (death never cancels the shove)');
+  // PHYSICS KEEPS STEPPING THROUGH ENDING so the flung props actually fly + settle after a self-kill.
+  const tick = (ref.match(/tick\s*\(\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
+  ok(/PHASE\.ENDING[\s\S]*?this\.integrate\(dt\)/.test(tick),
+    'tick() steps the physics world during ENDING too (blast-flung props settle instead of freezing)');
+  const integ = (ref.match(/integrate\s*\(dt\)\s*\{[\s\S]*?\n  \}/) || [''])[0];
+  ok(/this\.phase\s*===\s*PHASE\.ENDING/.test(integ),
+    'integrate() freezes player movement during ENDING (only the flung world settles, players do not roam the results screen)');
+}
+
+// ---------------------------------------------------------------------------
+// J) SELF-KILL FLING (2026-07-19, VRmike): a hunter's own grenade that KILLS the hunter (backfire off
+//    decoys, no prop-kill redemption) must STILL fling every loose prop in range — the round ends but
+//    the physics the blast earned is never cancelled. Regression guard for "grenade backfire cancels
+//    the fling".
+// ---------------------------------------------------------------------------
+console.log('\nJ) self-kill fling: a lethal backfire still flings every loose prop in range');
+{
+  const t = makeTable();
+  // ONE hunter (so their death ends the round) with LOW HP, standing on a pile of DECOYS at the blast
+  // centre — enough that the flat backfire is lethal. No prop PLAYERS => no redemption => the hunter dies.
+  const H = t.add('H', ROLE.HUNTER, 0, 0, 0, { health: baseHP }); // one direct decoy hit (base×1) is lethal
+  const decoys = [
+    { id: 'D0', type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },
+    { id: 'D1', type: 'burger', disguisable: true, x: 0, y: 0, z: 0.01 },
+    { id: 'D2', type: 'burger', disguisable: true, x: 0.01, y: 0, z: 0 },
+  ];
+  t.ref.props = decoys;
+  const flings = [];
+  t.ref.physics = {
+    applyBlastImpulse: (propId, center, speed) => { flings.push({ propId, center, speed }); return true; },
+    destroy: () => {},
+  };
+  t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
+
+  ok(H.alive === false, 'the thrower self-kills on the decoy backfire (no prop-kill redemption)');
+  ok(t.ref.phase === PHASE.ENDING, 'the self-kill ends the round (last hunter dead => PROPS win, phase ENDING)');
+  const flungIds = new Set(flings.map((f) => f.propId));
+  ok(decoys.every((d) => flungIds.has(d.id)), 'EVERY loose prop in range is still flung despite the thrower dying in the blast');
+  ok(flings.every((f) => f.speed > 0), 'the fling impulses carry real (positive) speed — the shove is not zeroed by the death');
+  t.ref.destroy();
 }
 
 console.log(fails ? `\nFAILED (${fails})` : '\nAll hunter-grenade checks passed.');

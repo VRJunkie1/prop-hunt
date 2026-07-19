@@ -867,7 +867,12 @@ export class Scene3D {
       entry.mesh.visible = p.alive;
       // HELD-TOOL VISIBILITY (B7): show the tool this hunter has selected (host-synced `tool`).
       // Cheap no-op when unchanged; only hunter entries carry a hunterCtl.
-      if (entry.hunterCtl) this._applyHeldTool(entry.hunterCtl, p.tool);
+      if (entry.hunterCtl) {
+        this._applyHeldTool(entry.hunterCtl, p.tool);
+        // LOOK PITCH (2026-07-19): stash the networked look pitch; updateAnimations tilts the head
+        // + arm toward it each frame (smoothed + clamped). Absent/null (props) → stays level.
+        entry.hunterCtl.targetPitch = Number.isFinite(p.pitch) ? p.pitch : 0;
+      }
     }
     // Remove players no longer present.
     for (const [id, entry] of this.players) {
@@ -1429,6 +1434,18 @@ export class Scene3D {
         bone.add(root);
         heldTools[toolId] = root;
       }
+      // HELD-ITEM FORWARD OFFSET (2026-07-19, VRmike): the held item rendered ~0.2 m BEHIND the
+      // hand on remote views. Nudge ALL three held meshes forward along the hunter's FACING,
+      // expressed in the wrist bone's LOCAL frame (so it rides the arm when it tilts with look
+      // pitch — see _applyLookPitch). Hot-tunable via weapon.forwardOffset (metres; 0 disables).
+      const fwdMeters = wcfg.forwardOffset;
+      if (Number.isFinite(fwdMeters) && fwdMeters !== 0) {
+        const off = this._boneLocalDir(bone, group, 0, 0, -1).multiplyScalar(fwdMeters / this._boneWorldScale(bone, group));
+        for (const toolId of ['rifle', 'finder', 'grenade']) {
+          const m = heldTools[toolId];
+          if (m) m.position.add(off);
+        }
+      }
     } else if (wcfg && wcfg.model && !bone) {
       console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
     }
@@ -1456,6 +1473,11 @@ export class Scene3D {
       minTS: a.minTimeScale > 0 ? a.minTimeScale : 0.5,
       maxTS: a.maxTimeScale > 0 ? a.maxTimeScale : 1.8,
       fade: a.crossfadeSeconds >= 0 ? a.crossfadeSeconds : 0.15,
+      // LOOK PITCH (2026-07-19): tilt the head + right upper-arm to the networked look pitch each
+      // frame (after the mixer poses the rig), so a remote hunter aims up/down instead of dead-level.
+      pitch: this._buildPitchRig(cm.pitch, inner, group),
+      targetPitch: 0, // last networked pitch (rad); set per snapshot in syncPlayers
+      curPitch: 0,    // smoothed toward targetPitch in _applyLookPitch
     };
     group.userData.hunterCtl = ctl;
     // Start on idle so a fresh hunter isn't frozen in bind pose for a beat.
@@ -1521,6 +1543,9 @@ export class Scene3D {
         this._playHunterState(ctl, stateName, ts);
       }
       ctl.mixer.update(dt);
+      // LOOK PITCH (2026-07-19): tilt head + arm to the networked pitch, ON TOP of the pose the
+      // mixer just applied (so it isn't overwritten). Purely visual; no-op without a pitch rig.
+      this._applyLookPitch(ctl);
 
       // RUNTIME TRIPWIRE (?debug=1). After the first animated frame, measure the hunter's
       // REAL on-screen height from its bones (the same measurement the size check asserts)
@@ -1594,6 +1619,68 @@ export class Scene3D {
     const nativeLen = Math.max(size.x, size.y, size.z) || 1;
     root.scale.setScalar(worldLen / (boneScale * nativeLen));
     root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  }
+
+  // Mean world scale of a bone under the sized group (group scale × armature baked 100× × parent
+  // bones). Used to convert a WORLD-space length into the bone's LOCAL units. Same read as
+  // _scaleHeldToBone. Requires the group's matrices to be current (caller updates once).
+  _boneWorldScale(bone, group) {
+    group.updateMatrixWorld(true);
+    const bs = new THREE.Vector3();
+    bone.getWorldScale(bs);
+    return (Math.abs(bs.x) + Math.abs(bs.y) + Math.abs(bs.z)) / 3 || 1;
+  }
+
+  // Convert a direction given in the GROUP's frame (gx,gy,gz) into the bone's LOCAL frame, as a
+  // UNIT vector. At build time the group is unrotated (yaw is applied later per snapshot) with the
+  // model's yawOffsetDeg baked into `inner`, so the character's world-forward is group -Z and its
+  // right is group +X. Because the bone's world orientation and the group direction both carry the
+  // (later) yaw rotation, the derived LOCAL axis is yaw-INDEPENDENT — so an offset/rotation about
+  // it stays correct as the hunter turns, and rides the arm as it tilts with pitch.
+  _boneLocalDir(bone, group, gx, gy, gz) {
+    group.updateMatrixWorld(true);
+    const q = bone.getWorldQuaternion(new THREE.Quaternion());
+    return new THREE.Vector3(gx, gy, gz).applyQuaternion(q.invert()).normalize();
+  }
+
+  // Build the look-pitch rig from the config block: resolve the head + arm bones (tolerant name
+  // match) and precompute each one's LOCAL rotation axis (the character's left-right axis, group
+  // +X — a nod/aim tilt) so _applyLookPitch can add pitch on top of the animation each frame
+  // without solving Euler angles by hand. Returns null (no-op) when the config or bones are absent.
+  _buildPitchRig(pcfg, inner, group) {
+    if (!pcfg || typeof pcfg !== 'object') return null;
+    const D = Math.PI / 180;
+    const head = pcfg.headBone ? findBone(inner, pcfg.headBone) : null;
+    const arm = pcfg.armBone ? findBone(inner, pcfg.armBone) : null;
+    if (!head && !arm) return null;
+    // group +X = the character's RIGHT axis (see _boneLocalDir) — the pitch/nod rotation axis.
+    return {
+      head,
+      arm,
+      headAxis: head ? this._boneLocalDir(head, group, 1, 0, 0) : null,
+      armAxis: arm ? this._boneLocalDir(arm, group, 1, 0, 0) : null,
+      sign: pcfg.sign < 0 ? -1 : 1,
+      headFactor: Number.isFinite(pcfg.headFactor) ? pcfg.headFactor : 0.8,
+      armFactor: Number.isFinite(pcfg.armFactor) ? pcfg.armFactor : 1.0,
+      maxUp: (Number.isFinite(pcfg.maxUpDeg) ? pcfg.maxUpDeg : 45) * D,
+      maxDown: (Number.isFinite(pcfg.maxDownDeg) ? pcfg.maxDownDeg : 40) * D,
+      smooth: pcfg.smooth > 0 && pcfg.smooth <= 1 ? pcfg.smooth : 0.35,
+    };
+  }
+
+  // Tilt a hunter's head + arm to its networked look pitch. Called each frame from updateAnimations
+  // AFTER mixer.update poses the rig (so this ADDS on top of the animation, no accumulation across
+  // frames — the mixer resets the bone quaternions every frame). Smoothed toward the last networked
+  // pitch and CLAMPED so an extreme look angle can't fold the model. Purely visual.
+  _applyLookPitch(ctl) {
+    const pc = ctl.pitch;
+    if (!pc) return;
+    // Smooth toward the networked target (a low snapshot rate would otherwise step the head/arm).
+    ctl.curPitch += ((ctl.targetPitch || 0) - ctl.curPitch) * pc.smooth;
+    // Sign-correct then clamp to the sane up/down band (radians).
+    const a = Math.max(-pc.maxDown, Math.min(pc.maxUp, ctl.curPitch * pc.sign));
+    if (pc.head && pc.headAxis) pc.head.rotateOnAxis(pc.headAxis, a * pc.headFactor);
+    if (pc.arm && pc.armAxis) pc.arm.rotateOnAxis(pc.armAxis, a * pc.armFactor);
   }
 
   // Show ONLY the mesh for `toolId` on this hunter's wrist (host-synced `tool`; unknown/missing

@@ -79,6 +79,34 @@ Grenades now FLING loose dynamic props caught in the blast, with force LINEAR to
   physics → still damages + skips fling (no throw); plus source asserts for the physics primitive
   (outward/mass-scaled/wake/guarded) + the offline-safe host gating.
 
+## SELF-KILL FLING — the blast still throws everything even when it kills the thrower (2026-07-19, VRmike)
+
+Symptom: when the hunter's OWN grenade killed the hunter (backfire self-kill), nothing went flying —
+the fling was cancelled. Desired: everything still bounces (it's funnier after a self-kill).
+
+Root cause (an ORDERING/lifecycle bug, not an early-return): `_resolveGrenadeBlast` DID apply the
+fling impulses, but they were applied AFTER the backfire self-damage. A self-kill = the last hunter
+dies → `checkRoundOver` → `endRound(PROP)` → `setPhase(ENDING)`. The physics world only STEPS during
+HIDING/HUNTING (`tick` gated `integrate`), so the instant the round flipped to ENDING the sim froze:
+the impulse was applied to the Rapier bodies but never integrated into motion → props stuck mid-blast.
+
+Fix (two parts, `shared/referee.js`):
+1. **Order:** the fling loop is now step (2) of `_resolveGrenadeBlast`, applied BEFORE any prop/backfire
+   damage (steps 3–4). Death never cancels the shove the blast already earned. (Defensive — with part 2
+   the physics runs regardless of order, but this makes intent explicit + immune to a future early-return.)
+2. **Keep stepping through ENDING:** `tick()` now also calls `integrate(dt)` during `PHASE.ENDING`, and
+   `integrate` FREEZES all player movement during ENDING (`frozen = phase===ENDING || (hunter && HIDING)`).
+   So the flung props actually fly + settle on the results screen, `awakeProps()` keeps broadcasting them
+   (broadcastSnapshot already ran during ENDING), and nobody roams the end screen. `_sweepSilentPlayers`
+   is NOT run during ENDING (nobody's dropped for going quiet on the results screen). The ENDING→next-round
+   timer transition is unchanged.
+
+Guard: `tools/check-grenade.mjs` §J — a lone hunter self-kills on a decoy pile (no prop-kill redemption);
+assert the thrower dies, the round flips to ENDING, and EVERY loose prop in range still received a
+positive fling impulse. Plus §I source asserts: the fling loop precedes the backfire self-damage; `tick`
+steps physics during ENDING; `integrate` freezes players during ENDING. Live-confirm the props actually
+tumble on both screens after a self-kill (headless can't render the motion).
+
 ## Netcode (host-authoritative, matches the rifle)
 
 `C2S.GRENADE {dx,dy,dz}` → `referee.applyGrenade`:

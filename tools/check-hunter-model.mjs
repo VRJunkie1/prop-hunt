@@ -145,6 +145,40 @@ ok(/scene\.updateAnimations\(/.test(mainSrc), 'js/main.js drives scene.updateAni
 ok(/buildWorld\([^)]*characterModels\b/.test(mainSrc), 'js/main.js passes the character-model registry into buildWorld');
 
 // ---------------------------------------------------------------------------
+// 5) HELD-ITEM FORWARD OFFSET + REMOTE LOOK PITCH (2026-07-19, VRmike). The held item drifted ~0.2 m
+//    BEHIND the hand on remote views, and remote hunter models always aimed dead-horizontal. Both are
+//    cosmetic-only (remote models); headless can't RENDER them, so assert the config + the wiring that
+//    makes the fixes compose (offset is bone-local so it rides the pitched arm).
+// ---------------------------------------------------------------------------
+// Config: forward offset lives on the weapon block, and the pitch rig on the hunter block.
+ok(Number.isFinite(weapon.forwardOffset), `hunter.weapon.forwardOffset is a number (held-item forward nudge, m) — got ${weapon.forwardOffset}`);
+ok(hunter.pitch && typeof hunter.pitch === 'object', 'hunter.pitch rig block exists (remote look-pitch config)');
+if (hunter.pitch) {
+  const p = hunter.pitch;
+  ok(typeof p.headBone === 'string' && typeof p.armBone === 'string', `hunter.pitch names the head + arm bones (${p.headBone} / ${p.armBone})`);
+  ok(Number.isFinite(p.maxUpDeg) && Number.isFinite(p.maxDownDeg) && p.maxUpDeg > 0 && p.maxDownDeg > 0, 'hunter.pitch clamps up/down (maxUpDeg/maxDownDeg > 0, so extreme pitch cannot fold the model)');
+  // The named bones must be REAL joints in the GLB (tolerant of GLTFLoader name sanitization).
+  const norm = (s) => String(s || '').replace(/[\s._:|-]/g, '').toLowerCase();
+  const buf = readFileSync(join(root, 'assets', hunter.model));
+  const jlen = buf.readUInt32LE(12);
+  const gj = JSON.parse(buf.toString('utf8', 20, 20 + jlen));
+  const boneNames = new Set((gj.nodes || []).map((n) => norm(n.name)));
+  ok(boneNames.has(norm(p.headBone)), `hunter.pitch.headBone "${p.headBone}" is a real bone in the GLB`);
+  ok(boneNames.has(norm(p.armBone)), `hunter.pitch.armBone "${p.armBone}" is a real bone in the GLB`);
+}
+// Referee: the snapshot carries per-hunter look pitch so remote models can tilt to it.
+const refSrc2 = read('shared', 'referee.js');
+ok(/pitch:\s*p\.role\s*===\s*ROLE\.HUNTER/.test(refSrc2), 'referee broadcasts a hunter look `pitch` in each snapshot player entry');
+// Scene: the helpers exist, the forward offset is applied bone-local, and pitch is applied per frame.
+for (const m of ['_buildPitchRig', '_applyLookPitch', '_boneLocalDir', '_boneWorldScale']) {
+  ok(defines(m), `js/scene.js defines ${m}()`);
+}
+ok(/forwardOffset/.test(sceneSrc), 'js/scene.js reads weapon.forwardOffset (held-item forward nudge)');
+ok(/_boneLocalDir\([^)]*0,\s*0,\s*-1\)/.test(sceneSrc), 'the held-item offset is expressed along the bone-LOCAL forward (rides the pitched arm), not a world/yaw offset');
+ok(/mixer\.update\([^)]*\)\s*;?[\s\S]{0,400}_applyLookPitch/.test(sceneSrc), 'updateAnimations applies look pitch AFTER mixer.update (adds on top of the pose, no accumulation)');
+ok(/targetPitch\s*=\s*Number\.isFinite\(p\.pitch\)/.test(sceneSrc), 'syncPlayers stashes the networked pitch onto the hunter controller (targetPitch)');
+
+// ---------------------------------------------------------------------------
 if (fails) {
   console.error(`\nhunter-model check FAILED (${fails} problem${fails > 1 ? 's' : ''})`);
   process.exit(1);

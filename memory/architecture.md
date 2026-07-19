@@ -180,7 +180,12 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   subsystem here — rig-safe `SkeletonUtils.clone` per hunter, an `AnimationMixer` whose
   idle/run state machine is driven by velocity DERIVED from successive snapshots, and a
   rifle parented to the `Wrist.R` bone. The LOCAL hunter never renders it (stays
-  first-person). Registry: `cfg.characterModels`. Detail:
+  first-person). Registry: `cfg.characterModels`. **HELD-ITEM OFFSET + LOOK PITCH (2026-07-19):** the
+  held item (rifle/grenade/finder) is nudged forward along the wrist bone's LOCAL forward
+  (`weapon.forwardOffset` 0.2 m) so it sits IN the hand on remote views (was ~0.2 m behind); and the
+  remote model's `Head` + `UpperArm.R` tilt to the networked look `pitch` (new snapshot field, hunters
+  only), clamped, applied post-mixer in `updateAnimations` (bone-local so the item rides the pitched
+  arm). Both cosmetic-only + hot-tunable (`hunter.pitch` block). Detail:
   `memory/notes/hunter-character-model.md`. **Flicker/strobe fix (2026-07-13):** every
   PLAYER-ATTACHED mesh (skinned hunter, disguise GLB/primitive, capsule) is built through
   the ONE choke point `meshForPlayer` → module-level `preparePlayerModel(root)`, which
@@ -393,12 +398,17 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   stored outer of 3 (VRmike's ask); pure `grenadeFalloff` in `shared/damage.js` (d≤1 full, d=2 half,
   d=2.99 ~0, d≥3 zero). Broadcasts `S2C.EVENT kind:'grenade'` for everyone's 3D explosion
   (`scene.spawnExplosion`) + a distance-scaled local screen flash (`scene.blastFlashAt` →
-  `ui.flashScreen`). **FLING (2026-07-18):** step (4) of `_resolveGrenadeBlast` also shoves every loose
+  `ui.flashScreen`). **FLING (2026-07-18):** `_resolveGrenadeBlast` also shoves every loose
   DYNAMIC prop in range OUTWARD via NEW `physics.applyBlastImpulse(id,center,flingSpeed×falloff)` —
   speed LINEAR to the damage (close=big fling, edge=nudge), mass-scaled (+0.35 up bias), reusing the
   same `outer`/`grenadeFalloff` (no new balance math); host-authoritative on the Rapier bodies, rides
   the existing awake-prop snapshot stream (no new netcode). Disguised PLAYERS are kinematic → never
-  flung (only world objects fly). `rules.grenade.flingSpeed` (32 since 2026-07-19 ×4 balance tweak, VRmike; was 8; 0 disables). Guard: `tools/check-grenade.mjs`. Detail: `notes/hunter-grenades.md`.
+  flung (only world objects fly). `rules.grenade.flingSpeed` (32 since 2026-07-19 ×4 balance tweak, VRmike; was 8; 0 disables).
+  **SELF-KILL FLING FIX (2026-07-19):** the fling is now step (2), applied BEFORE the prop/backfire
+  damage — a self-kill (thrower dies → round ends → `setPhase(ENDING)`) no longer cancels it; and
+  `tick()` keeps `integrate()` STEPPING during ENDING (players frozen) so the flung props actually fly
+  + settle on the results screen instead of freezing mid-blast. Guard: `tools/check-grenade.mjs` §J.
+  Detail: `notes/hunter-grenades.md`.
 
 ## Shared (`shared/`)
 
