@@ -136,33 +136,47 @@ export class Session {
     this.conn = null;
     this._connectTimer = null;
 
-    // ---- ping/pong RTT (debug menu only) ------------------------------------
-    // peerId -> last measured round-trip in ms. Filled by _sendPings()/the pong reply
-    // handler ONLY after enablePing() is called (js/main.js does that solely under
-    // ?debug=1), so normal play sends zero ping traffic. The pong REPLY handler is always
-    // present but only fires if a peer actually pings us — harmless in a normal match.
-    // The debug panel reads this map; peer ids equal player ids in this game.
+    // ---- keepalive pings (CONNECTION LIVENESS, 2026-07-19, VRmike) -----------
+    // A dedicated ~1Hz heartbeat in BOTH directions (host↔guest), started as soon as the link
+    // opens and running for the whole session — now the SINGLE source of truth for "still
+    // connected". It is NOT gameplay: tiny {t:'__ping'} frames, intercepted before the referee
+    // (_handlePingPong), fail-silent. Why a SEPARATE 1Hz timer and not just the input/snapshot
+    // streams: a backgrounded tab holding a live WebRTC connection still fires setInterval at ~1Hz
+    // (never frozen), so this heartbeat keeps flowing while the app is in the background — an
+    // AFK-but-connected player therefore never LOOKS disconnected (input-based liveness is gone).
+    // An incoming ping/pong stamps liveness (host → referee.markSeen; guest → onKeepalive → the
+    // host watchdog). peerId -> last measured round-trip in ms is a free by-product the debug
+    // panel reads for RTT; peer ids equal player ids in this game.
     this.pings = new Map();
-    this._pingOn = false;
     this._pingTimer = null;
+    // Guest-only hook: called when an incoming host keepalive proves the host is alive, so main.js
+    // can feed the host watchdog from PINGS as well as snapshots (symmetry with the host sweep).
+    this.onKeepalive = () => {};
   }
 
-  // Start measuring per-peer RTT (debug menu). A guest pings the host; a host pings each
-  // guest. Idempotent + safe to call before the link is open (sends no-op until it is).
-  enablePing() {
-    if (this._pingOn) return;
-    this._pingOn = true;
+  // Begin the ~1Hz keepalive heartbeat (both directions). Called once the link is open (host: on
+  // peer 'open'; guest: on conn 'open'). Idempotent + safe to call early — _sendPings() no-ops
+  // until a connection is actually open. Cleared in _teardown so a dead session leaks no timer.
+  _startKeepalive() {
+    if (this._pingTimer) return;
     this._pingTimer = setInterval(() => this._sendPings(), 1000);
   }
 
+  // Emit one keepalive to every open peer. FAIL-SILENT by contract: a send that throws (a channel
+  // closing mid-flight) must never crash the game loop — the liveness sweep/watchdog handle a
+  // genuinely dead link, so a dropped ping here is a no-op, not an error.
   _sendPings() {
     const ts = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    if (this.isHost) {
-      for (const { conn } of this.conns.values()) {
-        if (conn && conn.open) conn.send({ t: '__ping', ts });
+    try {
+      if (this.isHost) {
+        for (const { conn } of this.conns.values()) {
+          if (conn && conn.open) conn.send({ t: '__ping', ts });
+        }
+      } else if (this.conn && this.conn.open) {
+        this.conn.send({ t: '__ping', ts });
       }
-    } else if (this.conn && this.conn.open) {
-      this.conn.send({ t: '__ping', ts });
+    } catch {
+      /* keepalive is fail-silent — never let a failed send bubble up */
     }
   }
 
@@ -172,15 +186,29 @@ export class Session {
   _handlePingPong(m, peerId, reply) {
     if (!m || typeof m !== 'object') return false;
     if (m.t === '__ping') {
+      this._markAlive(peerId); // an incoming keepalive is proof the peer is still connected
       reply({ t: '__pong', ts: m.ts });
       return true;
     }
     if (m.t === '__pong') {
+      this._markAlive(peerId); // a pong reply is equally proof of life
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       if (Number.isFinite(m.ts)) this.pings.set(peerId, Math.max(0, Math.round(now - m.ts)));
       return true;
     }
     return false;
+  }
+
+  // A keepalive frame arrived from `peerId` — stamp CONNECTION LIVENESS. On the HOST that means
+  // refreshing that guest's _lastSeen (referee.markSeen) so the silent-player sweep only ever
+  // removes a genuinely dead connection — pings, never input, are the liveness signal. On a GUEST
+  // it means the host is alive, so main.js feeds the host watchdog via onKeepalive.
+  _markAlive(peerId) {
+    if (this.isHost) {
+      if (this.referee) this.referee.markSeen(peerId);
+    } else {
+      this.onKeepalive();
+    }
   }
 
   // ---- public API ---------------------------------------------------------
@@ -246,6 +274,9 @@ export class Session {
       // nudge (main.js) converges to a no-op because serverSelf tracks our
       // prediction almost exactly. Guests still predict against a real round trip.
       this.referee.addPlayer({ id, name: this.name, send: (obj) => this.onMessage(obj) });
+      // CONNECTION LIVENESS: begin the ~1Hz keepalive to every guest (it no-ops until a guest's
+      // conn is open). Incoming guest pings stamp each guest's liveness (_markAlive → markSeen).
+      this._startKeepalive();
     });
 
     // Each guest that connects to us arrives here.
@@ -379,6 +410,9 @@ export class Session {
       clearTimeout(this._connectTimer);
       // Diagnostic: report how we reached the host (direct vs relayed).
       this._reportLink(conn.peerConnection, this.selfId);
+      // CONNECTION LIVENESS: start pinging the host ~1Hz. Incoming host keepalives feed the host
+      // watchdog (via onKeepalive), proving the host alive even between/independent of snapshots.
+      this._startKeepalive();
     });
     conn.on('data', (m) => {
       if (!m || typeof m !== 'object') return;
@@ -434,7 +468,6 @@ export class Session {
     clearTimeout(this._connectTimer);
     if (this._pingTimer) clearInterval(this._pingTimer);
     this._pingTimer = null;
-    this._pingOn = false;
     if (this.referee) {
       this.referee.destroy();
       this.referee = null;

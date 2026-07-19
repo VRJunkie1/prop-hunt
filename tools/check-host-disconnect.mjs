@@ -222,6 +222,19 @@ console.log('\nD) source: client + net.js wiring');
   ok(/conn\.on\('close', \(\) => \{[\s\S]{0,120}?this\.onStatus\('closed'/.test(net),
      "net.js still routes a graceful host close to onStatus('closed') (both loud signals, one place)");
 
+  // CONNECTION LIVENESS VIA KEEPALIVE PINGS (2026-07-19, VRmike). The watchdog is now fed by PINGS
+  // as well as snapshots, so a throttled-but-alive host that briefly stalls its snapshot stream is
+  // still held up by its ~1Hz keepalive — only a GENUINELY dead link (pings stopped) boots the guest.
+  ok(/session\.onKeepalive\s*=\s*\(\)\s*=>\s*hostWatchdog\.feed\(/.test(main),
+     'main.js feeds the host watchdog from keepalive PINGS as well as snapshots (onKeepalive → hostWatchdog.feed)');
+  ok(/_startKeepalive\s*\(\)\s*\{/.test(net), 'net.js runs an always-on ~1Hz keepalive (_startKeepalive), both directions');
+  ok(/_markAlive\s*\(peerId\)/.test(net) && /this\.onKeepalive\(\)/.test(net),
+     'net.js stamps liveness on an incoming ping/pong (_markAlive → guest onKeepalive)');
+  ok(/this\.referee\.markSeen\(/.test(net), 'net.js host path stamps guest liveness via referee.markSeen on incoming pings');
+  const ref = readText('shared', 'referee.js');
+  ok(/markSeen\s*\(id\)\s*\{[\s\S]{0,160}?_lastSeen\s*=\s*Date\.now\(\)/.test(ref),
+     'referee.markSeen(id) stamps the SAME _lastSeen the silent-player sweep reads (pings, not input, are the liveness signal)');
+
   const wdSrc = readText('js', 'host-watchdog.js');
   ok(!/document|window|import /.test(wdSrc), 'host-watchdog.js is PURE (no DOM / no imports) so it is unit-testable + host-safe');
   ok(/export class HostWatchdog/.test(wdSrc), 'host-watchdog.js exports HostWatchdog');

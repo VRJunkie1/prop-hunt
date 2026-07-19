@@ -107,13 +107,17 @@ export class Referee {
 
     this.lastTick = Date.now();
     this.lastSnapshot = 0;
-    // GHOST-PLAYER TIMEOUT (B2, 2026-07-18). A peer whose phone locks or whose signal drops
-    // SILENTLY never fires a WebRTC 'close', so the graceful-leave path (net.js → removePlayer)
-    // never runs and they linger as an uncontrolled ghost. We stamp `player._lastSeen` on every
-    // C2S message (handleMessage) and, during an active round, sweep out anyone silent longer than
-    // this window (tick → _sweepSilentPlayers). INPUT rides at 20Hz all through HIDING/HUNTING, so
-    // a genuinely-connected client is never silent; only a dropped one goes quiet. See rules.json.
-    this._leaveTimeoutMs = Math.max(0, (this.rules.leaveTimeoutSeconds != null ? this.rules.leaveTimeoutSeconds : 5) * 1000);
+    // CONNECTION LIVENESS (2026-07-19, VRmike; was GHOST-PLAYER TIMEOUT B2). A peer whose phone
+    // locks or whose signal drops SILENTLY never fires a WebRTC 'close', so the graceful-leave path
+    // (net.js → removePlayer) never runs and they'd linger as an uncontrolled ghost. Liveness is
+    // judged by the LAST MESSAGE OF ANY KIND: `player._lastSeen` is stamped on every C2S message
+    // (handleMessage) AND on every dedicated keepalive ping (net.js → markSeen). During an active
+    // round the tick sweeps out anyone silent longer than this window (_sweepSilentPlayers). It is
+    // NEVER judged by input specifically — a ~1Hz keepalive ping flows both directions regardless of
+    // movement, so an AFK-but-connected player (idle in the bathroom) keeps their _lastSeen fresh and
+    // is NEVER swept; only a genuinely dead connection goes fully silent. leaveTimeoutSeconds (15s)
+    // tolerates the multi-second jitter of a backgrounded WebRTC tab — see notes/disconnect-diagnosis.md.
+    this._leaveTimeoutMs = Math.max(0, (this.rules.leaveTimeoutSeconds != null ? this.rules.leaveTimeoutSeconds : 15) * 1000);
     // Per-round record of which teams have EVER had a member this round (set at round start +
     // whenever a player joins/switches onto a team). checkRoundOver reads these so a team emptied
     // by a LEAVE (which removes the player from the roster, erasing the roster-count evidence that
@@ -250,13 +254,15 @@ export class Referee {
     this.broadcastLobby();
   }
 
-  // GHOST-PLAYER TIMEOUT (B2, 2026-07-18). Called each tick during an active round. A connected
-  // client streams INPUT at 20Hz all through HIDING/HUNTING, so a peer that has sent NOTHING for
-  // _leaveTimeoutMs has genuinely dropped (phone locked, signal lost) WITHOUT a WebRTC 'close' —
-  // the exact case that used to leave an uncontrolled ghost standing in the round. Remove them the
-  // same way a graceful leave does. Two guards keep it safe: (1) the HOST is never swept — the
-  // referee lives in its tab, so if it were gone nothing would be running; (2) disabled if the
-  // timeout is 0. Collect-then-remove so we don't mutate the map mid-iteration.
+  // CONNECTION LIVENESS SWEEP (2026-07-19, VRmike; was GHOST-PLAYER TIMEOUT B2). Called each tick
+  // during an active round. Liveness is the LAST MESSAGE OF ANY KIND (keepalive ping or any C2S) —
+  // NEVER input specifically — so a peer that has sent NOTHING for _leaveTimeoutMs has a genuinely
+  // dead connection (tab closed, phone asleep, signal lost) with NO WebRTC 'close'. A dedicated
+  // ~1Hz keepalive ping flows both directions regardless of movement, so an AFK-but-connected
+  // player keeps their _lastSeen fresh and is NEVER swept — only a truly dead link goes silent.
+  // Remove a swept peer the same way a graceful leave does. Two guards keep it safe: (1) the HOST
+  // is never swept — the referee lives in its tab, so if it were gone nothing would be running;
+  // (2) disabled if the timeout is 0. Collect-then-remove so we don't mutate the map mid-iteration.
   _sweepSilentPlayers(now) {
     if (!(this._leaveTimeoutMs > 0)) return;
     let gone = null;
@@ -266,6 +272,17 @@ export class Referee {
       if (now - last > this._leaveTimeoutMs) (gone || (gone = [])).push(p.id);
     }
     if (gone) for (const id of gone) this.removePlayer(id, 'timed out');
+  }
+
+  // CONNECTION LIVENESS (2026-07-19, VRmike). A dedicated ~1Hz keepalive ping (net.js) proves a
+  // peer's connection is alive even when it sends NO input — an AFK player standing perfectly still.
+  // net.js intercepts the ping/pong control frames BEFORE they reach handleMessage, so it calls this
+  // to stamp the SAME _lastSeen the silent-player sweep reads. Result: liveness = "last message of
+  // ANY kind (ping or C2S)", never "last input" — so an AFK-but-connected player is never swept.
+  // Unknown id (a ping that raced the peer's removal) is a silent no-op.
+  markSeen(id) {
+    const player = this.players.get(id);
+    if (player) player._lastSeen = Date.now();
   }
 
   // ---- lobby rename (host-authoritative) ----------------------------------
@@ -320,8 +337,9 @@ export class Referee {
   handleMessage(id, msg) {
     const player = this.players.get(id);
     if (!player) return;
-    // GHOST-PLAYER TIMEOUT: any C2S message is proof the peer is alive. Stamp it so the silent-
-    // timeout sweep (tick) only ever removes a peer that has genuinely gone quiet.
+    // CONNECTION LIVENESS: any C2S message is proof the peer is alive (dedicated keepalive pings
+    // stamp the same clock via markSeen). Liveness = "last message of ANY kind", never "last input",
+    // so the silent sweep (tick) only ever removes a peer whose connection has genuinely died.
     player._lastSeen = Date.now();
     switch (msg.t) {
       case C2S.READY:

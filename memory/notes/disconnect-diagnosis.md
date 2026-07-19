@@ -3,6 +3,14 @@
 **Requested by:** VRmike, #devbot 2026-07-19. **Scope:** diagnosis only. This build changes NO
 game code — it adds this note and nothing else. The fix is to be discussed in-channel first.
 
+> **UPDATE — FIX LANDED (#192, 2026-07-19, VRmike).** The direction below was approved and implemented:
+> input-based liveness is GONE, replaced by a dedicated ~1Hz keepalive ping in BOTH directions (always-on,
+> fail-silent), with the removal threshold raised 5→15s in `rules.json` (`leaveTimeoutSeconds`). The host
+> sweep and the guest watchdog now judge "connected" by the LAST MESSAGE OF ANY KIND (ping or C2S), never
+> by input — so an AFK-but-connected player stays in indefinitely and only a genuinely dead connection is
+> swept/booted. See `notes/netcode.md` (2026-07-19 CONNECTION LIVENESS section). The numbers/reasoning
+> below stand as the rationale for the 15s threshold and the 1Hz cadence.
+
 ## Symptom
 In local 2-browser-window testing, a client gets booted to the lobby with **"Lost connection to
 host."** every round or two. It used to NEVER disconnect. The regression appeared in the last ~day.

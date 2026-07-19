@@ -1,5 +1,49 @@
 # netcode
 
+## 2026-07-19 CONNECTION LIVENESS VIA DEDICATED PINGS — input-based liveness is GONE (VRmike, #192)
+Implements the fix direction from `notes/disconnect-diagnosis.md`. **Pings are now the SINGLE source of
+truth for "connected."** An AFK-but-connected player (idle in the bathroom, no inputs) must NEVER be
+removed; only a genuinely dead connection is.
+
+**WHY (the diagnosis).** The two 5s silence timers added the day before — the host's `_sweepSilentPlayers`
+and the guest's `HostWatchdog` — judged liveness off the INPUT / SNAPSHOT `setInterval` streams (20Hz /
+15Hz). A backgrounded browser tab holding a live WebRTC connection throttles those to ~1Hz *with
+multi-second jitter spikes*; a single spike >5s tripped a timer, so "backgrounded / not moving" was
+mistaken for "disconnected" and someone got kicked every round or two. Input is the wrong signal.
+
+**THE MODEL NOW.**
+- **Dedicated keepalive ping, both directions, ~1Hz, always-on.** Repurposed the pre-existing
+  `__ping`/`__pong` control frames in `js/net.js` (they were debug-only RTT before) into the liveness
+  heartbeat. `Session._startKeepalive()` starts a 1Hz `setInterval` the moment the link opens — host
+  pings each guest, guest pings the host — sending a tiny `{t:'__ping',ts}`. `_sendPings()` is
+  FAIL-SILENT (try/catch): a send into a half-closed channel must never crash the loop. A backgrounded
+  WebRTC-active tab still fires setInterval ~1Hz (never frozen — see the diagnosis), so the heartbeat
+  keeps flowing while the app is backgrounded. `enablePing()`/`_pingOn` are gone; the debug panel's RTT
+  is now a free by-product of the always-on keepalive (still reads `session.pings`).
+- **Liveness = LAST MESSAGE OF ANY KIND (ping OR any C2S), never input.** `_handlePingPong` intercepts
+  the ping/pong before the referee (as before) but now calls `_markAlive(peerId)` on every incoming
+  ping/pong. Host → `referee.markSeen(id)` (NEW referee method) stamps the SAME `player._lastSeen` the
+  sweep reads; guest → `onKeepalive()`. `referee.handleMessage` still stamps `_lastSeen` on any C2S too.
+  So `_sweepSilentPlayers` removes a peer ONLY when the ping stream (and all other traffic) has stopped.
+- **Guest watchdog fed by pings AND snapshots.** `main.js` sets `session.onKeepalive = () =>
+  hostWatchdog.feed(nowMs())`. A throttled host whose 15Hz snapshot stream briefly stalls is still held
+  up by its ~1Hz keepalive, so the guest doesn't false-boot to the lobby.
+- **Threshold 5→15s, one knob in rules.json.** `rules.leaveTimeoutSeconds` 5 → **15** drives BOTH sides:
+  the host sweep (`referee._leaveTimeoutMs`) and the guest watchdog (`main.js hostSilenceMs()` =
+  `max(3000, leaveTimeoutSeconds*1000)`). 15s absorbs the backgrounded-tab jitter; a truly dead link
+  (tab closed / phone asleep past wake-lock / network drop) stops pinging and crosses the line, so
+  cleanup still works — host sweeps, guest boots with "Lost connection to host." HOT-TUNABLE.
+
+**ANTI-CHEAT.** Pings carry NO positions/game data — the blindfold + spectator snapshot gates are
+byte-identical (check-blindfold / check-spectator GREEN). No new protocol message (the ping was already a
+control frame intercepted below the referee). No physics/damage/render/referee-gameplay change.
+
+**GUARDS.** `tools/check-lifecycle.mjs` §A′ (markSeen stamps liveness; AFK-with-pings-only survives 5
+simulated minutes; ping-silence past 15s still sweeps + announces the leave; a peer 0.5s under the
+threshold is NOT swept). `tools/check-host-disconnect.mjs` §D (onKeepalive→watchdog feed, always-on
+`_startKeepalive`, `_markAlive`, `referee.markSeen` wiring). `tools/check-debug-menu.mjs` (keepalive is
+always-on; RTT is a by-product).
+
 ## 2026-07-19 HOST-DISCONNECT → BOOT TO LOBBY + STALE-SESSION GHOST FIX (VRmike)
 Playtest: two windows both spawned as PROPS, an uncontrolled hunter stood in the world that players
 passed straight through, player 2 couldn't affect anything / transform, and the round timer was

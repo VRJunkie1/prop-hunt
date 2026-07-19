@@ -208,6 +208,82 @@ console.log('\nA) ghost players — a leaver is removed from snapshots + counts,
 }
 
 // ===========================================================================
+// A′) CONNECTION LIVENESS VIA KEEPALIVE PINGS (2026-07-19, VRmike). Liveness is the LAST MESSAGE
+//     OF ANY KIND — a dedicated ~1Hz keepalive ping (referee.markSeen) OR any C2S — NEVER input.
+//     So an AFK-but-CONNECTED player (zero inputs, pings flowing) stays in indefinitely, while a
+//     genuinely dead connection (pings stopped) still gets swept. See net.js + rules.json.
+// ===========================================================================
+console.log('\nA′) connection liveness — pings (not input) decide who stays; AFK-but-connected never booted');
+
+// A9 — markSeen() is the ping hook: it stamps the SAME _lastSeen the sweep reads, and no-ops on an
+//      unknown id (a ping that raced the peer's removal).
+{
+  const t = makeRef();
+  t.add('H1', ROLE.HUNTER);
+  const P = t.add('P1', ROLE.PROP);
+  P._lastSeen = 0; // pretend long-silent
+  t.ref.markSeen('P1'); // a keepalive ping arrives
+  ok(P._lastSeen > 0 && (Date.now() - P._lastSeen) < 1000, 'markSeen() stamps _lastSeen — a keepalive ping refreshes liveness (pings feed the same clock as C2S)');
+  let crashed = false;
+  try { t.ref.markSeen('nobody'); } catch { crashed = true; }
+  ok(!crashed, 'markSeen() on an unknown id is a silent no-op (no crash)');
+  t.ref.destroy();
+}
+
+// A10 — AFK-BUT-CONNECTED STAYS: a player that sends ZERO inputs but whose ~1Hz keepalive keeps
+//       arriving is NEVER swept, even across 5 simulated minutes. Someone idle in the bathroom
+//       stays in the game. Each simulated second a keepalive stamps liveness AT `now`; the sweep
+//       runs at that same `now` — pings alone hold the player in.
+{
+  const t = makeRef();
+  t.add('H1', ROLE.HUNTER);
+  t.add('AFK', ROLE.PROP);
+  t.launchHunting();
+  const threshold = rules.leaveTimeoutSeconds * 1000;
+  const base = Date.now();
+  const pingMs = 1000; // the dedicated keepalive cadence
+  let removed = false;
+  for (let dt = 0; dt <= 5 * 60 * 1000; dt += pingMs) {
+    const now = base + dt;
+    t.ref.players.get('AFK')._lastSeen = now; // a keepalive ping arrived this second (models markSeen at `now`) — NO input, ever
+    t.ref.players.get('H1')._lastSeen = now;
+    t.ref._sweepSilentPlayers(now);
+    if (!t.ref.players.has('AFK')) removed = true;
+  }
+  ok(!removed && t.ref.players.has('AFK'), `an AFK-but-connected player (pings only, zero inputs) survives 5 simulated minutes (threshold ${threshold}ms)`);
+  t.ref.destroy();
+}
+
+// A11 — GENUINELY DEAD CONNECTION STILL CLEANED UP: the keepalive STOPS (tab closed / phone asleep /
+//       network drop). Once ping silence exceeds the threshold the peer is swept, exactly as before —
+//       cleanup is preserved, just driven by an accurate signal.
+{
+  const t = makeRef();
+  t.add('H1', ROLE.HUNTER);
+  const DEAD = t.add('DEAD', ROLE.PROP);
+  t.launchHunting();
+  const base = Date.now();
+  DEAD._lastSeen = base; // last keepalive at t0; none since (connection died)
+  const now = base + rules.leaveTimeoutSeconds * 1000 + 3000; // silence past the threshold
+  t.ref.players.get('H1')._lastSeen = now; // host still pinging
+  t.ref._sweepSilentPlayers(now);
+  ok(!t.ref.players.has('DEAD'), 'ping silence past the threshold still sweeps a genuinely dead connection (cleanup preserved)');
+  ok(t.logs('H1').some((x) => /DEAD left/.test(x)), 'the dead connection is announced as a public leave line');
+  // And a peer JUST under the threshold is NOT swept (boundary — no premature boot of a jittery link).
+  const t2 = makeRef();
+  t2.add('H1', ROLE.HUNTER);
+  const LIVE = t2.add('LIVE', ROLE.PROP);
+  t2.launchHunting();
+  const b2 = Date.now();
+  LIVE._lastSeen = b2;
+  t2.ref.players.get('H1')._lastSeen = b2 + rules.leaveTimeoutSeconds * 1000; // keep host live at the sweep instant
+  t2.ref._sweepSilentPlayers(b2 + rules.leaveTimeoutSeconds * 1000 - 500); // 0.5s inside the window
+  ok(t2.ref.players.has('LIVE'), 'a peer silent for JUST under the threshold is NOT swept (a jitter spike inside the window is tolerated)');
+  t.ref.destroy();
+  t2.ref.destroy();
+}
+
+// ===========================================================================
 // B) HUNTER SPAWN CLIPPING + EMBEDDING — live Rapier resolveSpawnOverlap.
 // ===========================================================================
 console.log('\nB) hunter spawn separation + settled-prop embedding (live Rapier)');

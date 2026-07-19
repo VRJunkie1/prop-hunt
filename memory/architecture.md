@@ -110,9 +110,10 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   kills the match for everyone) and the touch glue (`input.enterGame/exitGame`,
   `onTouchPlay` → dismiss the "Tap to play" overlay). **HOST-DISCONNECT WATCHDOG
   (2026-07-19):** owns a `HostWatchdog` (pure `js/host-watchdog.js`) armed GUEST-ONLY at
-  match start, fed by every snapshot, polled each frame while the tab is visible; on
-  snapshot silence past `hostSilenceMs()` (= `rules.leaveTimeoutSeconds`, 5s) it declares
-  the host dead (a SILENT host death fires no PeerJS event) and returns via the shared
+  match start, fed by every snapshot AND (2026-07-19) by the ~1Hz keepalive ping
+  (`session.onKeepalive`), polled each frame while the tab is visible; on silence past
+  `hostSilenceMs()` (= `rules.leaveTimeoutSeconds`, now **15s**) it declares the host dead
+  (a SILENT host death fires no PeerJS event) and returns via the shared
   `backToMenu('Lost connection to host.')`. Fixes the stale-session ghost (frozen 0:00
   timer + collision-less statue hunter + dead transforms = one snapshot stall). Guard:
   `tools/check-host-disconnect.mjs`. Detail: `notes/netcode.md`.
@@ -425,9 +426,13 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   routed like any other message, but the referee DROPS it unless the HOST loaded with
   `?debug=1` (`referee.debugEnabled`, read from the host tab's URL — the referee only ever
   runs in the host tab). So a tampered guest can't inject debug commands into a normal
-  match. `js/net.js` also carries a debug-only `__ping`/`__pong` control pair (intercepted
-  BEFORE the referee; enabled only under `?debug=1` via `session.enablePing()`) that fills
-  a per-peer RTT map the debug panel reads — zero ping traffic in normal play.
+  match. `js/net.js` also carries a `__ping`/`__pong` control pair (intercepted BEFORE the
+  referee). **(2026-07-19 CONNECTION LIVENESS)** it is now the ALWAYS-ON ~1Hz keepalive heartbeat
+  in BOTH directions (`_startKeepalive()` on link-open, fail-silent) — the SINGLE source of truth for
+  "connected." An incoming ping/pong stamps liveness (`_markAlive` → host `referee.markSeen` /
+  guest `onKeepalive`), so the host silent-sweep + the guest watchdog judge "connected" by the LAST
+  MESSAGE OF ANY KIND, never by input — an AFK-but-connected player is never booted. The per-peer RTT
+  map the debug panel reads is a free by-product (no `?debug=1` gate). Detail: `notes/netcode.md`.
 - `referee.js` — the authoritative referee (see above). Browser-only, transport-
   agnostic (unchanged by the PeerJS swap — it only ever saw `send` callbacks).
 - `config/` — **content as data**: `rules.json` (timers, speeds, ratios),
@@ -645,13 +650,17 @@ LOBBY → (host START, ≥minPlayers) → HIDING (hunters frozen) → HUNTING �
 → LOBBY. Timers via `phaseEndsAt`. Hunters win when all props eliminated; props
 win if the hunt timer expires with any prop alive.
 
-**Leaving is leave-proof (B2, 2026-07-18).** A player who leaves — GRACEFULLY (WebRTC close →
-`net.js → removePlayer`) or via a SILENT TIMEOUT (a locked/dropped phone swept by `tick →
-_sweepSilentPlayers`, `rules.leaveTimeoutSeconds`, active phases only, host never swept) — is fully
+**Leaving is leave-proof (B2, 2026-07-18; liveness reworked #192, 2026-07-19).** A player who leaves —
+GRACEFULLY (WebRTC close → `net.js → removePlayer`) or via a SILENT TIMEOUT (a genuinely dead connection
+swept by `tick → _sweepSilentPlayers` when `_lastSeen` is older than `rules.leaveTimeoutSeconds`=15s,
+active phases only, host never swept) — is fully
 removed (physics body despawned, dropped from roster/snapshots/counts, public "X left" line). The
 shared `checkRoundOver` recount reads per-round `_roundHad{Hunters,Props}` flags so a departed LAST
 prop → hunters win and a departed LAST hunter → props win (a ghost can't keep a round alive or strand
-it), while a hunter-less solo round still runs on the timer. Detail: `notes/netcode.md`.
+it), while a hunter-less solo round still runs on the timer. **Liveness (`_lastSeen`) is stamped by the
+LAST MESSAGE OF ANY KIND — a dedicated ~1Hz keepalive ping (`referee.markSeen`) OR any C2S — never by
+input, so an AFK-but-connected player is NEVER swept; only a truly dead connection goes silent.** Detail:
+`notes/netcode.md`.
 
 **`minPlayers` is 1 (solo launch)** — the host can start alone. Role math keeps
 ≥1 prop (`hunterCount = min(max(1,round(n*hunterRatio)), n-1)`), so a solo host is

@@ -59,14 +59,17 @@ const hudTimer = new HudTimer();
 // when the host's snapshot stream goes silent. See host-watchdog.js + hostSilenceMs().
 const hostWatchdog = new HostWatchdog();
 
-// The snapshot-silence timeout that declares the host dead, DERIVED from the documented netcode
-// rate rather than hardcoded: the host streams snapshots at rules.snapshotRate (15 Hz ≈ one every
-// ~66 ms), so we reuse rules.leaveTimeoutSeconds (5 s) — the SAME "no traffic = genuinely gone"
-// threshold the HOST applies to sweep silent guests (referee _sweepSilentPlayers), which is ≈ 75
-// missed snapshots. Floored so a misconfigured tiny value can't false-kick a brief network hiccup.
+// The host-silence timeout that declares the host dead, DERIVED from the shared liveness threshold
+// rather than hardcoded. The guest's watchdog is fed by BOTH the host snapshot stream (15 Hz) AND
+// the dedicated ~1Hz keepalive ping (net.js → onKeepalive), so any proof of life resets it — a
+// throttled host that briefly stalls its snapshots is still held up by its pings. We reuse
+// rules.leaveTimeoutSeconds (15 s) — the SAME "connection genuinely dead" threshold the HOST applies
+// to sweep silent guests (referee._sweepSilentPlayers), so both directions boot only a truly dead
+// link, never an AFK-but-connected peer. 15 s tolerates the multi-second jitter of a backgrounded
+// WebRTC tab (notes/disconnect-diagnosis.md). Floored so a misconfigured tiny value can't false-kick.
 function hostSilenceMs() {
   const secs = state.cfg && state.cfg.rules && Number(state.cfg.rules.leaveTimeoutSeconds);
-  return Math.max(3000, (Number.isFinite(secs) ? secs : 5) * 1000);
+  return Math.max(3000, (Number.isFinite(secs) ? secs : 15) * 1000);
 }
 
 // HUNTER-TOOLS v1 — the hunter tool bar. Built for 4+ tools; two ship now. `id` is the
@@ -2103,9 +2106,13 @@ function newSession() {
   session = new Session(state.cfg);
   session.onMessage = handleGameMessage;
   session.onStatus = handleStatus;
-  // Debug menu ping: only measure RTT when the debug panel is present (?debug=1). No ping
-  // traffic in normal play. Safe to call before the link opens (it no-ops until then).
-  if (DEBUG) session.enablePing();
+  // CONNECTION LIVENESS (2026-07-19): the session runs a dedicated ~1Hz keepalive ping in BOTH
+  // directions on its own (started when the link opens). An incoming host keepalive proves the host
+  // is alive, so feed the host watchdog from pings as well as snapshots — same ~15s tolerance, so a
+  // throttled-but-alive host whose snapshot stream briefly stalls is still held up by its pings.
+  // feed() no-ops unless the watchdog is armed (a guest in a live match). The debug panel's RTT read
+  // (session.pings) is a free by-product of the same keepalive — no separate ping toggle needed.
+  session.onKeepalive = () => hostWatchdog.feed(nowMs());
 }
 
 // ---- boot -----------------------------------------------------------------

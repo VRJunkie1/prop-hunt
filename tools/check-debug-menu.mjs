@@ -83,7 +83,9 @@ ok(
 );
 ok(/if \(debugMenu\) debugMenu\.onSnapshot\(/.test(mainSrc), 'main.js null-guards the onSnapshot hook');
 ok(/if \(debugMenu\) debugMenu\.frame\(/.test(mainSrc), 'main.js null-guards the per-frame hook');
-ok(/if \(DEBUG\) session\.enablePing\(\)/.test(mainSrc), 'main.js enables ping ONLY under ?debug=1 (no ping traffic in normal play)');
+// CONNECTION LIVENESS (2026-07-19): keepalive pings are now ALWAYS on (they carry connection
+// liveness, not just debug RTT), so the RTT display is a free by-product — no ?debug=1 gate.
+ok(/session\.onKeepalive\s*=/.test(mainSrc), 'main.js wires session.onKeepalive (keepalive pings feed the host watchdog; RTT is a free by-product — always on)');
 
 // ---------------------------------------------------------------------------
 // 3b) MENU STARTS COLLAPSED (2026-07-12): only the DEBUG button shows; the panel opens on
@@ -120,7 +122,7 @@ const proto = read('shared', 'protocol.js');
 ok(/DEBUG:\s*'debug'/.test(proto), 'protocol C2S.DEBUG is defined');
 
 const netSrc = read('js', 'net.js');
-ok(/enablePing\s*\(\)\s*\{/.test(netSrc), 'net.js exposes enablePing()');
+ok(/_startKeepalive\s*\(\)\s*\{/.test(netSrc), 'net.js runs an always-on keepalive heartbeat (_startKeepalive) — RTT/pings ride the same frames');
 ok(/_handlePingPong\([\s\S]*?\)\)\s*return;/.test(netSrc), 'net.js intercepts ping/pong BEFORE the referee/onMessage');
 ok(/this\.pings\s*=\s*new Map\(\)/.test(netSrc), 'net.js keeps a per-peer pings map');
 
