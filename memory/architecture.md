@@ -108,7 +108,14 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   and the lobby "Copy invite link" button. Owns the **screen wake lock** during a
   match (`navigator.wakeLock`, re-acquired on `visibilitychange`; a sleeping host
   kills the match for everyone) and the touch glue (`input.enterGame/exitGame`,
-  `onTouchPlay` → dismiss the "Tap to play" overlay).
+  `onTouchPlay` → dismiss the "Tap to play" overlay). **HOST-DISCONNECT WATCHDOG
+  (2026-07-19):** owns a `HostWatchdog` (pure `js/host-watchdog.js`) armed GUEST-ONLY at
+  match start, fed by every snapshot, polled each frame while the tab is visible; on
+  snapshot silence past `hostSilenceMs()` (= `rules.leaveTimeoutSeconds`, 5s) it declares
+  the host dead (a SILENT host death fires no PeerJS event) and returns via the shared
+  `backToMenu('Lost connection to host.')`. Fixes the stale-session ghost (frozen 0:00
+  timer + collision-less statue hunter + dead transforms = one snapshot stall). Guard:
+  `tools/check-host-disconnect.mjs`. Detail: `notes/netcode.md`.
 - `js/net.js` — the **dual-mode network layer** (`Session`), now on **PeerJS**: a
   `Peer` to the public broker, plus either (host) an in-tab `Referee` + loopback
   link + a bridge from each guest's `DataConnection` into the referee, or (guest)
@@ -116,7 +123,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   via PeerJS's `{reliable:true}`. ICE servers (STUN **+ TURN relay**) are injected
   through the `Peer` `config` option. `detectRelayed()`/`_reportLink()` read
   `conn.peerConnection.getStats()` to tell the UI direct vs relayed. ~10s connect
-  give-up timer preserved.
+  give-up timer preserved. **(2026-07-19)** a POST-READY guest `conn.on('error')` now
+  routes to `onStatus('closed','Lost connection to host.')` + teardown (was swallowed
+  once the link opened); public `Session.close()` lets the client's snapshot watchdog
+  tear a silently-dead Peer down. Both loud signals + the silent stall converge on the
+  one `handleStatus('closed')→backToMenu` reset. Detail: `notes/netcode.md`.
 - `js/input.js` — **owns EVERY control scheme** and funnels them all into one
   output shape (movement `mx,mz` + look `yaw,pitch` + action callbacks), so the
   rest of the game is input-agnostic. Two schemes, chosen once by

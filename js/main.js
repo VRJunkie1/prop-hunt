@@ -13,6 +13,12 @@ import { Input, SENSITIVITY_RANGE } from './input.js';
 import { UI } from './ui.js';
 import { TauntLibrary } from './taunts.js';
 import { HudTimer } from './hud-timer.js';
+// HOST-DISCONNECT WATCHDOG (VRmike 2026-07-19). A GUEST whose host dies SILENTLY (tab suspended /
+// phone locked, no WebRTC 'close'/'error') stops getting the 15 Hz snapshot heartbeat and would
+// otherwise keep rendering the last frame forever (frozen 0:00 timer, collision-less statue hunter,
+// dead transform/interact inputs — the reported ghost session). This pure ticker declares the host
+// dead after snapshot silence and we boot to the menu via the shared reset path. See host-watchdog.js.
+import { HostWatchdog } from './host-watchdog.js';
 import { C2S, S2C, PHASE, ROLE } from '/shared/protocol.js';
 // COMBAT SFX (B5): the shared prop-ouch pitch-by-size mapping — derives an ouch playbackRate from
 // the SAME size the damage curve scales by, so pitch and damage can never disagree. See onEvent
@@ -47,6 +53,21 @@ const ui = new UI();
 // authoritative — the ticker clamps at 0 and waits for the host's phase/roundOver event. See
 // js/hud-timer.js. nowMs() (below) is the shared performance.now() clock the frame loop uses.
 const hudTimer = new HudTimer();
+
+// HOST-DISCONNECT WATCHDOG (VRmike 2026-07-19). Armed (guest-only) on match start, fed by every
+// snapshot, polled each frame while the tab is visible; trips to the shared return-to-menu path
+// when the host's snapshot stream goes silent. See host-watchdog.js + hostSilenceMs().
+const hostWatchdog = new HostWatchdog();
+
+// The snapshot-silence timeout that declares the host dead, DERIVED from the documented netcode
+// rate rather than hardcoded: the host streams snapshots at rules.snapshotRate (15 Hz ≈ one every
+// ~66 ms), so we reuse rules.leaveTimeoutSeconds (5 s) — the SAME "no traffic = genuinely gone"
+// threshold the HOST applies to sweep silent guests (referee _sweepSilentPlayers), which is ≈ 75
+// missed snapshots. Floored so a misconfigured tiny value can't false-kick a brief network hiccup.
+function hostSilenceMs() {
+  const secs = state.cfg && state.cfg.rules && Number(state.cfg.rules.leaveTimeoutSeconds);
+  return Math.max(3000, (Number.isFinite(secs) ? secs : 5) * 1000);
+}
 
 // HUNTER-TOOLS v1 — the hunter tool bar. Built for 4+ tools; two ship now. `id` is the
 // internal tool key, `name` the label, `key` the on-screen/number-key hint. The rifle is
@@ -481,6 +502,10 @@ document.addEventListener('visibilitychange', () => {
   // The lock is auto-released when the tab is hidden; re-grab it on return if
   // we're still in a match.
   if (document.visibilityState === 'visible' && !ui.el.game.classList.contains('hidden')) acquireWakeLock();
+  // HOST-DISCONNECT WATCHDOG: our OWN tab going to the background throttled the frame loop, so the
+  // snapshot gap that built up isn't the host's fault. Grant a fresh grace window on return instead
+  // of instantly kicking a player who just switched apps — a truly dead host trips one timeout later.
+  if (document.visibilityState === 'visible') hostWatchdog.resume(nowMs());
 });
 
 // CROSSHAIR-BASED DISGUISE (was nearest-prop). Target = the disguisable prop the
@@ -817,6 +842,8 @@ function handleGameMessage(msg) {
           input.exitGame();
           releaseWakeLock();
           hudTimer.stop(); // no HUD countdown in the lobby; a stale anchor mustn't paint
+          hostWatchdog.disarm(); // no snapshots stream in the lobby — stop watching until the next round arms
+
           state.paused = false;
           state.hasLocked = false;
           state.uiMode = false; // never carry the free-mouse state across rounds
@@ -883,6 +910,11 @@ function handleGameMessage(msg) {
       ui.setBlindfold(false);
       input.lookFrozen = false;
       setSpectating(false);
+      // HOST-DISCONNECT WATCHDOG: start watching the host's snapshot heartbeat for THIS match (a
+      // flipped round re-arms with a fresh clock). GUEST-ONLY — the host's own client is fed by a
+      // zero-latency loopback and playing alone is a valid game, so we never boot the host. See
+      // hostWatchdog / the frame-loop poll.
+      if (session && !session.isHost) hostWatchdog.arm(nowMs(), hostSilenceMs());
       // PROP FINDER: a fresh match starts with the finder ready (no stuck grey cylinder / countdown)
       // and no forced-taunt lock carried across rounds.
       resetFinderState();
@@ -973,6 +1005,7 @@ function backToMenu(msg) {
   input.exitGame();
   releaseWakeLock();
   hudTimer.stop(); // drop the HUD countdown on the way back to the menu
+  hostWatchdog.disarm(); // stop watching the host heartbeat (we've left the match)
   destroyPredict();
   resetReadyButton();
   state.paused = false;
@@ -1048,6 +1081,10 @@ function updateBlindfold(seconds) {
 
 function onSnapshot(msg) {
   state.phase = msg.phase;
+  // HOST-DISCONNECT WATCHDOG: this snapshot is proof the host link is alive — reset the silence
+  // clock. The host streams these at 15 Hz the whole match (even a blindfolded hunter gets a
+  // filtered one every tick), so a connected guest is fed continuously; a stall means the host died.
+  hostWatchdog.feed(nowMs());
   // GAME TIMER DESYNC FIX: re-anchor the local countdown to the host's authoritative
   // time-remaining. The frame loop ticks it down smoothly between snapshots, so a snapshot
   // stall can't freeze the HUD clock (Jie's "5s left" while the host hit 0). See hudTimer.
@@ -1567,6 +1604,18 @@ function frameBody(now) {
   // snapshots and through a network stall; it re-syncs the instant a fresh snapshot arrives.
   // Clamped at 0 by HudTimer — the round's real end stays host-authoritative.
   if (hudTimer.active) ui.setTimer(hudTimer.remaining(now));
+
+  // HOST-DISCONNECT WATCHDOG: if the host's snapshot stream has gone silent past the timeout, the
+  // link is dead (a silent host death fires no PeerJS 'close'/'error'). Boot to the menu via the
+  // SAME shared reset path a graceful host-leave uses, with a clear message — no zombie half-world.
+  // Only while the tab is VISIBLE: a backgrounded tab throttles this loop, so the gap would be our
+  // own fault, not the host's (visibilitychange re-seeds a grace window on return). Guests only —
+  // poll() is a no-op unless armed, and we arm only for a guest in a live match.
+  if ((typeof document === 'undefined' || document.visibilityState === 'visible') && hostWatchdog.poll(now)) {
+    if (session) session.close(); // tear the dead Peer/DataConnection down (no PeerJS event did it for us)
+    backToMenu('Lost connection to host.');
+    return;
+  }
 
   // RAPID FIRE: while the primary is HELD, auto-repeat the rifle at the configured RPM for a
   // live hunter. The host still enforces its own rate cap, so this only paces client sends.

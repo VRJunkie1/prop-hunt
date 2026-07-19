@@ -1,5 +1,62 @@
 # netcode
 
+## 2026-07-19 HOST-DISCONNECT → BOOT TO LOBBY + STALE-SESSION GHOST FIX (VRmike)
+Playtest: two windows both spawned as PROPS, an uncontrolled hunter stood in the world that players
+passed straight through, player 2 couldn't affect anything / transform, and the round timer was
+stuck at 0:00 — while player 1 (the host) kept playing normally. Guard: `tools/check-host-disconnect.mjs`.
+
+**DIAGNOSIS — one bug in four costumes (the whole ghost session is a silent snapshot stall).** Every
+symptom flows from the host's snapshot stream simply STOPPING while the client kept rendering the
+last one it got:
+- **Frozen 0:00 timer** — the HUD ticks the local `HudTimer` (B1) off the last snapshot's anchor and
+  CLAMPS at 0; with snapshots stopped it counted its last anchor down to 0:00 and sat there.
+- **Ghost hunter with no collision** — remote players are PURE interpolation toward the latest
+  snapshot (`scene.interpolate`); they are NOT in the local prediction world (it holds only walls +
+  props). With snapshots stopped the hunter is a frozen statue, and since only the HOST simulates
+  player-vs-player collision, everyone walks through it.
+- **Can't transform / interact** — `C2S.DISGUISE` + INPUT post into a dead `DataConnection`; the host
+  never applies them, so nothing happens.
+- **Both spawned as PROPS + a stuck hunter** — the client is simply painting a stale early snapshot.
+
+**ROOT CAUSE — no detection of a SILENT host death.** PeerJS `conn.on('close')`/`'error'` cover a
+LOUD disconnect, but a host whose tab is suspended / phone locks (the exact playtest setup: two
+windows, one backgrounded) tears nothing down — no event fires, snapshots just stop. The client had
+NO "how long since the last snapshot?" watchdog, so it stalled forever. Also, the guest's
+`conn.on('error')` only acted *before* the link opened (`!ready`); a post-ready transport error was
+SWALLOWED — a second silent-ish path with no teardown.
+
+**FIX — client-side snapshot watchdog + wire the loud signals to one place. Host UNCHANGED (solo host
+is a valid game).**
+- **`js/host-watchdog.js` (NEW, PURE — like `hud-timer.js`).** `HostWatchdog` owns only the timing +
+  a fire-ONCE latch: `arm(now, timeoutMs)` / `disarm()` / `feed(now)` (snapshot heartbeat) /
+  `resume(now)` (tab-foreground grace) / `poll(now)` → true at most once when silence exceeds the
+  timeout. No DOM/imports → unit-testable + host-safe.
+- **`js/main.js` wiring.** Armed GUEST-ONLY at `S2C.STARTED` (`!session.isHost`; a flipped round
+  re-arms with a fresh clock), fed in `onSnapshot`, polled each frame in `frameBody` GATED on
+  `document.visibilityState==='visible'` (a backgrounded *own* tab throttles rAF, so that gap isn't
+  the host's fault — `visibilitychange→visible` calls `resume()` for a fresh grace period). On a trip:
+  `session.close()` (tear the dead Peer down — no PeerJS event did it for us) then the SHARED
+  `backToMenu('Lost connection to host.')` — the SAME reset the graceful-close path already used
+  (clears blindfold, spectator cam, frozen look, wake lock, HUD timer, predict world; builds a fresh
+  Session). Disarmed on `backToMenu` AND the between-rounds `S2C.LOBBY` return (no snapshots stream in
+  the lobby → must stop watching).
+- **`js/net.js`.** The guest `conn.on('error')` now routes a POST-READY error to
+  `onStatus('closed','Lost connection to host.')` + teardown (was swallowed), so both loud signals
+  (close + mid-match error) land in the same `handleStatus('closed')→backToMenu` path. New public
+  `Session.close()` = `_teardown()` for the watchdog's silent-stall teardown (the close/error paths
+  teardown internally; the watchdog fires with no PeerJS event, so it needs this).
+
+**TIMEOUT — derived from the documented rate, not hardcoded.** `main.js hostSilenceMs()` =
+`max(3000, rules.leaveTimeoutSeconds*1000)` = **5 s** at ship config. That reuses the SAME "no traffic
+= genuinely gone" threshold the HOST already applies to sweep silent guests (`referee
+._sweepSilentPlayers`, B2), which at `snapshotRate` 15 Hz (~66 ms/snapshot) is ≈ 75 missed snapshots —
+unambiguously dead, floored so a misconfigured tiny value can't false-kick a brief hiccup. One shared
+silence threshold, both directions (host→guest sweep and guest→host watchdog).
+
+**Scope.** Auto-*reconnect*/rejoin-in-place is deliberately OUT — rejoining from the menu is the
+recovery path (small + safe; easy follow-up if wanted). Host detecting total peer loss is NOT added
+(host alone is valid). No protocol change; no host/referee change.
+
 ## 2026-07-18 HELD-TOOL SYNC — snapshot gains `tool` (B7, VRmike)
 The hunter's selected tool now travels over the wire so others render the right held item.
 NEW `C2S.SELECT_TOOL {tool}` (client → host, deduped, living-hunter-only) + NEW snapshot player
@@ -266,7 +323,12 @@ callback is just `conn.send(obj)` (guest) or a direct call (host loopback).
 ## Join/leave = PeerJS events (no more SIG messages)
 - Host: `conn.on('close')`/`'error'` → `referee.removePlayer(guestId)`. This is
   the authoritative "player left" signal.
-- Guest: `conn.on('close')` → "Host left — the match ended." → teardown.
+- Guest: `conn.on('close')` → "Host left — the match ended." → teardown. **As of
+  2026-07-19** a POST-READY `conn.on('error')` also routes to `onStatus('closed',
+  'Lost connection to host.')` + teardown (before that it was swallowed once the link
+  opened). Both loud signals land in `handleStatus('closed')→backToMenu`.
+- **SILENT host death fires NO PeerJS event** (tab suspended / phone locks): caught by
+  the client-side snapshot watchdog, not here — see the 2026-07-19 section above.
 - There is a ~10s **give-up timer** each side (`CONNECT_TIMEOUT_MS`): guest timer
   set in `_startGuest`, cleared on `conn.on('open')`; host per-peer timer in
   `_hostAccept`. Bounds WebRTC's own much slower failure.

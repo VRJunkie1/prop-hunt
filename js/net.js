@@ -391,10 +391,20 @@ export class Session {
       this.onStatus('closed', 'Host left — the match ended.');
       this._teardown();
     });
-    conn.on('error', () => {
+    conn.on('error', (err) => {
       if (!this.ready) {
+        // Failure BEFORE the link ever opened — a connect problem, not a lost host.
         clearTimeout(this._connectTimer);
         this.onStatus('error', "Couldn't connect — tell the host. Double-check the room code and try again.");
+        this._teardown();
+      } else {
+        // A DataConnection error AFTER the match is live is a LOST link to the host. It used to
+        // be swallowed here (only the connect-time branch acted), so a mid-match transport error
+        // left the guest on a frozen stale world with no signal — one half of the ghost-session
+        // bug (VRmike 2026-07-19). Route it to the SAME 'closed' teardown a graceful host-leave
+        // uses, so both loud disconnect signals land in one place. (The SILENT stall that fires
+        // no event at all is caught by main.js's snapshot watchdog.)
+        this.onStatus('closed', 'Lost connection to host.');
         this._teardown();
       }
     });
@@ -409,6 +419,14 @@ export class Session {
     } catch {
       /* stats unavailable — diagnostic label is optional */
     }
+  }
+
+  // Public teardown. The graceful close/error paths teardown internally, but a client that
+  // gives up on a SILENTLY-dead host (main.js's snapshot watchdog fires with no PeerJS event)
+  // has no such path — it calls this so the dead Peer/DataConnection don't leak past the match.
+  // A Session is single-use; main.js builds a fresh one via newSession() afterward. Idempotent.
+  close() {
+    this._teardown();
   }
 
   // ---- teardown -----------------------------------------------------------
