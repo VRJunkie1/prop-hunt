@@ -214,6 +214,32 @@ export function ssaoDistanceRange(near, far) {
 }
 
 // ---------------------------------------------------------------------------
+// SHADOW BIAS (SHADOW BIAS TUNING, VRmike, 2026-07-19). The one contact-shadow directional light
+// uses a depth `bias` (pushes the compared depth toward the light to hide self-shadow "acne"
+// striping) and a `normalBias` (offsets the shadow lookup along the surface normal — the stronger
+// anti-acne knob, but pushed too far it LEAKS light through the shadow right where a model touches
+// the ground: the bright white hole VRmike saw in the blob under a prop at close contact).
+//
+// The right value scales with shadow-map RESOLUTION: a higher-res map has smaller texels, so it
+// needs LESS offset to clear one texel — an offset tuned for the 512/1024 tiers over-shoots on the
+// 2048 tier and leaks. Everyone now defaults to the top tier (2048), which is exactly where the
+// leak shows. So we HALVE the bias at the top tier while leaving the lower tiers at their prior
+// known-good values: `shadowBiasFor(size)` scales the base down by REF/size, clamped to ≤1 so only
+// tiers ABOVE the 1024 reference (i.e. 2048) are reduced. PURE so the guard can pin the math with
+// no GL. Base values were the pre-tuning constants; retune the two bases here, one source of truth.
+// ---------------------------------------------------------------------------
+export const SHADOW_BIAS_BASE = -0.0006;        // depth bias at/below the reference resolution
+export const SHADOW_NORMAL_BIAS_BASE = 0.02;    // normal-offset bias at/below the reference resolution
+export const SHADOW_BIAS_REF_MAPSIZE = 1024;    // resolution the base values are tuned for; higher-res tiers scale down
+
+export function shadowBiasFor(shadowMapSize) {
+  const size = (typeof shadowMapSize === 'number' && shadowMapSize > 0) ? shadowMapSize : SHADOW_BIAS_REF_MAPSIZE;
+  // ≤1: leave the 512/1024 tiers untouched, halve the 2048 tier (REF/2048 = 0.5) where the leak shows.
+  const factor = Math.min(1, SHADOW_BIAS_REF_MAPSIZE / size);
+  return { bias: SHADOW_BIAS_BASE * factor, normalBias: SHADOW_NORMAL_BIAS_BASE * factor };
+}
+
+// ---------------------------------------------------------------------------
 // SH ambient override — a map JSON may carry PRE-BAKED spherical-harmonic coefficients (9 SH
 // bands × RGB = 27 numbers) to skip the per-map cube bake. Accepts either a flat length-27 array
 // [r0,g0,b0, r1,g1,b1, …] or a nested length-9 array of [r,g,b] triples. Returns a normalized

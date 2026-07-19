@@ -23,6 +23,7 @@ import {
   TIER_KEY, TIER_USERSET_KEY, TONEMAP_KEY, EXPOSURE_KEY,
   resolveAmbientIntensity, clampAmbientIntensity, AMBIENT_INTENSITY_DEFAULT, AMBIENT_INTENSITY_RANGE,
   BUILD_GEOMETRY_BRIGHTNESS, AO_MAX_DISTANCE_METERS, AO_MIN_DISTANCE_METERS, ssaoDistanceRange,
+  shadowBiasFor, SHADOW_BIAS_BASE, SHADOW_NORMAL_BIAS_BASE, SHADOW_BIAS_REF_MAPSIZE,
 } from '../js/lighting-tiers.js';
 import { PerfMon } from '../js/perfmon.js';
 import { AutoTier } from '../js/auto-tier.js';
@@ -186,6 +187,46 @@ ok(BUILD_GEOMETRY_BRIGHTNESS > 0 && BUILD_GEOMETRY_BRIGHTNESS < 1,
     'ssaoDistanceRange clamps garbage near/far into [0,1]');
   ok(/ssaoDistanceRange\(this\.camera\.near, this\.camera\.far\)/.test(read('js/lighting.js')),
     'lighting.js sets SSAO min/maxDistance from ssaoDistanceRange(camera.near, camera.far)');
+}
+
+// ---------------------------------------------------------------------------
+// 4d. SHADOW RECEIVING REGRESSION + BIAS TUNING (VRmike, 2026-07-19).
+//   (i)  Loaded map GLBs (tiled floor + asset-pack models) must inherit receiveShadow through the
+//        ONE shared instantiate choke point — they swap in AFTER _applyShadowFlags() runs, so if the
+//        flag isn't set there, cast shadows only land on the synchronously-built beige floor (the bug).
+//   (ii) The contact-light bias/normalBias is resolution-aware: HALVED at the 2048 top tier (now the
+//        default, where the light-leak white hole at ground contact showed) and left at the prior
+//        known-good value on the 512/1024 tiers. Pins both the math and the source wiring.
+// ---------------------------------------------------------------------------
+console.log('\n [4d] SHADOW receiving regression + bias tuning');
+{
+  const sc = read('js/scene.js');
+  // The shared instantiateModel path (every loaded map GLB — tiled floor + asset-pack meshes — routes
+  // through it) must set receiveShadow so a future material/darkening pass can't silently regress it.
+  const inst = sc.slice(sc.indexOf('export function instantiateModel'), sc.indexOf('export function instantiateModel') + 2400);
+  ok(/o\.receiveShadow\s*=\s*true/.test(inst) && /o\.castShadow\s*=\s*true/.test(inst),
+    'scene.js instantiateModel enables receiveShadow (+castShadow) on loaded map meshes (regression guard)');
+  // _applyShadowFlags still the whole-scene sync on tier change / world rebuild (belt AND suspenders).
+  ok(/_applyShadowFlags[\s\S]*?o\.receiveShadow\s*=\s*on/.test(sc),
+    'scene.js _applyShadowFlags pushes receiveShadow onto every scene mesh on tier change / rebuild');
+
+  // Bias tuning math: top tier (2048) halved, lower tiers unchanged, garbage → reference.
+  const t3b = shadowBiasFor(2048), t2b = shadowBiasFor(1024), t1b = shadowBiasFor(512);
+  ok(Math.abs(t3b.normalBias - SHADOW_NORMAL_BIAS_BASE / 2) < 1e-9 && Math.abs(t3b.bias - SHADOW_BIAS_BASE / 2) < 1e-12,
+    `shadowBiasFor(2048) HALVES the bias (normalBias ${t3b.normalBias}, was ${SHADOW_NORMAL_BIAS_BASE}) — fixes contact light-leak`);
+  ok(t3b.normalBias < SHADOW_NORMAL_BIAS_BASE, 'top-tier normalBias is reduced from the base (less leak at high res)');
+  ok(Math.abs(t2b.normalBias - SHADOW_NORMAL_BIAS_BASE) < 1e-9 && Math.abs(t1b.normalBias - SHADOW_NORMAL_BIAS_BASE) < 1e-9,
+    'shadowBiasFor(1024/512) keeps the prior known-good bias (only higher-res tiers scale down)');
+  ok(Math.abs(shadowBiasFor(SHADOW_BIAS_REF_MAPSIZE).normalBias - SHADOW_NORMAL_BIAS_BASE) < 1e-9,
+    `reference resolution (${SHADOW_BIAS_REF_MAPSIZE}) yields the unscaled base normalBias`);
+  ok(Math.abs(shadowBiasFor(0).normalBias - SHADOW_NORMAL_BIAS_BASE) < 1e-9 && Math.abs(shadowBiasFor('x').normalBias - SHADOW_NORMAL_BIAS_BASE) < 1e-9,
+    'shadowBiasFor(garbage/0) falls back to the reference base (never NaN)');
+  ok(SHADOW_NORMAL_BIAS_BASE > 0 && SHADOW_BIAS_BASE < 0, 'bias base is negative (depth toward light), normalBias base positive');
+
+  // Source wiring: lighting.js drives the contact light's bias off shadowBiasFor(cfg.shadowMapSize).
+  const li = read('js/lighting.js');
+  ok(/shadowBiasFor\(cfg\.shadowMapSize\)/.test(li) && /l\.shadow\.bias\s*=\s*sb\.bias/.test(li) && /l\.shadow\.normalBias\s*=\s*sb\.normalBias/.test(li),
+    'lighting.js sets the contact light bias/normalBias from shadowBiasFor(cfg.shadowMapSize)');
 }
 
 // ---------------------------------------------------------------------------

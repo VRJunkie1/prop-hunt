@@ -27,7 +27,7 @@ import * as THREE from 'three';
 // (tools/check-lighting.mjs §6) — the browser resolves it identically. The sibling is pure.
 import {
   resolveTierConfig, resolveTonemap, resolveAmbientIntensity, AMBIENT_INTENSITY_DEFAULT,
-  ssaoDistanceRange, AO_KERNEL_RADIUS_METERS,
+  ssaoDistanceRange, AO_KERNEL_RADIUS_METERS, shadowBiasFor,
 } from './lighting-tiers.js';
 
 // Map the pure tonemap descriptor's string to the real THREE tone-mapping constant.
@@ -203,8 +203,14 @@ export class LightingRig {
     cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
     cam.near = 1; cam.far = Math.max(40, size * 2);
     cam.updateProjectionMatrix();
-    l.shadow.bias = -0.0006;
-    l.shadow.normalBias = 0.02;
+    // SHADOW BIAS TUNING (VRmike, 2026-07-19): resolution-aware anti-acne offset. The prior flat
+    // -0.0006 / 0.02 over-shot on the 2048 top tier (now the default), leaking light through the
+    // shadow at close ground contact — the bright hole in the blob under a prop. shadowBiasFor
+    // halves both at 2048 and leaves the 512/1024 tiers at their known-good values. One source of
+    // truth in js/lighting-tiers.js; retune the two bases there.
+    const sb = shadowBiasFor(cfg.shadowMapSize);
+    l.shadow.bias = sb.bias;
+    l.shadow.normalBias = sb.normalBias;
     // Resize the shadow map if the tier changed it (dispose the old GPU texture so it regenerates).
     if (l.shadow.mapSize.x !== cfg.shadowMapSize) {
       l.shadow.mapSize.set(cfg.shadowMapSize, cfg.shadowMapSize);

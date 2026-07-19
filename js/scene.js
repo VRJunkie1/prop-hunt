@@ -146,7 +146,17 @@ export function instantiateModel(template, target, dims, scale) {
   box2.getCenter(center);
   inner.position.set(-center.x, -box2.min.y, -center.z);
   inner.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    // SHADOW RECEIVING REGRESSION FIX (VRmike, 2026-07-19): loaded map GLBs (the tiled kitchen
+    // floor + every asset-pack model) swap in ASYNCHRONOUSLY, AFTER buildWorld's one-shot
+    // _applyShadowFlags() traversal has already run — so they never inherited receiveShadow and
+    // cast shadows only landed on the synchronously-built beige primitive floor. This is the ONE
+    // shared choke point every world GLB routes through (game + editor), so set receiveShadow here
+    // too. Harmless when the active tier has shadows off (shadowMap.enabled=false ignores it), and
+    // a later tier change's _applyShadowFlags() still re-syncs the whole scene. Guarded by
+    // tools/check-lighting.mjs so a future material/darkening pass can't silently drop it again.
+    o.receiveShadow = true;
   });
   const holder = new THREE.Group();
   holder.add(inner);
@@ -178,6 +188,13 @@ export function preparePlayerModel(root) {
     if (!o.isMesh) return;
     o.frustumCulled = false; // never let animation/rescale blink a player-attached mesh
     o.castShadow = PLAYER_SHADOWS; // contact shadows under props/players (tier >= T1)
+    // ...and RECEIVE too, off the SAME tier flag: a mesh built AFTER buildWorld's one-shot
+    // _applyShadowFlags traverse (mid-join, disguise swap) would otherwise never receive shadows
+    // (e.g. a prop disguised as a primitive box wouldn't catch a hunter's shadow) until the next
+    // tier change / world rebuild. GLB disguises already get it via instantiateModel; this covers
+    // the primitive/capsule player meshes so ALL opaque geometry receives (part of the 2026-07-19
+    // shadow-receiving regression fix — the world-GLB half lives in instantiateModel).
+    o.receiveShadow = PLAYER_SHADOWS;
     const g = o.geometry;
     if (g) {
       // Refresh bounds so post-swap/rescale raycasts + highlight boxes stay correct

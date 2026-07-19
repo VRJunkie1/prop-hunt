@@ -69,8 +69,14 @@ a perf readout in the debug menu. This note is the map of the pieces.
   `setRenderScale(scale)` scales the pixel ratio for the auto-tier probe. `buildWorld()` ends with
   `_reattachLighting(map)` (scene.clear() drops the rig's lights, so they're re-added + the SH probe
   re-baked from THIS map's center behind the "Get ready…" banner). `_applyShadowFlags()` pushes
-  cast/receive-shadow onto every mesh; `preparePlayerModel` (the one player-mesh choke point) sets
-  `castShadow` from a module flag so a mesh built later (mid-join / disguise swap) inherits it.
+  cast/receive-shadow onto every mesh AT buildWorld/tier-change time; `preparePlayerModel` (the one
+  player-mesh choke point) sets `castShadow` AND `receiveShadow` from a module flag (`PLAYER_SHADOWS`)
+  so a mesh built later (mid-join / disguise swap) inherits BOTH — a primitive-disguised prop then
+  catches other players' shadows too, not just the GLB disguises. **Async map GLBs** (tiled floor +
+  asset-pack meshes) swap in AFTER that
+  traversal, so `instantiateModel` (the shared world-GLB choke point) sets `castShadow` AND
+  `receiveShadow` directly — otherwise loaded meshes cast but can't receive (the regression fixed
+  2026-07-19; see the SHADOW RECEIVING REGRESSION section).
 - **Context-loss (phones):** a NEW `webglcontextrestored` handler calls `lighting.onContextRestored()`
   (dispose composer + shadow map so they rebuild) then `_reattachLighting()` — the classic way phones
   silently lose new render state after a tab-switch. (`webglcontextlost` preventDefault was already there.)
@@ -190,10 +196,53 @@ Four playtest items. All presentation-layer; gameplay/netcode/anti-cheat untouch
 `browser_check` — all 4 tiers render (no black screen) with shadows reading on desktop AND phone
 profiles under the new hotter default; the floor now sits at a controlled mid-grey instead of bleaching.
 
+## SHADOW RECEIVING REGRESSION + BIAS TUNING (VRmike, 2026-07-19, follows f53143f)
+
+Two playtest bugs, both surfaced by round-2's T3-first default (shadows are now ON by default for
+everyone, so latent shadow bugs became visible).
+
+### 1) Cast shadows only landed on the beige primitive floor — REGRESSION (root cause + fix)
+Symptom: the hunter's cast shadow showed on the build-created beige `ground` plane but NOT on the tiled
+kitchen floor or any asset-pack GLB. AO showed everywhere. **Root cause (found via git, not guessing):**
+`receiveShadow` was ONLY set by `scene._applyShadowFlags()`, which runs as a ONE-SHOT `scene.traverse`
+at the end of `buildWorld()` (and on tier changes). But every loaded map GLB — the tiled floor + all
+asset-pack meshes — swaps in **asynchronously** via `_loadModels()` → `_applyModel()` → `instantiateModel()`,
+which fires AFTER that traversal has already run. `instantiateModel` set `castShadow = true` but never
+`receiveShadow`, so the async GLBs cast but couldn't RECEIVE. The synchronously-built primitives (beige
+ground, walls, primitive props) got `receiveShadow` from the buildWorld traversal — hence "only the beige
+floor." This was latent since the shadow system landed (bb40a2e); f53143f's T3-default made it visible.
+**Fix (one line at the shared choke point):** `instantiateModel` now also sets `o.receiveShadow = true`
+in its mesh traversal — the ONE path every world GLB (game + editor) routes through. Harmless when the
+tier has shadows off (`shadowMap.enabled=false`); a later tier change's `_applyShadowFlags()` still
+re-syncs the whole scene (belt AND suspenders). Guard §4d asserts the receiveShadow set survives.
+`preparePlayerModel` (the player-mesh choke point) got the matching treatment — it now sets
+`receiveShadow` alongside `castShadow` off `PLAYER_SHADOWS`, so a late-built primitive/capsule player
+mesh (mid-join / disguise swap) also receives; GLB disguises already inherit it via `instantiateModel`.
+
+### 2) White spots in shadow centers at close ground contact (bias tuning)
+Symptom: a bright hole in the shadow blob under a prop/player right where the model nearly touches the
+ground. That's the anti-acne `normalBias` pushed too high — it offsets the shadow lookup along the
+surface normal, and past a point it LEAKS light through the shadow at contact. The right value scales
+with shadow-map RESOLUTION (smaller texels ⇒ less offset needed), and everyone now defaults to the 2048
+top tier where the fixed old value (`normalBias 0.02`, `bias −0.0006`) over-shot. **Fix:**
+`shadowBiasFor(shadowMapSize)` in `lighting-tiers.js` scales both bases by `min(1, 1024/size)` — so the
+2048 tier is **halved** (`normalBias 0.01`, `bias −0.0003`, killing the contact leak) while the 512/1024
+tiers stay at their prior known-good values (`factor = 1`). `lighting.js` sets the contact light's
+`shadow.bias`/`shadow.normalBias` from it per-tier. Starting point per VRmike ("roughly halve it");
+retune the two bases (`SHADOW_BIAS_BASE`, `SHADOW_NORMAL_BIAS_BASE`) or the `SHADOW_BIAS_REF_MAPSIZE`
+reference in one place. Guard §4d pins the halving math + the lighting.js wiring.
+
+**TRAP for the next lighting pass:** a material/darkening pass that CLONES or REPLACES materials does
+NOT lose `receiveShadow` (it's a mesh property, not a material one) — but any code that builds map meshes
+must route through `instantiateModel` (or otherwise set `receiveShadow`) because `_applyShadowFlags`
+only runs at buildWorld/tier-change, never when an async GLB pops in. Don't "fix" contact white-spots by
+cranking shadow darkness — it's the bias.
+
 ## Guard
 
 `tools/check-lighting.mjs` — headless: tier resolution, device heuristic, tonemap, SH override, AMBIENT
-intensity tunable (§4b), persistence+wiring incl. the two hotfix source guards (RenderPass-before-SSAO,
+intensity tunable (§4b), round-2 tuning (§4c), the shadow-receiving regression guard + resolution-aware
+bias math (§4d), persistence+wiring incl. the two hotfix source guards (RenderPass-before-SSAO,
 ambient routing) in §5, the LightingRig THREE mapping (mock renderer), PerfMon, and the AutoTier state
 machine. Run: `node tools/check-lighting.mjs`. The VISUAL half rides `js/lighting-selftest.js` via
 `browser_check` (see above) — headless GL can't be exercised from node.
