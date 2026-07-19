@@ -126,6 +126,19 @@ export class Referee {
     // live roster count then (so a manually-driven test harness behaves as before).
     this._roundHadHunters = undefined;
     this._roundHadProps = undefined;
+    // VOTE-KICK (2026-07-19, VRmike). At most ONE player-driven vote-kick runs game-wide at a time —
+    // the human replacement for the retired automatic AFK-boot. null when idle; otherwise
+    // { targetId, targetName, initiatorId, endsAt, electorate:Set<id>, votes:Map<id,bool> }. All
+    // authority is host-side (startVoteKick / castVote / _tickVoteKick / _resolveVoteKick); clients
+    // only ASK to start or cast. The live tally rides every snapshot (_voteKickPublic). The vote window
+    // and the per-TARGET post-fail button cooldown are hot-tunable in rules.json. See notes/vote-kick.md.
+    this.voteKick = null;
+    this._voteKickSeconds = this.rules.voteKickSeconds != null ? this.rules.voteKickSeconds : 12;
+    this._voteKickCooldownMs = Math.max(0, (this.rules.voteKickCooldownSeconds != null ? this.rules.voteKickCooldownSeconds : 5) * 1000);
+    // Per-TARGET anti-spam cooldown after a FAILED vote: targetId -> timestamp until which a NEW
+    // vote-kick against THAT player is refused host-side (the greyed button is only the polite half).
+    // Only the just-survived target is penalised; everyone else is votable the instant the vote ends.
+    this._voteKickCooldownUntil = new Map();
     this.interval = setInterval(() => this.tick(), 1000 / this.rules.tickRate);
   }
 
@@ -252,6 +265,10 @@ export class Referee {
     // team existed even though the leaver is no longer in the roster to be counted.
     if (wasActive) this.checkRoundOver();
     this.broadcastLobby();
+    // VOTE-KICK: a departure cancels an in-flight vote (target left) or shrinks it (a voter left), so a
+    // vote whose electorate just changed can still early-resolve. Runs AFTER the normal removal so state
+    // is consistent; a no-op during the kick's own removePlayer (voteKick is already null by then).
+    this._voteKickOnLeave(id);
   }
 
   // CONNECTION LIVENESS SWEEP (2026-07-19, VRmike; was GHOST-PLAYER TIMEOUT B2). Called each tick
@@ -384,6 +401,12 @@ export class Referee {
         break;
       case C2S.SWITCH_TEAM:
         this.applySwitchTeam(player);
+        break;
+      case C2S.START_VOTEKICK:
+        this.startVoteKick(player, msg.target);
+        break;
+      case C2S.CAST_VOTE:
+        this.castVote(player, msg.vote);
         break;
       case C2S.DEBUG:
         this.handleDebug(player, msg);
@@ -519,6 +542,145 @@ export class Referee {
     // all already dead). checkRoundOver counts by CURRENT role, so it never fires a false win — the
     // switcher is no longer counted on their old team.
     this.checkRoundOver();
+  }
+
+  // ---- VOTE-KICK (host-authoritative) -------------------------------------
+  // Player-driven removal of an AFK/problem player — the human replacement for the retired automatic
+  // AFK-boot. Clients only ASK (C2S.START_VOTEKICK / C2S.CAST_VOTE); everything else is decided here:
+  // one vote game-wide, a fixed countdown, the tally, early resolution the moment everyone has voted,
+  // the majority rule, the leaver cleanup on a kick, and the per-target post-fail cooldown. The live
+  // tally rides every snapshot (_voteKickPublic). See notes/vote-kick.md.
+
+  // Open a vote-kick against `targetId`, requested by `initiator`. The host is the gate — it refuses a
+  // request that breaks any rule and never opens a second vote. The initiator counts as an automatic YES.
+  startVoteKick(initiator, targetId) {
+    if (!initiator) return;
+    // Active-round only (mirrors the team switch): no votes in the lobby / results screen.
+    if (this.phase !== PHASE.HIDING && this.phase !== PHASE.HUNTING) return;
+    // ONE vote game-wide: a second request while one runs is simply refused (anti-spam #1).
+    if (this.voteKick) { this._voteKickDenied(initiator, 'A vote-kick is already in progress.'); return; }
+    const target = this.players.get(targetId);
+    if (!target) return;                     // target must be a real, present player
+    if (target.id === initiator.id) return;  // can't vote-kick yourself
+    // The host's browser IS the server — "kicking" it would end the match for everyone (that needs host
+    // migration, a much bigger feature). Refuse it; the client also hides the button on the host's row.
+    if (target.id === this.hostId) { this._voteKickDenied(initiator, "The host can't be vote-kicked."); return; }
+    // Per-target post-fail cooldown (anti-spam #2): a fresh vote against a just-survived player is refused.
+    const cd = this._voteKickCooldownUntil.get(target.id) || 0;
+    if (Date.now() < cd) { this._voteKickDenied(initiator, `${target.name} was just voted on — wait a moment.`); return; }
+    // Electorate = everyone present RIGHT NOW (the target and the initiator INCLUDED — a target is a
+    // player too and gets a vote; a mid-vote joiner is NOT added, they just watch). The initiator is an
+    // automatic YES.
+    this.voteKick = {
+      targetId: target.id,
+      targetName: target.name,
+      initiatorId: initiator.id,
+      endsAt: Date.now() + this._voteKickSeconds * 1000,
+      electorate: new Set([...this.players.keys()]),
+      votes: new Map([[initiator.id, true]]),
+    };
+    this.broadcastLog(`${initiator.name} started a vote to kick ${target.name}.`);
+    // A tiny room (just initiator + target) can't early-resolve on the auto-yes alone (the target hasn't
+    // voted), but check for the general case where the initiator was somehow the only voter.
+    this._maybeResolveVoteKick();
+  }
+
+  // Record `voter`'s Yes/No in the running vote-kick. Ignored if there's no vote, the sender isn't
+  // eligible (joined mid-vote), or they've already voted (no double-voting, no changing a vote).
+  castVote(voter, vote) {
+    const v = this.voteKick;
+    if (!v || !voter) return;
+    if (!v.electorate.has(voter.id)) return; // not eligible — a mid-vote joiner just watches
+    if (v.votes.has(voter.id)) return;       // already voted
+    v.votes.set(voter.id, !!vote);
+    this._maybeResolveVoteKick();
+  }
+
+  // Early resolution: the instant every eligible voter has cast, resolve without waiting for the timer.
+  _maybeResolveVoteKick() {
+    const v = this.voteKick;
+    if (v && v.votes.size >= v.electorate.size) this._resolveVoteKick();
+  }
+
+  // Timer-driven end: called each tick during an active round; resolves when the window elapses.
+  _tickVoteKick(now) {
+    const v = this.voteKick;
+    if (v && now >= v.endsAt) this._resolveVoteKick();
+  }
+
+  // Resolve the vote: majority YES of votes CAST kicks the target (same cleanup path as a leaver, plus
+  // a clear private notice to the kicked player); a tie or majority NO keeps them and puts THEIR button
+  // on the per-target cooldown. Clears this.voteKick FIRST so the kick's removePlayer sees no active vote.
+  _resolveVoteKick() {
+    const v = this.voteKick;
+    if (!v) return;
+    this.voteKick = null;
+    let yes = 0, no = 0;
+    for (const val of v.votes.values()) { if (val) yes++; else no++; }
+    const target = this.players.get(v.targetId);
+    if (yes > no && target) {
+      // Tell the kicked player CLEARLY, then remove them the SAME way a leaver is removed (despawns
+      // body/disguise/spectator state, drops from roster + counts, recounts the round, public log line).
+      send(target, { t: S2C.EVENT, kind: 'kicked', reason: 'vote-kick', yes, no });
+      this.broadcast({ t: S2C.EVENT, kind: 'voteKickResult', target: v.targetId, name: v.targetName, kicked: true, yes, no });
+      this.removePlayer(v.targetId, 'vote-kicked');
+    } else {
+      // Stayed: only THIS target's button goes on cooldown (anti-spam); everyone else is votable now.
+      if (target) this._voteKickCooldownUntil.set(v.targetId, Date.now() + this._voteKickCooldownMs);
+      this.broadcast({ t: S2C.EVENT, kind: 'voteKickResult', target: v.targetId, name: v.targetName, kicked: false, yes, no });
+      this.broadcastLog(`Vote to kick ${v.targetName} failed (${yes} yes, ${no} no).`);
+    }
+  }
+
+  // A departure adjusts an in-flight vote: the TARGET leaving cancels it quietly; a VOTER leaving
+  // shrinks the electorate + tally so early resolution still fires. Called from removePlayer. No-op
+  // during the kick's OWN removal (_resolveVoteKick clears this.voteKick before calling removePlayer).
+  _voteKickOnLeave(id) {
+    const v = this.voteKick;
+    if (!v) return;
+    if (id === v.targetId) {
+      this.voteKick = null;
+      this.broadcast({ t: S2C.EVENT, kind: 'voteKickResult', target: id, name: v.targetName, kicked: false, cancelled: true });
+      return;
+    }
+    if (v.electorate.has(id)) {
+      v.electorate.delete(id);
+      v.votes.delete(id);
+      this._maybeResolveVoteKick();
+    }
+  }
+
+  // Cancel any in-flight vote quietly (a round ended). No result feed line — the round it belonged to
+  // is over. Used by setPhase(ENDING). A no-op when nothing is running.
+  _cancelVoteKick() {
+    const v = this.voteKick;
+    if (!v) return;
+    this.voteKick = null;
+    this.broadcast({ t: S2C.EVENT, kind: 'voteKickResult', target: v.targetId, name: v.targetName, kicked: false, cancelled: true });
+  }
+
+  // Private "your request was refused" note to a would-be initiator (already-active / cooldown / host).
+  _voteKickDenied(initiator, reason) {
+    send(initiator, { t: S2C.EVENT, kind: 'voteKickDenied', reason });
+  }
+
+  // The public tally for the snapshot (null when idle). Rides every snapshot variant (they spread
+  // ...full); carries NO positions or secret roles. `voters` is the electorate so a client can tell if
+  // IT is eligible to vote (a mid-vote joiner isn't). Counts are of votes CAST; waiting = yet to vote.
+  _voteKickPublic() {
+    const v = this.voteKick;
+    if (!v) return null;
+    let yes = 0, no = 0;
+    for (const val of v.votes.values()) { if (val) yes++; else no++; }
+    return {
+      target: v.targetId,
+      name: v.targetName,
+      yes,
+      no,
+      waiting: Math.max(0, v.electorate.size - v.votes.size),
+      timeLeft: round2(Math.max(0, (v.endsAt - Date.now()) / 1000)),
+      voters: [...v.electorate],
+    };
   }
 
   // HELD-TOOL VISIBILITY (B7). A hunter reports which tool it has selected so its third-person
@@ -1094,6 +1256,9 @@ export class Referee {
   // stands up the physics world. Clears lastResult (a new round supersedes the previous result).
   _launchRound() {
     this.lastResult = null; // a fresh round supersedes the previous result
+    // VOTE-KICK: a new round starts clean — no vote in flight, no lingering per-target cooldowns.
+    this.voteKick = null;
+    this._voteKickCooldownUntil.clear();
     // Record which teams start this round populated (roles are already assigned by startMatch /
     // startFlippedRound). checkRoundOver reads these so a team later emptied by a LEAVE still
     // resolves the round; _spawnOnTeam / admitMidGame keep them monotonically true as players
@@ -1302,6 +1467,8 @@ export class Referee {
   setPhase(phase, seconds) {
     this.phase = phase;
     this.phaseEndsAt = Date.now() + seconds * 1000;
+    // VOTE-KICK: a round ending cancels any in-flight vote (the electorate/round it belonged to is over).
+    if (phase === PHASE.ENDING) this._cancelVoteKick();
     this.broadcast({ t: S2C.EVENT, kind: 'phase', phase, seconds });
     // WORLD SNAPSHOT ON BLINDFOLD RELEASE (host-authoritative object sync). A hunter was
     // blindfolded through HIDING: their snapshots carried ZERO prop transforms
@@ -1368,6 +1535,9 @@ export class Referee {
   resetToLobby() {
     this.phase = PHASE.LOBBY;
     this.props = [];
+    // VOTE-KICK: no votes survive a return to the lobby.
+    this.voteKick = null;
+    this._voteKickCooldownUntil.clear();
     // Tear down the match's physics world (bump the token so any still-in-flight
     // async build from this match is discarded rather than adopted next round).
     this._physicsToken++;
@@ -1405,6 +1575,7 @@ export class Referee {
 
     if (this.phase === PHASE.HIDING || this.phase === PHASE.HUNTING) {
       this._sweepSilentPlayers(now); // GHOST-PLAYER TIMEOUT: drop peers that went silent mid-round
+      this._tickVoteKick(now); // VOTE-KICK: resolve on the countdown expiring (early resolve is event-driven)
       this.integrate(dt);
     } else if (this.phase === PHASE.ENDING) {
       // Keep the physics world SIMULATING through the end screen (2026-07-19). A round-ending blast —
@@ -1690,6 +1861,10 @@ export class Referee {
       timeLeft: round2(timeLeft),
       propsAlive,
       propsTotal,
+      // VOTE-KICK live tally (null when idle). Rides ALL snapshot variants (they spread ...full), so
+      // the banner counts + countdown update live for everyone and a mid-vote joiner sees it at once.
+      // No positions / secret roles — safe in the blindfold/hunter-safe variants unchanged.
+      voteKick: this._voteKickPublic(),
       players,
       // Only AWAKE dynamic props ride each snapshot (sleeping ones haven't moved, so
       // there's nothing to send — the bandwidth win). Empty on the 2D fallback.

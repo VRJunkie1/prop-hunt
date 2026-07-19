@@ -36,6 +36,13 @@ export class UI {
       spectateFree: $('spectateFree'),
       spectateNext: $('spectateNext'),
       banner: $('banner'),
+      // VOTE-KICK (2026-07-19): the top-of-screen live banner + its Yes/No buttons. setVoteKick()
+      // populates the text and shows/hides the buttons per eligibility; main.js injects the callbacks.
+      voteKick: $('voteKick'),
+      voteKickText: $('voteKickText'),
+      voteKickBtns: $('voteKickBtns'),
+      voteYes: $('voteYes'),
+      voteNo: $('voteNo'),
       feed: $('feed'),
       clickToPlay: $('clickToPlay'),
       blindfold: $('blindfold'),
@@ -82,6 +89,12 @@ export class UI {
     this.onPauseExit = () => {};
     this.onPauseSwitch = () => {};   // PAUSE-MENU TEAM SWITCH
     this.onPauseCopyRoom = () => {}; // COPY ROOM CODE (mid-game join)
+    // VOTE-KICK callbacks (injected by main.js — no game logic here). onVoteKick(targetId) starts a
+    // vote from a scoreboard kick button; onVoteCast(true|false) casts Yes/No from the banner buttons.
+    this.onVoteKick = () => {};
+    this.onVoteCast = () => {};
+    if (this.el.voteYes) this.el.voteYes.addEventListener('click', () => this.onVoteCast(true));
+    if (this.el.voteNo) this.el.voteNo.addEventListener('click', () => this.onVoteCast(false));
     if (this.el.pauseResume) this.el.pauseResume.addEventListener('click', () => this.onPauseResume());
     if (this.el.pauseExit) this.el.pauseExit.addEventListener('click', () => this.onPauseExit());
     if (this.el.pauseHelp) this.el.pauseHelp.addEventListener('click', () => this._togglePauseHelp());
@@ -573,8 +586,8 @@ export class UI {
   // A menu OVERLAY, not a real pause — the world runs on the host. Shows a live scoreboard
   // (everyone + health), a controls/help panel, Resume, and Exit. main.js drives visibility
   // and feeds the roster from each snapshot while it's open.
-  showPause(players, selfId, selfIsHunter) {
-    this.updatePauseScoreboard(players, selfId, selfIsHunter);
+  showPause(players, selfId, selfIsHunter, voteCtx) {
+    this.updatePauseScoreboard(players, selfId, selfIsHunter, voteCtx);
     if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden'); // help starts collapsed
     if (this.el.pauseMenu) this.el.pauseMenu.classList.remove('hidden');
   }
@@ -594,9 +607,15 @@ export class UI {
   // sees what any prop is disguised as. (The host also withholds disguised props' NAMES from hunters,
   // so a hunter's data can't tie a name to a disguise even in devtools; here a name-less prop entry
   // renders anonymously as "a prop".) selfIsHunter gates the client half.
-  updatePauseScoreboard(players, selfId, selfIsHunter) {
+  updatePauseScoreboard(players, selfId, selfIsHunter, voteCtx) {
     const list = this.el.pauseScores;
     if (!list) return;
+    // VOTE-KICK context (2026-07-19): { hostId, voteActive, cooldownUntil:Map<id,ms>, now }. A "vote
+    // kick" button sits on every OTHER player's row EXCEPT the host's (the host IS the server — kicking
+    // them ends the match; that needs host migration). The button is greyed while ANY vote is active or
+    // during that target's post-fail cooldown (the host enforces the real rule; this is the polite half).
+    const vc = voteCtx || {};
+    const now = vc.now || (typeof performance !== 'undefined' ? performance.now() : 0);
     list.innerHTML = '';
     for (const p of players || []) {
       const li = document.createElement('li');
@@ -613,9 +632,47 @@ export class UI {
       hp.textContent = p.alive ? `❤ ${v}%` : '☠ dead';
       if (p.alive && v <= 25) hp.classList.add('crit');
       li.append(who, hp);
+      // VOTE-KICK button — only on OTHER players' rows, never self, never the host.
+      if (p.id !== selfId && p.id !== vc.hostId) {
+        const kick = document.createElement('button');
+        kick.type = 'button';
+        kick.className = 'ps-kick';
+        kick.textContent = 'vote kick';
+        const cdUntil = (vc.cooldownUntil && vc.cooldownUntil.get(p.id)) || 0;
+        const onCooldown = now < cdUntil;
+        kick.disabled = !!vc.voteActive || onCooldown;
+        if (onCooldown) kick.title = 'Recently voted on — try again shortly.';
+        else if (vc.voteActive) kick.title = 'A vote is already in progress.';
+        kick.addEventListener('click', () => this.onVoteKick(p.id));
+        li.append(kick);
+      }
       list.appendChild(li);
     }
     if (!list.childElementCount) list.appendChild(this._li('No players.'));
+  }
+
+  // VOTE-KICK banner (2026-07-19, VRmike). Render the top-of-screen live bar from the host's tally.
+  // `vote` is the snapshot's voteKick object (or null to hide). `selfId` decides eligibility: the
+  // Yes/No buttons show only for an electorate member (present at vote start) who hasn't voted yet —
+  // `myVote` is true once WE'VE cast (so we swap the buttons for a "you voted" note). A mid-vote joiner
+  // (not in `voters`) sees the banner but no buttons — they just watch. Pure DOM; main.js drives it.
+  setVoteKick(vote, selfId, myVote) {
+    const el = this.el.voteKick;
+    if (!el) return;
+    if (!vote) { el.classList.add('hidden'); el.setAttribute('aria-hidden', 'true'); return; }
+    const secs = Math.max(0, Math.ceil(vote.timeLeft || 0));
+    if (this.el.voteKickText) {
+      this.el.voteKickText.textContent =
+        `Kick ${vote.name || 'player'}?  VOTES: ${vote.yes} Yes, ${vote.no} No, ${vote.waiting} Waiting · Timer: ${secs}s`;
+    }
+    // Eligibility: a member of the electorate who hasn't voted yet gets the Yes/No buttons (the target
+    // IS allowed to vote per spec — they're in `voters`). Once WE'VE voted (myVote) OR we joined
+    // mid-vote (not in `voters`), the buttons are hidden — we just watch the tally tick.
+    const eligible = Array.isArray(vote.voters) && selfId != null && vote.voters.includes(selfId);
+    const btns = this.el.voteKickBtns;
+    if (btns) btns.classList.toggle('hidden', !(eligible && !myVote));
+    el.classList.remove('hidden');
+    el.setAttribute('aria-hidden', 'false');
   }
 
   _li(text) {

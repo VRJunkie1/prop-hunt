@@ -411,6 +411,27 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   + settle on the results screen instead of freezing mid-blast. Guard: `tools/check-grenade.mjs` §J.
   Detail: `notes/hunter-grenades.md`.
 
+## Vote-kick (player-driven kicks, 2026-07-19, VRmike — build/194)
+
+The **human replacement** for the automatic AFK-boot removed by the preceding liveness build (#192):
+instead of the host silently kicking a quiet player, players *choose* to remove an AFK/problem player.
+Host-authoritative — clients only ASK. All the logic is in `shared/referee.js` (`this.voteKick`,
+`startVoteKick` / `castVote` / `_tickVoteKick` / `_resolveVoteKick` / `_voteKickPublic`): at most ONE
+vote game-wide, a 12s countdown that resolves EARLY the moment every eligible voter has cast, the
+initiator as an automatic YES, majority YES of votes CAST → the target is removed via the **exact same
+`removePlayer` cleanup path as a leaver** (plus a private `kind:'kicked'` notice so their client returns
+to the menu), a tie/majority-NO keeps them + a per-target 5s post-fail cooldown. Only ONE vote at a time
+(a second start is refused), the target CAN vote (they're a player), the HOST can NEVER be a target (the
+host is the server). The live tally rides EVERY snapshot (`full.voteKick`, spreads through the blindfold/
+hunter-safe variants; no positions/roles leaked) so the top-of-screen banner counts + countdown update
+live and mid-vote joiners see it (they just watch — not in the electorate). Client: `#voteKick` banner
+below the HUD health bar (`ui.setVoteKick`), a "vote kick" button on every OTHER player's pause-scoreboard
+row except the host's (`ui.updatePauseScoreboard` voteCtx), Y/N hotkeys matched by the PHYSICAL key
+(`input.matchVoteKey` → `e.code`, modifier-independent so a Shift-held sprint doesn't eat the vote), and
+`main.js` `castVote()` (the one path buttons + hotkeys share) + the `kicked`/`voteKickResult`/
+`voteKickDenied` event handlers. Config: `rules.json` `voteKickSeconds` (12) / `voteKickCooldownSeconds`
+(5), hot-tunable. Guard: `tools/check-votekick.mjs`. Full detail: `notes/vote-kick.md`.
+
 ## Shared (`shared/`)
 
 - `damage.js` — **HUNTER-TOOLS v1 damage math (PURE).** Imports only `physics.halfExtentsFor`

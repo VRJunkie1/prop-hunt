@@ -229,6 +229,17 @@ const state = {
   hasLocked: false,
   lastPlayers: null,
 
+  // VOTE-KICK (2026-07-19, VRmike). hostId (from the LOBBY message) so the scoreboard hides the kick
+  // button on the host's row (the host is the server — kicking them ends the match). voteKick = the
+  // host's latest public tally (from each snapshot) or null. votedTarget = the target id of the vote
+  // we've already cast in (so the banner hides our buttons; reset when the vote's target changes).
+  // voteKickCooldowns = targetId → performance.now() ms until which we grey that player's kick button
+  // (set locally on a failed-vote result; the host enforces the real cooldown). All host-authoritative.
+  hostId: null,
+  voteKick: null,
+  votedTarget: null,
+  voteKickCooldowns: new Map(),
+
   // Desktop "UI mode" (backtick `). A deliberate THIRD state — not playing, not paused: the
   // pointer lock is released so the mouse is free to click the DEBUG menu / any UI, but the
   // pause menu is NOT opened and the "Click to play" overlay is suppressed. Clicking the game
@@ -368,7 +379,26 @@ function openPause() {
   ui.setPauseRoom(state.room); // room code + copy button, for adding players mid-game
   // Pass our OWN role so a HUNTER's pause roster hides prop disguises (client half of the leak fix;
   // the host also withholds disguised props' names from hunters — hunterSafeSnapshot).
-  ui.showPause(state.lastPlayers || [], state.selfId, state.role === ROLE.HUNTER);
+  ui.showPause(state.lastPlayers || [], state.selfId, state.role === ROLE.HUNTER, voteCtx());
+}
+// VOTE-KICK: the context the pause scoreboard needs to render kick buttons — the host id (its row gets
+// no button), whether a vote is currently active (grey ALL buttons then), and the per-target post-fail
+// cooldowns (grey just that row). Rebuilt on demand so it always reflects the newest snapshot.
+function voteCtx() {
+  return { hostId: state.hostId, voteActive: !!state.voteKick, cooldownUntil: state.voteKickCooldowns, now: nowMs() };
+}
+// VOTE-KICK: cast our Yes/No in the running vote — the ONE path both the banner buttons and the Y/N
+// hotkeys use. No-op unless there's an active vote WE'RE eligible for and haven't already voted in (the
+// host also enforces all of this — this is the client-side guard so a stray keypress doesn't spam it).
+// Latch votedTarget so the banner hides our buttons immediately (the host confirms via the next snapshot).
+function castVote(yes) {
+  const vk = state.voteKick;
+  if (!vk) return;
+  if (state.votedTarget === vk.target) return; // already voted in this vote
+  if (!(Array.isArray(vk.voters) && vk.voters.includes(state.selfId))) return; // not eligible (mid-vote joiner)
+  session.send({ t: C2S.CAST_VOTE, vote: !!yes });
+  state.votedTarget = vk.target;
+  ui.setVoteKick(vk, state.selfId, true); // hide our buttons right away
 }
 function closePause(relock) {
   if (!state.paused) return;
@@ -833,6 +863,7 @@ function handleGameMessage(msg) {
 
     case S2C.LOBBY:
       state.room = msg.room;
+      state.hostId = msg.hostId; // VOTE-KICK: which player is the host (its scoreboard row gets no kick button)
       state.lobbyMapId = msg.mapId; // editor default target before a match starts
       ui.renderLobby(msg, state.selfId);
       if (msg.phase === PHASE.LOBBY) {
@@ -853,6 +884,11 @@ function handleGameMessage(msg) {
           ui.hidePause();
           ui.setClickToPlay(false);
           ui.setBlindfold(false); // drop any hunter blindfold on the way back to the lobby
+          // VOTE-KICK: no vote/banner survives the return to the lobby between rounds.
+          state.voteKick = null;
+          state.votedTarget = null;
+          state.voteKickCooldowns.clear();
+          ui.setVoteKick(null, state.selfId, false);
           input.lookFrozen = false;
           state.aimPropId = null;
           // HUNTER-TOOLS v1: tidy the tool bar / spectator / tool state for the next round.
@@ -1014,6 +1050,11 @@ function backToMenu(msg) {
   state.paused = false;
   state.hasLocked = false;
   state.uiMode = false; // drop the free-mouse state on the way back to the menu
+  // VOTE-KICK: no vote state survives leaving the match.
+  state.voteKick = null;
+  state.votedTarget = null;
+  state.voteKickCooldowns.clear();
+  ui.setVoteKick(null, state.selfId, false);
   // AUDIO TAUNTS: tear the taunt UI + any playing clip down on the way out (a taunt is a Web Audio
   // node, not a scene child, so it must be explicitly stopped or it bleeds past the match).
   state.tauntMenuOpen = false;
@@ -1094,10 +1135,22 @@ function onSnapshot(msg) {
   hudTimer.anchor(msg.timeLeft, nowMs());
   ui.setHud(msg);
   updateBlindfold(msg.timeLeft);
+  // VOTE-KICK: the host's live tally rides every snapshot (null when idle). Drive the top-of-screen
+  // banner from it. A NEW vote (different target than the one we last cast in) clears our local "voted"
+  // latch so the Yes/No buttons show again. The countdown + counts come straight from the host.
+  const vk = msg.voteKick || null;
+  // A genuinely NEW vote (target changed from a KNOWN previous one) clears our local "voted" latch so
+  // the Yes/No buttons show again. We do NOT reset on the FIRST snapshot of a vote (state.voteKick still
+  // null) — that preserves the initiator's optimistic auto-YES latch set in ui.onVoteKick.
+  if (vk && state.voteKick && state.voteKick.target !== vk.target) state.votedTarget = null;
+  if (!vk) state.votedTarget = null;
+  state.voteKick = vk;
+  const myVote = vk && state.votedTarget === vk.target;
+  ui.setVoteKick(vk, state.selfId, myVote);
   // Newest roster for the pause scoreboard; refresh it live if the pause menu is open (the
   // world keeps running underneath, so health/roster keep updating behind the overlay).
   state.lastPlayers = msg.players;
-  if (state.paused) ui.updatePauseScoreboard(msg.players, state.selfId, state.role === ROLE.HUNTER);
+  if (state.paused) ui.updatePauseScoreboard(msg.players, state.selfId, state.role === ROLE.HUNTER, voteCtx());
   if (debugMenu) debugMenu.onSnapshot(msg); // feed the debug panel (roster/states)
   if (scene) {
     scene.syncPlayers(msg.players); // no-op until ensureScene() resolves
@@ -1299,6 +1352,38 @@ function onEvent(msg) {
     case 'log':
       // PUBLIC log line broadcast by the host (a team switch or a mid-round join). Everyone sees it.
       if (msg.text) ui.feed(msg.text);
+      break;
+    case 'kicked':
+      // VOTE-KICK: WE were vote-kicked. Show a clear message and return to the menu — the same teardown
+      // as leaving voluntarily (the host has already removed us from the round/room server-side).
+      backToMenu(`You were vote-kicked (${msg.yes || 0} yes, ${msg.no || 0} no).`);
+      break;
+    case 'voteKickResult': {
+      // VOTE-KICK resolved (or was cancelled by the target leaving). Hide the banner immediately (the
+      // next snapshot carries voteKick:null too) and feed the outcome. On a FAILED vote, grey THAT
+      // target's kick button locally for the configured cooldown (the host enforces the real rule).
+      state.voteKick = null;
+      state.votedTarget = null;
+      ui.setVoteKick(null, state.selfId, false);
+      if (msg.cancelled) {
+        ui.feed(`Vote to kick ${msg.name || 'player'} cancelled.`);
+      } else if (msg.kicked) {
+        if (msg.target !== state.selfId) ui.feed(`${msg.name || 'A player'} was vote-kicked (${msg.yes} yes, ${msg.no} no).`);
+      } else {
+        ui.feed(`Vote to kick ${msg.name || 'player'} failed (${msg.yes} yes, ${msg.no} no).`);
+        const cdSecs = state.cfg && state.cfg.rules && state.cfg.rules.voteKickCooldownSeconds != null ? state.cfg.rules.voteKickCooldownSeconds : 5;
+        const cdMs = Math.max(0, cdSecs * 1000);
+        if (msg.target) state.voteKickCooldowns.set(msg.target, nowMs() + cdMs);
+      }
+      if (state.paused) ui.updatePauseScoreboard(state.lastPlayers || [], state.selfId, state.role === ROLE.HUNTER, voteCtx());
+      break;
+    }
+    case 'voteKickDenied':
+      // VOTE-KICK: the host refused OUR start request (a vote already running / target on cooldown /
+      // the host can't be kicked). Private to us — explain in the feed and drop the optimistic auto-YES
+      // latch we set on the click, since no vote actually opened.
+      state.votedTarget = null;
+      if (msg.reason) ui.feed(msg.reason);
       break;
     case 'world':
       // WORLD SNAPSHOT ON BLINDFOLD RELEASE (host-authoritative object sync). A one-time full
@@ -2047,6 +2132,18 @@ function wireMenu() {
     session.send({ t: C2S.SWITCH_TEAM });
     closePause(true);
   };
+  // VOTE-KICK: a "vote kick" button on a scoreboard row asks the host to open a vote against that
+  // player. The host is the gate (one vote game-wide, cooldowns, no self/host) — we just relay the ask
+  // and close the pause menu so we can see the banner + vote. A voteKickDenied event explains a refusal.
+  ui.onVoteKick = (targetId) => {
+    if (!targetId) return;
+    session.send({ t: C2S.START_VOTEKICK, target: targetId });
+    state.votedTarget = targetId; // we're the initiator = an automatic YES → hide our own Yes/No buttons
+    closePause(true);
+  };
+  // VOTE-KICK: cast Yes/No from the banner buttons. Routes through the ONE castVote() helper the Y/N
+  // hotkeys also use (eligibility + already-voted guard live there).
+  ui.onVoteCast = (yes) => castVote(yes);
   // COPY JOIN LINK from the pause menu, so new players can be added mid-game by pasting one URL
   // (opening it drops them straight into the room — see tryJoinFromHash). Build the link string
   // FIRST (synchronous, via the shared buildJoinLink) then write it inside this tap handler —
@@ -2187,6 +2284,8 @@ function newSession() {
   ui.onTauntClose = () => closeTauntMenu(true);
   ui.onTauntPrefetch = () => { if (taunts) taunts.prefetch(); };
   input.onToggleTaunt = () => { if (state.tauntMenuOpen) closeTauntMenu(true); else openTauntMenu(); };
+  // VOTE-KICK: Y/N hotkeys route through the same castVote() helper as the banner buttons.
+  input.onVote = (yes) => castVote(yes);
   // MOUSE SENSITIVITY (B4, PC): restore the saved multiplier from localStorage, apply it to input.js,
   // and reflect it in the pause-menu slider. The slider then drives it LIVE (no restart) and persists
   // every change. On touch the slider row is hidden (ui.js) — this still runs harmlessly.

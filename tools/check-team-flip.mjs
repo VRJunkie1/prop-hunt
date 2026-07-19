@@ -274,10 +274,12 @@ console.log('\nE) source: protocol + referee + main/ui/index wiring');
   ok(/onPauseSwitch/.test(main) && /onPauseCopyRoom/.test(main), 'main.js wires the pause switch + copy-room buttons');
   ok(/setPauseRoom/.test(main), 'main.js populates the pause room code');
   ok(/case 'log'/.test(main), "main.js handles the public 'log' event");
-  ok(/updatePauseScoreboard\(msg\.players, state\.selfId, state\.role === ROLE\.HUNTER\)/.test(main), 'main.js passes the viewer role so a hunter roster hides disguises');
+  // The 3rd positional arg is still the viewer role (a trailing voteCtx arg was added for VOTE-KICK —
+  // `[),]` tolerates either the old closing paren or the new comma, so the disguise-leak intent holds).
+  ok(/updatePauseScoreboard\(msg\.players, state\.selfId, state\.role === ROLE\.HUNTER[),]/.test(main), 'main.js passes the viewer role so a hunter roster hides disguises');
 
   const ui = readText('js', 'ui.js');
-  ok(/updatePauseScoreboard\(players, selfId, selfIsHunter\)/.test(ui), 'ui.updatePauseScoreboard takes the viewer role');
+  ok(/updatePauseScoreboard\(players, selfId, selfIsHunter[),]/.test(ui), 'ui.updatePauseScoreboard takes the viewer role');
   ok(/p\.disguise && !selfIsHunter/.test(ui), 'ui hides the disguise label from a HUNTER viewer');
   ok(/setPauseRoom\(/.test(ui), 'ui has setPauseRoom (room code display)');
   ok(/onPauseSwitch/.test(ui) && /onPauseCopyRoom/.test(ui), 'ui wires the switch + copy-room callbacks');

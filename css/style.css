@@ -194,6 +194,43 @@ button.ghost:hover { background: #3d2a66; }
   font-size: 22px;
   text-align: center;
 }
+/* VOTE-KICK banner (2026-07-19, VRmike). Pinned to the TOP-CENTRE, BELOW the .hud-top row (health bar
+   etc) so nothing overlaps. Shown to ALL players while a vote runs; live tally + countdown text plus
+   tappable Yes/No buttons labelled (Y)/(N). #hud is pointer-events:none; the buttons re-enable it. On a
+   narrow/portrait screen the .hud-top wraps to two rows, so the banner drops lower there (media query). */
+.votekick {
+  position: absolute;
+  top: 62px; left: 50%;
+  transform: translateX(-50%);
+  max-width: 92vw;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+  background: #2a0d1acc;
+  border: 1px solid #ff6ba355;
+  padding: 8px 16px;
+  border-radius: 12px;
+  font-size: 15px;
+  text-align: center;
+  pointer-events: none; /* the bar is a spacer; the buttons re-enable it below */
+}
+.votekick.hidden { display: none; }
+.votekick-text { color: #ffe3ee; font-variant-numeric: tabular-nums; }
+.votekick-btns { display: flex; gap: 10px; }
+.votekick-btns.hidden { display: none; }
+.votekick-btn {
+  pointer-events: auto;
+  min-height: 34px; padding: 6px 16px;
+  border-radius: 8px; border: none;
+  font-size: 15px; font-weight: 600; cursor: pointer;
+  color: #fff;
+}
+.votekick-btn.yes { background: #2e8b57; }
+.votekick-btn.yes:active { background: #38a568; transform: scale(.97); }
+.votekick-btn.no { background: #b0392f; }
+.votekick-btn.no:active { background: #cf463b; transform: scale(.97); }
+.votekick-btn .vk-key { opacity: .8; font-weight: 400; font-size: 12px; }
+@media (max-width: 640px) {
+  .votekick { top: 108px; } /* .hud-top's health bar wraps to its own row on narrow/portrait screens */
+}
 .feed {
   position: absolute;
   bottom: 16px; left: 16px;
@@ -741,6 +778,18 @@ button.ghost:hover { background: #3d2a66; }
 .pause-scores .ps-hp { color: #7be38b; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pause-scores .ps-hp.crit { color: #ff6b6b; }
 .pause-scores .ps-empty { justify-content: center; color: #9a86c4; }
+/* VOTE-KICK button on each OTHER player's scoreboard row (2026-07-19, VRmike). Greyed + disabled while
+   any vote is active or during that player's post-fail cooldown; hidden entirely on the self row and the
+   host's row. Small, unobtrusive, sits at the row's right edge. */
+.pause-scores .ps-kick {
+  flex: 0 0 auto;
+  background: #6b2340; color: #ffd7e6;
+  border: 1px solid #ff6bA333; border-radius: 6px;
+  font-size: 11px; padding: 3px 8px; min-height: 26px;
+  cursor: pointer; white-space: nowrap;
+}
+.pause-scores .ps-kick:hover:not(:disabled) { background: #8a2b52; }
+.pause-scores .ps-kick:disabled { opacity: .4; cursor: default; }
 .pause-help { text-align: left; }
 .pause-help.hidden { display: none; }
 .pause-help-body { display: flex; flex-direction: column; gap: 2px; }

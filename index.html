@@ -86,6 +86,19 @@
             <span class="health-label">&#10084; 100%</span>
           </div>
         </div>
+        <!-- VOTE-KICK banner (2026-07-19, VRmike). A live bar pinned to the TOP of the screen, BELOW
+             the HUD top row (health bar etc), shown to ALL players while a vote-kick runs. Text shows
+             the live tally + countdown ("Kick <name>? VOTES: 2 Yes, 3 No, 2 Waiting · Timer: 4s"). The
+             Yes/No buttons are tappable on phones and labelled (Y)/(N) so PC players learn the hotkeys.
+             Shown/hidden + populated by ui.setVoteKick(); the buttons only appear for an eligible voter
+             who hasn't voted yet. #hud is pointer-events:none, so the buttons re-enable it themselves. -->
+        <div id="voteKick" class="votekick hidden" aria-hidden="true">
+          <span id="voteKickText" class="votekick-text"></span>
+          <div id="voteKickBtns" class="votekick-btns">
+            <button id="voteYes" class="votekick-btn yes" type="button">Yes <span class="vk-key">(Y)</span></button>
+            <button id="voteNo" class="votekick-btn no" type="button">No <span class="vk-key">(N)</span></button>
+          </div>
+        </div>
         <div id="banner" class="banner hidden"></div>
         <div id="feed" class="feed"></div>
       </div>

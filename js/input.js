@@ -104,6 +104,19 @@ export function prefersTouchControls(env) {
 // (touchLookSens) is deliberately UNTOUCHED — this slider is desktop mouse-look only.
 const BASE_SENSITIVITY = 0.0022;
 export const SENSITIVITY_RANGE = { min: 0.2, max: 3, default: 1, step: 0.05 };
+
+// VOTE-KICK hotkey matcher (PURE, exported for tools/check-votekick.mjs). Returns true (Y=yes),
+// false (N=no), or null for anything else, given a KeyboardEvent-like object. It matches on the
+// PHYSICAL key (`e.code`, which the browser reports as 'KeyY'/'KeyN' REGARDLESS of Shift/Ctrl/Alt),
+// so a vote still registers with any modifier held — a sprinting player holding Shift doesn't lose
+// their vote (VRmike's explicit ask). Modifier state (shiftKey/ctrlKey/altKey/metaKey) is deliberately
+// NEVER consulted here — that's what makes the match modifier-independent.
+export function matchVoteKey(e) {
+  if (!e) return null;
+  if (e.code === 'KeyY') return true;
+  if (e.code === 'KeyN') return false;
+  return null;
+}
 const clampSens = (m) => {
   const n = Number(m);
   if (!Number.isFinite(n)) return SENSITIVITY_RANGE.default;
@@ -152,6 +165,10 @@ export class Input {
     // On desktop the menu opening frees the mouse (main.js exits pointer lock) so the scrolling
     // list is clickable; on touch the on-screen taunt button does the same job. No-op while typing.
     this.onToggleTaunt = () => {}; // () => void  T key: toggle the taunt menu
+    // VOTE-KICK: Y = yes, N = no while a vote-kick is running (main.js gates it — a press with no
+    // active vote does nothing). onVote(true|false). See matchVoteKey (matched by the physical key so
+    // Shift/modifiers don't eat a sprinting player's vote).
+    this.onVote = () => {}; // (yes:boolean) => void  Y/N: cast a vote in the running vote-kick
 
     // Touch state. `this.touch` is the ONE classification the whole game keys off (the
     // Escape handler, the click/tap overlay text, the controls-help list, the editor gate,
@@ -447,6 +464,20 @@ export class Input {
       e.preventDefault();
       this.onToggleTaunt();
       return;
+    }
+    // VOTE-KICK — Y = yes, N = no during a running vote-kick. Matched by the PHYSICAL key
+    // (matchVoteKey → e.code, modifier-independent) so a player holding Shift (sprinting) still lands
+    // their vote. Handled BEFORE the pointer-lock gate so it fires whether the player is in play
+    // (locked) or has the mouse free (pause / UI mode). main.js gates it to an actual live vote the
+    // player is eligible for — a Y/N press with no vote does nothing. No-op while typing / on touch
+    // (the banner's on-screen Yes/No buttons cover phones).
+    {
+      const vote = matchVoteKey(e);
+      if (vote !== null) {
+        if (this.touch || this._isTyping()) return;
+        this.onVote(vote);
+        return;
+      }
     }
     this.keys.add(e.code);
     if (e.code === 'Space') {

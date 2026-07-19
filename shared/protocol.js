@@ -86,6 +86,20 @@ export const C2S = {
   // (accepted per VRmike — it's an intentional, abusable-for-laughs feature). The host broadcasts a
   // PUBLIC log line everyone sees (S2C.EVENT kind:'log'). See shared/referee.js applySwitchTeam.
   SWITCH_TEAM: 'switchTeam', // {}
+  // VOTE-KICK (2026-07-19, VRmike). Player-driven removal of an AFK/problem player — the human
+  // replacement for the retired automatic AFK-boot. Host-authoritative like everything else: the
+  // client only ASKS; the host owns the tally, the countdown, the one-at-a-time rule, the per-target
+  // cooldown and the resolution.
+  //   START_VOTEKICK { target } — open a vote-kick against the player `target`. The host is the gate:
+  //     it refuses a self / host / absent / on-cooldown target, refuses a second vote while one runs
+  //     (ONE game-wide), seeds the initiator as an automatic YES, and rides the live tally in every
+  //     snapshot (see S2C.SNAPSHOT `voteKick`). Active-round only (HIDING/HUNTING).
+  START_VOTEKICK: 'startVoteKick', // { target }
+  //   CAST_VOTE { vote:true|false } — cast YOUR vote in the running vote-kick (Y=yes, N=no). No id in
+  //     the payload — the host knows the sender and there is only ever one active vote. Accepted only
+  //     from an eligible voter (present when the vote started) who hasn't already voted; a duplicate or
+  //     ineligible cast is ignored. The instant every eligible voter has cast, the host resolves early.
+  CAST_VOTE: 'castVote', // { vote }
   // DEBUG family (?debug=1 only). A host-authoritative developer command routed like any
   // other C2S message. The referee DROPS every DEBUG message unless the HOST itself loaded
   // with ?debug=1 (referee.debugEnabled), so a tampered guest can't inject debug commands
@@ -115,6 +129,11 @@ export const S2C = {
   //   `tool` = the hunter's selected held item ('rifle'|'finder'|'grenade'), for the third-person
   //   held-item render (B7); null for non-hunters. `ack` = last INPUT.seq the host consumed
   //   from that player, for client reconciliation.
+  //   voteKick = the live VOTE-KICK tally (2026-07-19), or null when no vote is running. Rides EVERY
+  //     snapshot variant (they spread `...full`), so the banner counts + countdown update live and a
+  //     mid-vote joiner sees the vote immediately. Shape: { target, name, yes, no, waiting, timeLeft,
+  //     voters:[ids] } — `voters` is the electorate (present at vote start) so a client can tell if IT
+  //     is eligible to vote (a mid-vote joiner isn't). Carries NO positions / secret roles.
   EVENT: 'event', // { kind, ... }               -> discrete game events
   //   kind:'shot'       { by, ox,oy,oz, ix,iy,iz, hit } -> draw muzzle flash + tracer from
   //                     the rifle muzzle (o*) to the host-confirmed impact point (i*).
@@ -151,6 +170,19 @@ export const S2C = {
   //                     activating hunter IGNORES this echo of their own ping — they already heard
   //                     an instant local sound off the private kind:'find' reply above, so there's
   //                     no double-ping and no network lag on their own click. See referee.applyFind.
+  //   kind:'voteKickResult' { target, name, kicked, yes, no, cancelled? } -> BROADCAST when a
+  //                     vote-kick resolves. kicked:true => majority YES of votes cast → the target is
+  //                     removed via the leaver cleanup path (a public "X left (vote-kicked)" log line
+  //                     also fires). kicked:false => tie/majority NO → they stay (that target's kick
+  //                     button goes on a per-target 5s cooldown). cancelled:true => the target left
+  //                     mid-vote so the vote was dropped quietly. Clients hide the vote banner on any
+  //                     of these + feed the outcome.
+  //   kind:'voteKickDenied' { reason } -> PRIVATE reply to a would-be vote INITIATOR whose request was
+  //                     refused host-side (a vote already running / the target on post-fail cooldown /
+  //                     the host can't be kicked). The client shows `reason` in its feed; no vote opens.
+  //   kind:'kicked'     { reason, yes, no } -> PRIVATE notice to the player who was just vote-kicked,
+  //                     sent the instant before they're removed, so their client shows a clear message
+  //                     ("You were vote-kicked") and returns them to the menu (the leaver teardown).
   //   kind:'grenade'    { by, x, y, z, hits, backfire, redeemed } -> a grenade exploded at the
   //                     host-computed blast centre (x,y,z). Everyone draws the explosion flash
   //                     there. hits = prop players killed; backfire = HP the thrower took from
