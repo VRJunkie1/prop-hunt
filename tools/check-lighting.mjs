@@ -22,6 +22,7 @@ import {
   normalizeTonemapMode, TONEMAP_MODES, parseSHCoefficients, mapSHOverride,
   TIER_KEY, TIER_USERSET_KEY, TONEMAP_KEY, EXPOSURE_KEY,
   resolveAmbientIntensity, clampAmbientIntensity, AMBIENT_INTENSITY_DEFAULT, AMBIENT_INTENSITY_RANGE,
+  BUILD_GEOMETRY_BRIGHTNESS, AO_MAX_DISTANCE_METERS, AO_MIN_DISTANCE_METERS, ssaoDistanceRange,
 } from '../js/lighting-tiers.js';
 import { PerfMon } from '../js/perfmon.js';
 import { AutoTier } from '../js/auto-tier.js';
@@ -103,10 +104,10 @@ console.log('\n [3] TONEMAP A/B + exposure');
 ok(TONEMAP_MODES.join(',') === 'multiply,filmic', 'two modes: multiply, filmic');
 const mul = resolveTonemap('multiply', 1.0);
 ok(mul.toneMapping === 'linear' && Math.abs(mul.toneMappingExposure - MULTIPLY_FACTOR) < 1e-9,
-  `multiply @1.0 = LinearToneMapping w/ exposure ${MULTIPLY_FACTOR} (the flat 1.25× multiply)`);
+  `multiply @1.0 = LinearToneMapping w/ exposure ${MULTIPLY_FACTOR} (the flat multiply factor)`);
 const mul2 = resolveTonemap('multiply', 1.5);
 ok(Math.abs(mul2.toneMappingExposure - MULTIPLY_FACTOR * 1.5) < 1e-9,
-  'multiply folds the slider into the pre-tonemap multiplier (1.25 × exposure)');
+  'multiply folds the slider into the pre-tonemap multiplier (MULTIPLY_FACTOR × exposure)');
 const fil = resolveTonemap('filmic', 1.2);
 ok(fil.toneMapping === 'aces' && Math.abs(fil.toneMappingExposure - 1.2) < 1e-9,
   'filmic = ACESFilmicToneMapping, slider IS the exposure');
@@ -147,6 +148,47 @@ ok(resolveAmbientIntensity({ ambientIntensity: 99 }) === AMBIENT_INTENSITY_RANGE
 ok(clampAmbientIntensity(1.5) === 1.5 && clampAmbientIntensity(NaN) === AMBIENT_INTENSITY_DEFAULT, 'clampAmbientIntensity clamps/defaults');
 
 // ---------------------------------------------------------------------------
+// 4c. LIGHTING TUNING ROUND 2 (VRmike, 2026-07-19) — tonemap defaults/range pushed hotter, the
+//     build-geometry brightness scalar, and the SSAO world-space distance falloff.
+// ---------------------------------------------------------------------------
+console.log('\n [4c] ROUND 2 tuning (tonemap defaults/range, build-geometry, SSAO falloff)');
+// Tonemap: MULTIPLY is the default, and both knobs are ~30% hotter than round 1 (1.25 / 2.0).
+ok(normalizeTonemapMode(undefined) === 'multiply' && normalizeTonemapMode(null) === 'multiply',
+  'multiply is the DEFAULT tonemap mode (VRmike prefers it over ACES)');
+ok(Math.abs(MULTIPLY_FACTOR - 1.6) < 1e-9, `multiply factor pushed to ${MULTIPLY_FACTOR} (was 1.25, ~30% hotter)`);
+ok(EXPOSURE_RANGE.max >= 2.6 - 1e-9, `exposure ceiling raised to ${EXPOSURE_RANGE.max} (was 2.0, ~30% higher)`);
+// index.html's slider max must mirror EXPOSURE_RANGE.max so the UI can actually reach the ceiling.
+{
+  const htmlSrc = read('index.html');
+  const m = htmlSrc.match(/id="exposureSlider"[\s\S]*?max="([0-9.]+)"/);
+  ok(m && Math.abs(parseFloat(m[1]) - EXPOSURE_RANGE.max) < 1e-9,
+    `index.html exposure slider max (${m && m[1]}) mirrors EXPOSURE_RANGE.max (${EXPOSURE_RANGE.max})`);
+}
+// Build-geometry brightness: a darkening (<1) scalar, applied in scene.js to the primitive albedo.
+ok(BUILD_GEOMETRY_BRIGHTNESS > 0 && BUILD_GEOMETRY_BRIGHTNESS < 1,
+  `BUILD_GEOMETRY_BRIGHTNESS is a darkening factor (=${BUILD_GEOMETRY_BRIGHTNESS})`);
+{
+  const sc = read('js/scene.js');
+  ok(/BUILD_GEOMETRY_BRIGHTNESS/.test(sc) && /multiplyScalar\(BUILD_GEOMETRY_BRIGHTNESS\)/.test(sc),
+    'scene.js darkens build-added primitive albedo via multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS)');
+}
+// SSAO distance falloff: meters → normalized [0,1] depth deltas for the camera near/far; near-range only.
+{
+  const r = ssaoDistanceRange(0.1, 500); // the real game camera (near 0.1, far 500)
+  ok(Math.abs(r.maxDistance - AO_MAX_DISTANCE_METERS / 499.9) < 1e-6,
+    `ssaoDistanceRange maps ${AO_MAX_DISTANCE_METERS} m to normalized ${r.maxDistance.toFixed(5)} at far=500`);
+  ok(r.maxDistance < 0.01 && r.maxDistance > 0, `AO max range is near (${r.maxDistance.toFixed(5)} ≪ the old 0.1 ≈ 50 m)`);
+  ok(r.minDistance >= 0 && r.minDistance < r.maxDistance, 'AO min noise-floor is below the max range');
+  ok(AO_MIN_DISTANCE_METERS < AO_MAX_DISTANCE_METERS && AO_MAX_DISTANCE_METERS <= 2,
+    `AO max distance is ~1-2 m (=${AO_MAX_DISTANCE_METERS} m), tunable`);
+  const rlo = ssaoDistanceRange(NaN, NaN); // garbage near/far → clamped, never NaN
+  ok(rlo.minDistance >= 0 && rlo.minDistance <= 1 && rlo.maxDistance >= 0 && rlo.maxDistance <= 1,
+    'ssaoDistanceRange clamps garbage near/far into [0,1]');
+  ok(/ssaoDistanceRange\(this\.camera\.near, this\.camera\.far\)/.test(read('js/lighting.js')),
+    'lighting.js sets SSAO min/maxDistance from ssaoDistanceRange(camera.near, camera.far)');
+}
+
+// ---------------------------------------------------------------------------
 // 5. PERSISTENCE + source wiring.
 // ---------------------------------------------------------------------------
 console.log('\n [5] PERSISTENCE + wiring');
@@ -165,6 +207,10 @@ ok(/scene\.setLightingTier/.test(mainSrc) && /scene\.setTonemap/.test(mainSrc),
   'main.js pushes tier + tonemap onto the scene');
 ok(/ui\.onLightingTier/.test(mainSrc) && /ui\.onTonemapMode/.test(mainSrc),
   'main.js wires the pause-menu lighting callbacks');
+// ROUND 2: default START at the TOP tier — the no-saved/no-manual branch seeds MAX_TIER, NOT the
+// device guess (the FPS probe steps down if it lags). A saved/manual pick still wins (loaded above it).
+ok(/!lightingState\.userSet && !lightingState\.hasSaved\) lightingState\.tier = MAX_TIER/.test(mainSrc),
+  'main.js defaults the starting tier to MAX_TIER (T3) on all devices (flipped strategy)');
 ok(/exposureSlider|exposureVal/.test(html), 'index.html carries the exposure slider');
 ok(/lighting\.js|LightingRig|_lighting/.test(sceneSrc), 'js/scene.js wires the LightingRig');
 ok(/lightingTier|lightingRow|Lighting Quality/i.test(html), 'index.html carries the Lighting Quality pause-menu row');
@@ -227,8 +273,8 @@ try {
   ok(renderer.toneMapping === THREE.ACESFilmicToneMapping && Math.abs(renderer.toneMappingExposure - 1.3) < 1e-9,
     'filmic tonemap → ACES on the renderer w/ exposure 1.3');
   rig.setTonemap('multiply', 1.0);
-  ok(renderer.toneMapping === THREE.LinearToneMapping && Math.abs(renderer.toneMappingExposure - 1.25) < 1e-9,
-    'multiply tonemap → Linear on the renderer w/ exposure 1.25');
+  ok(renderer.toneMapping === THREE.LinearToneMapping && Math.abs(renderer.toneMappingExposure - MULTIPLY_FACTOR) < 1e-9,
+    `multiply tonemap → Linear on the renderer w/ exposure ${MULTIPLY_FACTOR}`);
 
   rig.setTierConfig(resolveTierConfig(0)); rig.reattach(map);
   ok(!rig._probe && !rig._contactLight && !rig._angledLight && renderer.shadowMap.enabled === false,

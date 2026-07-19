@@ -38,8 +38,9 @@ a perf readout in the debug menu. This note is the map of the pieces.
 
 - `lightingState` mirrors what's applied (tier / userSet / hasSaved / cpuBound / verdict / tonemap /
   exposure). Boot: `loadLightingTier()` + `loadTonemap()` from localStorage; a saved tier (`hasSaved`)
-  or a manual pick (`userSet`) wins, else `ensureScene()` seeds from `guessTierFromDevice(deviceHints(
-  renderer))` once the GL context exists (GPU string via `WEBGL_debug_renderer_info`).
+  or a manual pick (`userSet`) wins, **else `ensureScene()` seeds `MAX_TIER` (T3) on EVERY device**
+  (round-2 flip — see below; `guessTierFromDevice` is still computed for the perf HUD but NO LONGER
+  seeds the start tier). The FPS probe steps DOWN if it lags.
 - `applyLightingToScene()` pushes tier + tonemap onto the scene + refreshes the pause-menu highlight.
 - `setLightingTierManual()` (pause pick) sets `userSet`, saves, and `autoTier.disable()` — manual
   always wins. `setTonemapMode` / `setExposure` persist + apply live.
@@ -51,9 +52,10 @@ a perf readout in the debug menu. This note is the map of the pieces.
 ## Pause menu (`js/ui.js` + `index.html` + `css/style.css`)
 
 - "Lighting Quality" row: 4 tier buttons (T0 Potato / T1 Shadows / T2 SSAO / T3 Bloom) in a row.
-  "Tonemap" row: `1.25× Multiply` / `Filmic (ACES)` buttons + an exposure slider (0.4–2.0). Shown on
-  ALL devices (unlike the PC-only sensitivity slider). Event-delegated; highlight re-pushed from state
-  via `ui.setLightingTier(tier)` / `ui.setTonemap(mode, exposure)`.
+  "Tonemap" row: `1.6× Multiply` (DEFAULT) / `Filmic (ACES)` buttons + an exposure slider (0.4–2.6).
+  Shown on ALL devices (unlike the PC-only sensitivity slider). Event-delegated; highlight re-pushed
+  from state via `ui.setLightingTier(tier)` / `ui.setTonemap(mode, exposure)`. (Multiply factor + slider
+  ceiling were pushed ~30% hotter in round 2 — see below.)
 
 ## Perf readout (`js/debug.js`, the ?debug=1 overlay — NOT the pause menu)
 
@@ -146,6 +148,47 @@ grey-only pixels inside the projected prop-ring so the bright sky / empty floor 
 The test props FLOAT (`p.y` offset) so their straight-down shadows land on open floor — the jump case.
 `?lightingtest=all` sweeps T0–T3; `?lightingtest=2` holds one tier for a screenshot. Failures →
 `console.error` (surfaced by `browser_check`). VERIFIED: 4/4 tiers pass on desktop + phone profiles.
+
+## TUNING ROUND 2 — flipped tier default, hotter tonemap, build-geometry darken, SSAO near-range (VRmike, 2026-07-19, follows c07bafa)
+
+Four playtest items. All presentation-layer; gameplay/netcode/anti-cheat untouched.
+
+1. **Flipped tier default (T3-first).** `guessTierFromDevice` was TOO CONSERVATIVE — VRmike's high-end
+   phone defaulted to the bottom tiers yet runs T3 fine. Now `main.js` seeds `MAX_TIER` (T3) on ALL
+   devices when there's no saved/manual choice; the runtime FPS probe (`js/auto-tier.js`) is the safety
+   net that steps DOWN if the frame actually lags (GPU-bound). A saved/manual pick STILL wins. The
+   device guess is still computed (perf HUD) but no longer picks the start tier. Tradeoff: a genuinely
+   weak phone may stutter for the ~10 s warmup before the probe demotes it — accepted cost of looking
+   great by default. `lightingState.tier` also inits to `MAX_TIER`. Guard §5 pins the MAX_TIER seed.
+
+2. **Tonemap defaults + range (both ~30% hotter).** `multiply` is (and stays) the DEFAULT — VRmike far
+   prefers it to ACES filmic. `MULTIPLY_FACTOR` 1.25 → **1.6**; `EXPOSURE_RANGE.max` 2.0 → **2.6** (the
+   `index.html` `#exposureSlider max` mirrors it, and the button label is now `1.6× Multiply`). A/B
+   toggle + persistence unchanged. Guard §4c pins the factor, ceiling, slider-max mirror, and default.
+
+3. **Build-geometry darken (anti-bleach).** OUR build-added primitives (beige floor, boundary walls,
+   columns, canisters, and any catalog entry WITHOUT an asset-pack GLB — all flat `MeshLambertMaterial`
+   coloured from map/catalog JSON) blew out to near-white under the hotter light, while Kenney GLB props
+   sat fine beside them. ONE shared scalar `BUILD_GEOMETRY_BRIGHTNESS = 0.6` (in `lighting-tiers.js`)
+   multiplies those albedos DOWN. Applied in `scene.js` at the THREE-color choke points:
+   `makePropMesh` (every primitive prop/fixture/disguise-fallback), the ground plane, and the boundary
+   walls — via `new THREE.Color(...).multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS)`. **Asset-pack GLB
+   materials are NEVER touched** (they load their own materials through GLTFLoader; the primitive is only
+   a pre-swap fallback). One source of truth so future build-added geometry inherits the fix. Guard §4c
+   pins it's a darkening (<1) factor + the scene.js wiring.
+
+4. **SSAO near-range falloff.** AO was darkening geometry dozens of meters away. three r161 SSAOPass
+   `min/maxDistance` are NORMALIZED depth deltas over the camera near..far span (NOT meters): the shader
+   counts occlusion only when `minDistance < (sampleDepth − realDepth) < maxDistance`. With our camera
+   far = 500, the old `maxDistance = 0.1` ⇒ ~0.1×499.9 ≈ **50 m** of bleed. Now expressed as WORLD-SPACE
+   meters (`AO_MAX_DISTANCE_METERS = 1.5`, `AO_MIN_DISTANCE_METERS = 0.02`, `AO_KERNEL_RADIUS_METERS =
+   0.8`) and converted per-camera by `ssaoDistanceRange(near, far)` (`d / (far−near)`, clamped [0,1]) in
+   `lighting.js _buildComposer`. At far=500, 1.5 m → normalized 0.0030 — near-range only. Guard §4c pins
+   the meters→normalized math + the lighting.js wiring.
+
+**Verified:** `check-lighting.mjs` all green (incl. new §4c); `js/lighting-selftest.js` via
+`browser_check` — all 4 tiers render (no black screen) with shadows reading on desktop AND phone
+profiles under the new hotter default; the floor now sits at a controlled mid-grey instead of bleaching.
 
 ## Guard
 

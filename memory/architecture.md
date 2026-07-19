@@ -200,8 +200,9 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   (allocation-free CPU/GPU frame-cost stopwatch) + `js/auto-tier.js` (runtime FPS-probe controller —
   steps the tier DOWN once when GPU-bound, keeps+SAVEs if it helps else reverts + marks CPU-bound, then
   cools down; a manual pause pick always wins). `js/main.js` persists tier/tonemap/exposure to
-  localStorage (`prophunt.lighting*` / `.tonemap` / `.exposure`), seeds the initial tier from
-  `guessTierFromDevice` (GPU string via `WEBGL_debug_renderer_info`), instruments the frame loop
+  localStorage (`prophunt.lighting*` / `.tonemap` / `.exposure`), defaults the initial tier to the TOP
+  tier (`MAX_TIER`/T3) on all devices (round-2 flip — the FPS probe steps DOWN if it lags; a saved/manual
+  pick still wins; `guessTierFromDevice` is kept for the perf HUD only), instruments the frame loop
   (`perf.beginFrame`/`endCpu`), and drives the auto-tuner. The pause menu (`js/ui.js`/`index.html`)
   carries the "Lighting Quality" tier row + tonemap A/B + exposure slider; the `?debug=1` overlay
   (`js/debug.js`) shows the perf readout (FPS, CPU ms, inferred GPU ms, tier, CPU/GPU verdict). Guard:

@@ -108,18 +108,23 @@ export function guessTierFromDevice(hints = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Tonemap A/B — "1.25x multiply" (flat RGB multiply screen effect) vs "Filmic" (ACES) with an
+// Tonemap A/B — the flat "multiply" (RGB multiply screen effect) vs "Filmic" (ACES) with an
 // exposure slider. exposure is the PRE-tonemap multiplier (so filmic+exposure covers the hybrid
 // look). Implemented on the renderer, not a shader pass, so it works on EVERY tier incl. T0:
 //   multiply → THREE.LinearToneMapping (a flat `saturate(exposure*color)`) with exposure baked
-//              to 1.25× the slider, i.e. the "1.25x multiply" at slider=1.
+//              to MULTIPLY_FACTOR× the slider (the flat multiply at slider=1).
 //   filmic   → THREE.ACESFilmicToneMapping with the slider as toneMappingExposure directly.
 // resolveTonemap returns a THREE-agnostic descriptor; js/lighting.js maps `toneMapping` to the
 // real THREE constant. PURE so the guard can pin the exposure math.
+//
+// LIGHTING TUNING ROUND 2 (VRmike, 2026-07-19): 'multiply' is the DEFAULT (normalizeTonemapMode
+// falls back to it) — VRmike far prefers it to ACES filmic. Both knobs were pushed ~30% hotter so
+// the look can be cranked further: the multiply factor 1.25 → 1.6, and the exposure ceiling 2.0 →
+// 2.6 (the index.html slider `max` mirrors this). MULTIPLY the default stays, A/B toggle + persist.
 // ---------------------------------------------------------------------------
 export const TONEMAP_MODES = ['multiply', 'filmic'];
-export const MULTIPLY_FACTOR = 1.25; // the flat multiply at exposure 1.0
-export const EXPOSURE_RANGE = { min: 0.4, max: 2.0, default: 1.0 };
+export const MULTIPLY_FACTOR = 1.6; // the flat multiply at exposure 1.0 (was 1.25 — pushed ~30% hotter)
+export const EXPOSURE_RANGE = { min: 0.4, max: 2.6, default: 1.0 }; // max 2.0 → 2.6 (~30% higher ceiling)
 
 export function clampExposure(v) {
   const n = Number(v);
@@ -168,6 +173,44 @@ export function resolveAmbientIntensity(map) {
     return clampAmbientIntensity(map.ambientIntensity);
   }
   return AMBIENT_INTENSITY_DEFAULT;
+}
+
+// ---------------------------------------------------------------------------
+// BUILD-GEOMETRY BRIGHTNESS (LIGHTING TUNING ROUND 2, VRmike, 2026-07-19). The primitive/procedural
+// geometry OUR builds add — the beige floor, boundary walls, columns, canisters, and any prop whose
+// catalog entry has no asset-pack GLB — is drawn with flat MeshLambertMaterials coloured straight
+// from the map/catalog JSON. Under the new hotter default lighting those albedos blew out to
+// near-white while the Kenney asset-pack GLBs (their own baked materials) sat fine right beside them
+// (see screenshots). This ONE scalar multiplies every build-added primitive's base colour DOWN so it
+// reads at the same visual level as the asset-pack props. Asset-pack GLB materials are NEVER touched
+// (they load their own materials via GLTFLoader). One source of truth so future build-added geometry
+// inherits the corrected level instead of bleaching again. PURE (just a number) — scene.js applies it
+// via THREE.Color.multiplyScalar; the guard pins that it's a darkening (<1) factor.
+// ---------------------------------------------------------------------------
+export const BUILD_GEOMETRY_BRIGHTNESS = 0.6; // multiply non-asset-pack primitive albedo down to match the GLB props
+
+// ---------------------------------------------------------------------------
+// SSAO DISTANCE FALLOFF (LIGHTING TUNING ROUND 2, VRmike, 2026-07-19). three r161's SSAOPass
+// min/maxDistance are NORMALIZED depth deltas in [0,1] over the camera near..far span — NOT meters.
+// The shader only counts a sample as occlusion when `minDistance < (sampleDepth - realDepth) <
+// maxDistance`. With our camera far plane at 500, the old maxDistance = 0.1 meant AO kept
+// contributing across ~0.1 × (500 − 0.1) ≈ 50 m of depth — so ambient occlusion was visibly
+// darkening geometry dozens of meters away (VRmike's report). We express the AO range as WORLD-SPACE
+// meters here (tunable) and convert to the normalized deltas the pass wants at build time via
+// ssaoDistanceRange(near, far), so AO only darkens close-up crevices. PURE so the guard can pin the
+// meters→normalized math without a GL context.
+// ---------------------------------------------------------------------------
+export const AO_MAX_DISTANCE_METERS = 1.5;  // occlusion ignored beyond ~1.5 m depth difference (near-range only)
+export const AO_MIN_DISTANCE_METERS = 0.02; // noise floor: ignore <2 cm self-occlusion (avoids acne)
+export const AO_KERNEL_RADIUS_METERS = 0.8; // sampling-sphere radius in view space (already near-range; kept)
+
+// Convert the world-space AO range (meters) to three SSAOPass's normalized [0,1] depth deltas for a
+// given camera near/far. viewZToOrthographicDepth maps [-near,-far] LINEARLY onto [0,1], so a depth
+// difference of `d` meters is `d / (far - near)` in normalized space. Clamped into [0,1]. PURE.
+export function ssaoDistanceRange(near, far) {
+  const span = Math.max(1e-6, (Number(far) || 0) - (Number(near) || 0));
+  const norm = (m) => Math.max(0, Math.min(1, (Number(m) || 0) / span));
+  return { minDistance: norm(AO_MIN_DISTANCE_METERS), maxDistance: norm(AO_MAX_DISTANCE_METERS) };
 }
 
 // ---------------------------------------------------------------------------

@@ -206,12 +206,14 @@
               <button type="button" class="lighting-tier" data-tier="3"><b>T3</b><span>Bloom</span></button>
             </div>
           </div>
-          <!-- TONEMAP A/B + exposure (2026-07-19). "1.25× multiply" (flat) vs "Filmic" (ACES);
-               the exposure slider is the pre-tonemap multiplier (so filmic+exposure = the hybrid). -->
+          <!-- TONEMAP A/B + exposure (2026-07-19, round 2). Flat "multiply" (DEFAULT — VRmike's pick)
+               vs "Filmic" (ACES); the exposure slider is the pre-tonemap multiplier (so filmic+exposure
+               = the hybrid). Round 2 pushed both knobs ~30% hotter: multiply factor 1.25→1.6 and the
+               slider ceiling 2.0→2.6 (mirrors EXPOSURE_RANGE.max in js/lighting-tiers.js). -->
           <div id="tonemapRow" class="pause-tonemap">
             <div class="pause-sec-label">Tonemap</div>
             <div id="tonemapModes" class="tonemap-modes">
-              <button type="button" class="tonemap-mode" data-mode="multiply">1.25&times; Multiply</button>
+              <button type="button" class="tonemap-mode" data-mode="multiply">1.6&times; Multiply</button>
               <button type="button" class="tonemap-mode" data-mode="filmic">Filmic (ACES)</button>
             </div>
             <div class="pause-sens-head">
@@ -219,7 +221,7 @@
               <span id="exposureVal" class="pause-sens-val">1.00&times;</span>
             </div>
             <input id="exposureSlider" class="pause-sens-slider" type="range"
-                   min="0.4" max="2" step="0.05" value="1" aria-label="Exposure" />
+                   min="0.4" max="2.6" step="0.05" value="1" aria-label="Exposure" />
           </div>
           <div class="pause-sec-label">Scoreboard</div>
           <ul id="pauseScores" class="pause-scores"></ul>
