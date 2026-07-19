@@ -25,7 +25,10 @@
 import * as THREE from 'three';
 // Relative (not root-absolute) so a node harness can load this module for the headless rig check
 // (tools/check-lighting.mjs §6) — the browser resolves it identically. The sibling is pure.
-import { resolveTierConfig, resolveTonemap, resolveAmbientIntensity, AMBIENT_INTENSITY_DEFAULT } from './lighting-tiers.js';
+import {
+  resolveTierConfig, resolveTonemap, resolveAmbientIntensity, AMBIENT_INTENSITY_DEFAULT,
+  ssaoDistanceRange, AO_KERNEL_RADIUS_METERS,
+} from './lighting-tiers.js';
 
 // Map the pure tonemap descriptor's string to the real THREE tone-mapping constant.
 function threeToneMapping(name) {
@@ -286,9 +289,14 @@ export class LightingRig {
     composer.addPass(renderPass);
     if (cfg.ssao) {
       const p = new M.SSAOPass(this.scene, this.camera, w, h);
-      p.kernelRadius = 0.8;
-      p.minDistance = 0.002;
-      p.maxDistance = 0.1;
+      p.kernelRadius = AO_KERNEL_RADIUS_METERS;
+      // SSAO DISTANCE FALLOFF (round 2, 2026-07-19): min/maxDistance are NORMALIZED depth deltas
+      // over the camera near..far span, not meters — with far=500 the old maxDistance=0.1 let AO
+      // bleed across ~50 m. Derive them from a world-space meter range (AO_*_DISTANCE_METERS) and
+      // THIS camera's near/far so AO only darkens near-range crevices (~1.5 m), never distant geometry.
+      const range = ssaoDistanceRange(this.camera.near, this.camera.far);
+      p.minDistance = range.minDistance;
+      p.maxDistance = range.maxDistance;
       p.output = M.SSAOPass.OUTPUT.Default; // composite AO over the RenderPass beauty (never SSAO-only)
       this._ssaoPass = p;
       composer.addPass(p);

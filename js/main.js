@@ -96,12 +96,16 @@ async function ensureScene() {
     // (same rules.minWallHalfThickness the engine + guard use). Harmless when debug is off.
     scene.rules = state.cfg && state.cfg.rules ? state.cfg.rules : null;
     if (state.selfId) scene.setSelf(state.selfId);
-    // LIGHTING OVERHAUL: the renderer now exists, so the device-heuristic auto-guess can read the
-    // GPU string. If the player never picked a tier by hand AND nothing was saved, seed from the
-    // device guess; a manual choice (userSet) or a previously-saved tier always wins. Then push the
-    // tier + tonemap onto the fresh scene.
+    // LIGHTING TUNING ROUND 2 (VRmike, 2026-07-19): FLIP the tier strategy — START at the TOP tier
+    // (T3) by DEFAULT on ALL devices, and let the runtime FPS probe (js/auto-tier.js) step it DOWN
+    // only if the frame actually lags (the step-down machinery is the safety net). VRmike's high-end
+    // phone was defaulting to the bottom tiers via the device heuristic yet runs T3 fine; guessing
+    // low was too conservative. A manual choice (userSet) or a previously-saved tier STILL wins over
+    // this default. We still compute the device guess for the perf HUD, but it no longer seeds the
+    // starting tier. Honest tradeoff: a genuinely weak phone may stutter for the ~10s probe window
+    // before the auto-tuner kicks it down — the accepted cost of looking great by default.
     lightingState.guess = guessTierFromDevice(deviceHints(scene.renderer));
-    if (!lightingState.userSet && !lightingState.hasSaved) lightingState.tier = lightingState.guess;
+    if (!lightingState.userSet && !lightingState.hasSaved) lightingState.tier = MAX_TIER;
     applyLightingToScene();
     // AUTO-TIER: unless the player picked manually, stand up the runtime FPS-probe controller. It
     // only steps DOWN, once, when the evidence says GPU-bound, then cools down (no yo-yo). A manual
@@ -1877,7 +1881,7 @@ function loadTonemap() {
 // Live lighting state (mirrors what's applied to the scene). Filled at boot from localStorage +
 // the device guess; the pause menu + auto-tuner mutate it and call applyLightingToScene().
 const lightingState = {
-  tier: 0,
+  tier: MAX_TIER,     // ROUND 2: default START at the TOP tier on all devices; the FPS probe steps DOWN if needed
   userSet: false,     // did the player pick manually? (outranks auto)
   hasSaved: false,    // was a tier already saved (manual OR a prior auto ratchet)? → don't re-guess
   guess: 0,           // the device-heuristic initial guess (auto starting point)

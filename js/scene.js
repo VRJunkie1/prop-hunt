@@ -24,7 +24,7 @@ import { installMasterLimiter } from '/shared/audio-limiter.js';
 // light, angled fill, SSAO/bloom post, tonemap A/B). LightingRig owns the THREE objects; the pure
 // tier/tonemap/SH math lives in js/lighting-tiers.js (headless-guarded). See notes/lighting.md.
 import { LightingRig } from '/js/lighting.js';
-import { resolveTierConfig, mapSHOverride, resolveAmbientIntensity } from '/js/lighting-tiers.js';
+import { resolveTierConfig, mapSHOverride, resolveAmbientIntensity, BUILD_GEOMETRY_BRIGHTNESS } from '/js/lighting-tiers.js';
 
 // HRTF BINAURAL PANNING for taunt audio (Jie, 2026-07-18). Web Audio's PannerNode has two
 // panningModels: 'equalpower' (a cheap constant-power L/R pan — THREE's default) and 'HRTF' (a
@@ -66,7 +66,12 @@ export function makePropMesh(type, catalog) {
   if (!c) return null;
   let geo;
   let baseY;
-  const color = new THREE.Color(c.color);
+  // BUILD-GEOMETRY BRIGHTNESS (round 2, 2026-07-19): this primitive is our OWN build-added geometry
+  // (columns, canisters, the fallback shape for any catalog entry without an asset-pack GLB). Darken
+  // its flat albedo through the ONE shared scalar so it doesn't bleach white under the hotter default
+  // lighting — matching the Kenney GLB props beside it. The real GLB (when one swaps in) keeps its
+  // own baked material untouched. One source of truth in js/lighting-tiers.js.
+  const color = new THREE.Color(c.color).multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS);
   switch (c.shape) {
     case 'box':
       geo = new THREE.BoxGeometry(c.w, c.h, c.d);
@@ -543,17 +548,18 @@ export class Scene3D {
     sun.position.set(20, 40, 10);
     this.scene.add(sun);
 
-    // Ground.
+    // Ground. BUILD-GEOMETRY BRIGHTNESS (round 2): the beige floor is our own geometry, not an
+    // asset-pack mesh — darken its albedo through the shared scalar so it stops blowing out white.
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(map.size, map.size),
-      new THREE.MeshLambertMaterial({ color: new THREE.Color(map.ground) })
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(map.ground).multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS) })
     );
     ground.rotation.x = -Math.PI / 2;
     this.scene.add(ground);
 
-    // Boundary walls so the arena reads as enclosed.
+    // Boundary walls so the arena reads as enclosed (also our build-added geometry → same scalar).
     const half = map.size / 2;
-    const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x2a2140 });
+    const wallMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x2a2140).multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS) });
     const wallGeo = new THREE.BoxGeometry(map.size, 3, 0.5);
     const walls = [
       [0, -half, 0],

@@ -26,7 +26,7 @@
 
 import * as THREE from 'three';
 import { makePropMesh, instantiateModel, targetSizeForEntry } from './scene.js';
-import { resolveAmbientIntensity } from './lighting-tiers.js';
+import { resolveAmbientIntensity, BUILD_GEOMETRY_BRIGHTNESS } from './lighting-tiers.js';
 
 const DEG = Math.PI / 180;
 const ROT_STEP = 15 * DEG; // coarse rotate step
@@ -203,7 +203,9 @@ export class Editor {
     // math plane for that, not this mesh).
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(map.size, map.size),
-      new THREE.MeshLambertMaterial({ color: new THREE.Color(map.ground || '#6b6b6b') })
+      // BUILD-GEOMETRY BRIGHTNESS (round 2): match the game — darken the beige floor so the editor
+      // preview reads at the same level as the game's ground under the new lighting.
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(map.ground || '#6b6b6b').multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS) })
     );
     ground.rotation.x = -Math.PI / 2;
     this.scene.add(ground);
@@ -217,7 +219,7 @@ export class Editor {
 
     // Boundary walls (match the game's enclosing box so the arena reads the same).
     const half = map.size / 2;
-    const wallMat = new THREE.MeshLambertMaterial({ color: 0x2a2140 });
+    const wallMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x2a2140).multiplyScalar(BUILD_GEOMETRY_BRIGHTNESS) });
     const wallGeo = new THREE.BoxGeometry(map.size, 3, 0.5);
     this._owned.push(wallGeo, wallMat);
     for (const [x, z, ry] of [[0, -half, 0], [0, half, 0], [-half, 0, Math.PI / 2], [half, 0, Math.PI / 2]]) {
