@@ -161,6 +161,16 @@ export class DebugMenu {
 
     panel.appendChild(el('div', 'dbg-note', 'Host must also run ?debug=1 for team/reset/morph to apply.'));
 
+    // --- LIGHTING OVERHAUL perf readout (spec item 6): framerate, CPU frame ms, inferred GPU ms,
+    //     active lighting tier, and the CPU/GPU-bound verdict. Lives in THIS debug overlay (NOT the
+    //     pause menu). Reads the live PerfMon + lighting state via ctx accessors. ---
+    panel.appendChild(el('div', 'dbg-sec', 'Perf'));
+    this._pFps = this._kv(panel, 'framerate');
+    this._pCpu = this._kv(panel, 'cpu ms');
+    this._pGpu = this._kv(panel, 'gpu ms (inferred)');
+    this._pTier = this._kv(panel, 'lighting tier');
+    this._pBound = this._kv(panel, 'verdict');
+
     // --- HUD / coords / fps ---
     panel.appendChild(el('div', 'dbg-sec', 'HUD'));
     this._fFps = this._kv(panel, 'fps');
@@ -368,6 +378,20 @@ export class DebugMenu {
     this._fCoords.textContent = `${r2(self.x)}, ${r2(self.y)}, ${r2(self.z)}`;
     const spd = Math.hypot(this._vel.x, this._vel.z);
     this._fVel.textContent = `${spd.toFixed(1)} m/s (y ${r2(this._vel.y)})`;
+
+    // LIGHTING OVERHAUL perf readout — the authoritative CPU/GPU attribution (perfmon), tier + verdict.
+    const perf = this.ctx.getPerf && this.ctx.getPerf();
+    const lit = this.ctx.getLighting && this.ctx.getLighting();
+    if (perf && this._pFps) {
+      this._pFps.textContent = `${Math.round(perf.fps)} fps`;
+      this._pCpu.textContent = `${perf.cpuMs.toFixed(1)} ms`;
+      this._pGpu.textContent = `${perf.gpuMs.toFixed(1)} ms`;
+    }
+    if (lit && this._pTier) {
+      this._pTier.textContent = `T${lit.tier}${lit.userSet ? ' (manual)' : lit.autoPhase && lit.autoPhase !== 'off' && lit.autoPhase !== 'done' ? ' (auto…)' : ''}`;
+      const v = lit.cpuBound ? 'CPU-bound' : lit.verdict === 'gpu' ? 'GPU-bound' : lit.verdict === 'cpu' ? 'CPU-bound' : lit.verdict === 'even' ? 'balanced' : '—';
+      this._pBound.textContent = v;
+    }
 
     // FREE CAM: feed the fly-cam this frame's input. Physics player is frozen by main.js.
     if (state.freeCam && scene) {

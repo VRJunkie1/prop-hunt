@@ -22,6 +22,22 @@ import { ouchRateForDisguise, resolveDamageCfg } from '/shared/damage.js';
 // inside buildPredict(), which runs at match start, so a bare landing page still
 // makes zero external requests (headless load check stays clean).
 import { loadRapier, PhysicsWorld } from '/shared/physics.js';
+// LIGHTING OVERHAUL (VRmike, 2026-07-19): the pure tier/tonemap/SH config module. The THREE rig
+// lives in js/lighting.js (owned by scene.js); this file persists the settings + wires the pause
+// menu, and (increment 3) drives the auto-tier FPS probe. See notes/lighting.md.
+import {
+  resolveTierConfig, clampTier, guessTierFromDevice, normalizeTonemapMode, clampExposure,
+  EXPOSURE_RANGE, MIN_TIER, MAX_TIER, TIER_KEY, TIER_USERSET_KEY, TONEMAP_KEY, EXPOSURE_KEY,
+} from './lighting-tiers.js';
+// CPU/GPU frame-cost instrumentation + the runtime auto-tier controller (spec items 3+4). Both are
+// pure/injectable (no THREE); the debug HUD reads perf, the auto-tuner drives lighting down when the
+// evidence says GPU-bound. See notes/lighting.md.
+import { PerfMon } from './perfmon.js';
+import { AutoTier } from './auto-tier.js';
+
+// Shared per-frame cost monitor. beginFrame() at the top of the render loop, endCpu() right after
+// render submission; the debug menu + auto-tuner both read its smoothed fields. Allocation-free.
+const perf = new PerfMon();
 
 const ui = new UI();
 
@@ -71,6 +87,7 @@ const canvas = document.getElementById('view');
 // external requests — the headless load check never triggers the CDN fetch. See
 // ensureScene() and the STARTED handler.
 let scene = null;
+let autoTier = null; // LIGHTING OVERHAUL auto-tuner (increment 3); null until wired
 async function ensureScene() {
   if (!scene) {
     const { Scene3D } = await import('./scene.js');
@@ -79,6 +96,29 @@ async function ensureScene() {
     // (same rules.minWallHalfThickness the engine + guard use). Harmless when debug is off.
     scene.rules = state.cfg && state.cfg.rules ? state.cfg.rules : null;
     if (state.selfId) scene.setSelf(state.selfId);
+    // LIGHTING OVERHAUL: the renderer now exists, so the device-heuristic auto-guess can read the
+    // GPU string. If the player never picked a tier by hand AND nothing was saved, seed from the
+    // device guess; a manual choice (userSet) or a previously-saved tier always wins. Then push the
+    // tier + tonemap onto the fresh scene.
+    lightingState.guess = guessTierFromDevice(deviceHints(scene.renderer));
+    if (!lightingState.userSet && !lightingState.hasSaved) lightingState.tier = lightingState.guess;
+    applyLightingToScene();
+    // AUTO-TIER: unless the player picked manually, stand up the runtime FPS-probe controller. It
+    // only steps DOWN, once, when the evidence says GPU-bound, then cools down (no yo-yo). A manual
+    // pause-menu pick calls autoTier.disable() and wins forever.
+    if (!lightingState.userSet && !autoTier) {
+      autoTier = new AutoTier({
+        getTier: () => lightingState.tier,
+        setTier: (t, save) => {
+          lightingState.tier = clampTier(t);
+          applyLightingToScene();
+          if (save) { lightingState.hasSaved = true; saveLightingTier(lightingState.tier, false); }
+        },
+        setRenderScale: (s) => { if (scene) scene.setRenderScale(s); },
+        markCpuBound: () => { lightingState.cpuBound = true; },
+        onVerdict: (v) => { lightingState.verdict = v; },
+      });
+    }
   }
   return scene;
 }
@@ -1489,6 +1529,9 @@ function updateSpectatorCamera(dt) {
 // of killing all rendering forever.
 function frame(now) {
   requestAnimationFrame(frame);
+  // LIGHTING OVERHAUL: open the CPU stopwatch + record the inter-frame gap (total frame time) BEFORE
+  // any work, so it captures physics + logic + render submission (all inside frameBody).
+  perf.beginFrame(now);
   try {
     frameBody(now);
   } catch (e) {
@@ -1497,6 +1540,11 @@ function frame(now) {
       frame._loggedErr = true; // log once so a per-frame throw doesn't spam the console
     }
   }
+  // Close the CPU stopwatch right after render submission, then drive the auto-tuner. nowMs() is a
+  // fresh performance.now(); endCpu infers GPU ms by subtraction (frameMs - cpuMs). Allocation-free.
+  const after = nowMs();
+  perf.endCpu(after);
+  if (autoTier && autoTier.enabled) autoTier.tick(after, perf);
 }
 
 function frameBody(now) {
@@ -1796,6 +1844,102 @@ function loadSensitivity() {
   return Math.min(SENSITIVITY_RANGE.max, Math.max(SENSITIVITY_RANGE.min, n));
 }
 
+// LIGHTING OVERHAUL (2026-07-19) — persist the quality tier + tonemap the SAME localStorage way as
+// mouse sensitivity (never a cookie / server). All reads swallow storage errors + fall back cleanly.
+//  - lightingTier: the chosen tier (0..3). Absent → auto (device guess + the runtime FPS probe).
+//  - lightingUserSet: '1' once the player picks a tier by hand → permanently outranks the auto-tuner.
+//  - tonemap / exposure: the A/B tonemap + its pre-tonemap exposure multiplier.
+function saveLightingTier(tier, userSet) {
+  try {
+    localStorage.setItem(TIER_KEY, String(clampTier(tier)));
+    if (userSet) localStorage.setItem(TIER_USERSET_KEY, '1');
+  } catch { /* storage blocked */ }
+}
+function loadLightingTier() {
+  // Returns { tier|null, userSet }. tier null => no saved choice (use the device guess).
+  let rawTier = null, rawUser = null;
+  try { rawTier = localStorage.getItem(TIER_KEY); rawUser = localStorage.getItem(TIER_USERSET_KEY); } catch { return { tier: null, userSet: false }; }
+  const n = rawTier == null ? NaN : parseInt(rawTier, 10);
+  return { tier: Number.isFinite(n) ? clampTier(n) : null, userSet: rawUser === '1' };
+}
+function saveTonemap(mode, exposure) {
+  try {
+    localStorage.setItem(TONEMAP_KEY, normalizeTonemapMode(mode));
+    localStorage.setItem(EXPOSURE_KEY, String(clampExposure(exposure)));
+  } catch { /* storage blocked */ }
+}
+function loadTonemap() {
+  let mode = null, exp = null;
+  try { mode = localStorage.getItem(TONEMAP_KEY); exp = localStorage.getItem(EXPOSURE_KEY); } catch { /* blocked */ }
+  return { mode: normalizeTonemapMode(mode), exposure: clampExposure(parseFloat(exp)) };
+}
+
+// Live lighting state (mirrors what's applied to the scene). Filled at boot from localStorage +
+// the device guess; the pause menu + auto-tuner mutate it and call applyLightingToScene().
+const lightingState = {
+  tier: 0,
+  userSet: false,     // did the player pick manually? (outranks auto)
+  hasSaved: false,    // was a tier already saved (manual OR a prior auto ratchet)? → don't re-guess
+  guess: 0,           // the device-heuristic initial guess (auto starting point)
+  cpuBound: false,    // the auto-tuner concluded this session is CPU-bound
+  verdict: null,      // 'cpu' | 'gpu' | null — latest attribution (auto-tuner / perfmon)
+  tonemapMode: 'multiply',
+  exposure: 1.0,
+};
+
+// Gather device hints for the initial auto-tier guess. The GPU string needs a live GL context
+// (WEBGL_debug_renderer_info), so this runs once the scene's renderer exists. Fail-silent → {}.
+function deviceHints(renderer) {
+  const h = { gpu: '', deviceMemory: 0, cores: 0, screenPx: 0 };
+  try {
+    if (typeof navigator !== 'undefined') {
+      h.deviceMemory = Number(navigator.deviceMemory) || 0;
+      h.cores = Number(navigator.hardwareConcurrency) || 0;
+    }
+    if (typeof screen !== 'undefined') {
+      const dpr = (typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1) || 1;
+      h.screenPx = Math.round((screen.width || 0) * (screen.height || 0) * dpr * dpr);
+    }
+    const gl = renderer && renderer.getContext && renderer.getContext();
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      if (ext) h.gpu = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
+      if (!h.gpu) h.gpu = String(gl.getParameter(gl.RENDERER) || '');
+    }
+  } catch { /* keep defaults */ }
+  return h;
+}
+
+// Push the current lightingState onto the live scene (tier config + tonemap). Safe to call before
+// a scene exists (no-op) and repeatedly. Also refreshes the pause-menu button/slider highlight.
+function applyLightingToScene() {
+  if (scene) {
+    scene.setLightingTier(resolveTierConfig(lightingState.tier));
+    scene.setTonemap(lightingState.tonemapMode, lightingState.exposure);
+  }
+  ui.setLightingTier(lightingState.tier);
+  ui.setTonemap(lightingState.tonemapMode, lightingState.exposure);
+}
+
+// The player picked a tier by hand from the pause menu → it wins forever (stops the auto-tuner).
+function setLightingTierManual(tier) {
+  lightingState.tier = clampTier(tier);
+  lightingState.userSet = true;
+  saveLightingTier(lightingState.tier, true);
+  if (autoTier) autoTier.disable('manual override');
+  applyLightingToScene();
+}
+function setTonemapMode(mode) {
+  lightingState.tonemapMode = normalizeTonemapMode(mode);
+  saveTonemap(lightingState.tonemapMode, lightingState.exposure);
+  applyLightingToScene();
+}
+function setExposure(v) {
+  lightingState.exposure = clampExposure(v);
+  saveTonemap(lightingState.tonemapMode, lightingState.exposure);
+  applyLightingToScene();
+}
+
 // create()/join() hand off to PeerJS (the free public broker introduces the two
 // browsers); everything after (ready, start, and all gameplay) rides the peer
 // link via session.send().
@@ -1927,6 +2071,17 @@ function newSession() {
       debugFlag: DEBUG, // ?debug=1: the collider overlay is already built at load
       getScene: () => scene,
       getSession: () => session,
+      // LIGHTING OVERHAUL perf readout (spec item 6): the debug menu shows framerate, CPU frame ms,
+      // inferred GPU ms, active tier, and the CPU/GPU-bound verdict. These accessors expose the live
+      // perf monitor + lighting state (verdict prefers the auto-tuner's conclusion, else perfmon).
+      getPerf: () => perf,
+      getLighting: () => ({
+        tier: lightingState.tier,
+        userSet: lightingState.userSet,
+        cpuBound: lightingState.cpuBound,
+        verdict: lightingState.verdict || (perf.warmedUp ? perf.verdict() : null),
+        autoPhase: autoTier ? autoTier.phase : 'off',
+      }),
       onExit: () => backToMenu('Left the match (debug exit).'),
     });
   } catch (e) {
@@ -1966,6 +2121,24 @@ function newSession() {
     input.setSensitivity(s);
     ui.setSensitivityValue(s);
     ui.onSensitivityChange = (mult) => { saveSensitivity(input.setSensitivity(mult)); };
+  }
+  // LIGHTING OVERHAUL (2026-07-19): restore the saved tier + tonemap from localStorage and wire the
+  // pause-menu controls. The device auto-guess is applied later in ensureScene() (needs the GL
+  // context for the GPU string); a saved manual pick (userSet) is loaded here and outranks it.
+  {
+    const savedTier = loadLightingTier();
+    lightingState.userSet = savedTier.userSet;
+    lightingState.hasSaved = savedTier.tier != null; // a saved tier (manual or auto) → don't re-guess
+    if (savedTier.tier != null) lightingState.tier = savedTier.tier; // else the device guess seeds it
+    const tm = loadTonemap();
+    lightingState.tonemapMode = tm.mode;
+    lightingState.exposure = tm.exposure;
+    ui.setLightingTier(lightingState.tier);
+    ui.setTonemap(lightingState.tonemapMode, lightingState.exposure);
+    // Pause-menu callbacks (the UI holds no game logic — it just relays the pick).
+    ui.onLightingTier = (tier) => setLightingTierManual(tier);        // manual pick → wins over auto
+    ui.onTonemapMode = (mode) => setTonemapMode(mode);
+    ui.onExposureChange = (v) => setExposure(v);
   }
   // PC CONTROLS REFERENCE (B4): populate + show the always-visible corner controls list (PC only;
   // ui.js keeps it hidden on touch). Built once here from the shared _controlsHtml() rows.
