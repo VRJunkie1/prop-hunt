@@ -758,6 +758,24 @@ button.ghost:hover { background: #3d2a66; }
 .pause-sens-val { color: #8ad9ff; font: bold 13px/1 monospace; font-variant-numeric: tabular-nums; }
 .pause-sens-slider { width: 100%; margin-top: 6px; accent-color: #ff2fd0; cursor: pointer; }
 
+/* ---- LIGHTING QUALITY tiers + TONEMAP A/B (2026-07-19, VRmike) ---- */
+.pause-lighting, .pause-tonemap { text-align: left; margin: 6px 0 10px; }
+.lighting-tiers, .tonemap-modes { display: flex; gap: 6px; margin-top: 6px; }
+.lighting-tier, .tonemap-mode {
+  flex: 1 1 0; min-height: 40px; padding: 5px 4px; cursor: pointer;
+  border: 1px solid #ffffff33; border-radius: 8px; background: #2a1b4a; color: #f5eaff;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font: 12px/1.1 monospace; text-align: center;
+}
+.lighting-tier b { font: bold 13px/1 monospace; color: #8ad9ff; }
+.lighting-tier span { font-size: 10px; color: #b9a9dd; }
+.tonemap-mode { font: bold 12px/1.1 monospace; }
+.lighting-tier:active, .tonemap-mode:active { transform: scale(0.97); }
+.lighting-tier.on, .tonemap-mode.on {
+  background: #ff2fd0; color: #12081f; border-color: #ff2fd0;
+}
+.lighting-tier.on b, .lighting-tier.on span { color: #12081f; }
+
 /* ---- PC CONTROLS REFERENCE (B4): unobtrusive bottom-right corner list, collapsible ----
    Hidden on mobile (ui.js keeps #controlsRef .hidden on touch — phones show their own buttons). */
 .controls-ref {

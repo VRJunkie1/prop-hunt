@@ -57,6 +57,11 @@ export class UI {
       pauseSensRow: $('pauseSensRow'),
       pauseSens: $('pauseSens'),
       pauseSensVal: $('pauseSensVal'),
+      // LIGHTING QUALITY tiers + TONEMAP A/B + exposure (2026-07-19, VRmike). Shown on all devices.
+      lightingTiers: $('lightingTiers'),
+      tonemapModes: $('tonemapModes'),
+      exposureSlider: $('exposureSlider'),
+      exposureVal: $('exposureVal'),
       // PC CONTROLS REFERENCE (B4): always-visible corner list + its collapse toggle. PC only.
       controlsRef: $('controlsRef'),
       controlsRefToggle: $('controlsRefToggle'),
@@ -93,6 +98,33 @@ export class UI {
         const mult = parseFloat(this.el.pauseSens.value);
         this._renderSensVal(mult);
         this.onSensitivityChange(mult);
+      });
+    }
+    // LIGHTING QUALITY + TONEMAP (2026-07-19, VRmike). main.js injects the handlers; the UI only
+    // relays the pick (no game logic). Tier buttons + tonemap-mode buttons use event delegation off
+    // their container so the highlight can be re-pushed from state (setLightingTier/setTonemap).
+    this.onLightingTier = () => {};
+    this.onTonemapMode = () => {};
+    this.onExposureChange = () => {};
+    if (this.el.lightingTiers) {
+      this.el.lightingTiers.addEventListener('click', (e) => {
+        const btn = e.target.closest('.lighting-tier');
+        if (!btn) return;
+        this.onLightingTier(parseInt(btn.dataset.tier, 10));
+      });
+    }
+    if (this.el.tonemapModes) {
+      this.el.tonemapModes.addEventListener('click', (e) => {
+        const btn = e.target.closest('.tonemap-mode');
+        if (!btn) return;
+        this.onTonemapMode(btn.dataset.mode);
+      });
+    }
+    if (this.el.exposureSlider) {
+      this.el.exposureSlider.addEventListener('input', () => {
+        const v = parseFloat(this.el.exposureSlider.value);
+        this._renderExposureVal(v);
+        this.onExposureChange(v);
       });
     }
     // PC CONTROLS REFERENCE (B4): the collapse toggle just shows/hides the body (visible by default).
@@ -603,6 +635,31 @@ export class UI {
 
   _renderSensVal(mult) {
     if (this.el.pauseSensVal) this.el.pauseSensVal.textContent = `${Number(mult).toFixed(2)}×`;
+  }
+
+  // LIGHTING QUALITY (2026-07-19): highlight the active tier button. Called by main.js at boot and
+  // whenever the tier changes (manual pick OR the auto-tuner stepping it), so the pause menu always
+  // reflects what's applied. Pure DOM.
+  setLightingTier(tier) {
+    if (!this.el.lightingTiers) return;
+    const btns = this.el.lightingTiers.querySelectorAll('.lighting-tier');
+    btns.forEach((b) => b.classList.toggle('on', parseInt(b.dataset.tier, 10) === Number(tier)));
+  }
+
+  // TONEMAP A/B + exposure: highlight the active mode + reflect the exposure slider/label.
+  setTonemap(mode, exposure) {
+    if (this.el.tonemapModes) {
+      const btns = this.el.tonemapModes.querySelectorAll('.tonemap-mode');
+      btns.forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+    }
+    if (exposure != null) {
+      if (this.el.exposureSlider) this.el.exposureSlider.value = String(exposure);
+      this._renderExposureVal(exposure);
+    }
+  }
+
+  _renderExposureVal(v) {
+    if (this.el.exposureVal) this.el.exposureVal.textContent = `${Number(v).toFixed(2)}×`;
   }
 
   // PC CONTROLS REFERENCE (B4): populate the always-visible corner panel from the SAME rows the

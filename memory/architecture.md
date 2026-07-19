@@ -178,6 +178,30 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   bind-pose sphere, and a disguise clone whose bounds lag its runtime rescale. WORLD
   props/scenery keep normal culling (surgical — only the handful of player objects opt
   out). Guarded by `tools/check-flicker.mjs`. Detail: `memory/notes/flicker-culling.md`.
+  **LIGHTING OVERHAUL (VRmike, 2026-07-19):** scene.js owns a `LightingRig` (`this.lighting`, from
+  `js/lighting.js`) that drives a 4-tier quality system (T0 potato → T3 bloom). `render()` delegates
+  to the rig (direct render on T0/T1, an SSAO/bloom `EffectComposer` on T2/T3, falling back to direct
+  while the addon passes lazy-import). Each lighting feature is an INDEPENDENT switch (SH ambient
+  probe, straight-down contact-shadow light, angled fill, SSAO, bloom, shadow-map size); tiers are
+  preset bundles resolved by the PURE `js/lighting-tiers.js`. `buildWorld()` ends with
+  `_reattachLighting(map)` (scene.clear() drops the rig's lights → re-add + **bake the SH ambient
+  probe** from the room center with a 64px `CubeCamera`→`LightProbeGenerator`, unless the map JSON
+  carries pre-baked `sh` coefficients). Tonemap A/B (flat `LinearToneMapping` 1.25× multiply vs
+  `ACESFilmicToneMapping`) + exposure ride the renderer so they work on every tier. A NEW
+  `webglcontextrestored` handler rebuilds the composer + shadow map + re-bakes the probe (phones lose
+  render state on tab-switch). `setRenderScale()` scales the pixel ratio for the auto-tier probe.
+  Full detail: `memory/notes/lighting.md`.
+- `js/lighting-tiers.js` (PURE) + `js/lighting.js` (THREE `LightingRig`) + `js/perfmon.js`
+  (allocation-free CPU/GPU frame-cost stopwatch) + `js/auto-tier.js` (runtime FPS-probe controller —
+  steps the tier DOWN once when GPU-bound, keeps+SAVEs if it helps else reverts + marks CPU-bound, then
+  cools down; a manual pause pick always wins). `js/main.js` persists tier/tonemap/exposure to
+  localStorage (`prophunt.lighting*` / `.tonemap` / `.exposure`), seeds the initial tier from
+  `guessTierFromDevice` (GPU string via `WEBGL_debug_renderer_info`), instruments the frame loop
+  (`perf.beginFrame`/`endCpu`), and drives the auto-tuner. The pause menu (`js/ui.js`/`index.html`)
+  carries the "Lighting Quality" tier row + tonemap A/B + exposure slider; the `?debug=1` overlay
+  (`js/debug.js`) shows the perf readout (FPS, CPU ms, inferred GPU ms, tier, CPU/GPU verdict). Guard:
+  `tools/check-lighting.mjs` (8 headless sections incl. the rig THREE-mapping + the auto-tier state
+  machine). Detail: `memory/notes/lighting.md`.
 - `js/ui.js` — DOM screens (menu/lobby/game), HUD, feed. No game logic. **PC feel/controls
   (B4, 2026-07-18):** the pause menu carries a **mouse-sensitivity slider** (`#pauseSens`, 0.2×–3×)
   shown only on PC (`#pauseSensRow` hidden on touch via `prefersTouchControls()`); its `input` event

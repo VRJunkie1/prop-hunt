@@ -194,6 +194,33 @@
                    min="0.2" max="3" step="0.05" value="1"
                    aria-label="Mouse sensitivity" />
           </div>
+          <!-- LIGHTING QUALITY (2026-07-19, VRmike) — 4 tier presets in a row. T0 potato → T3 high.
+               Persisted to localStorage by main.js; a manual pick outranks the auto-tuner forever.
+               Each tier is a preset bundle of independent effect switches (see js/lighting-tiers.js). -->
+          <div id="lightingRow" class="pause-lighting">
+            <div class="pause-sec-label">Lighting Quality</div>
+            <div id="lightingTiers" class="lighting-tiers">
+              <button type="button" class="lighting-tier" data-tier="0"><b>T0</b><span>Potato</span></button>
+              <button type="button" class="lighting-tier" data-tier="1"><b>T1</b><span>Shadows</span></button>
+              <button type="button" class="lighting-tier" data-tier="2"><b>T2</b><span>SSAO</span></button>
+              <button type="button" class="lighting-tier" data-tier="3"><b>T3</b><span>Bloom</span></button>
+            </div>
+          </div>
+          <!-- TONEMAP A/B + exposure (2026-07-19). "1.25× multiply" (flat) vs "Filmic" (ACES);
+               the exposure slider is the pre-tonemap multiplier (so filmic+exposure = the hybrid). -->
+          <div id="tonemapRow" class="pause-tonemap">
+            <div class="pause-sec-label">Tonemap</div>
+            <div id="tonemapModes" class="tonemap-modes">
+              <button type="button" class="tonemap-mode" data-mode="multiply">1.25&times; Multiply</button>
+              <button type="button" class="tonemap-mode" data-mode="filmic">Filmic (ACES)</button>
+            </div>
+            <div class="pause-sens-head">
+              <span class="pause-sec-label">Exposure</span>
+              <span id="exposureVal" class="pause-sens-val">1.00&times;</span>
+            </div>
+            <input id="exposureSlider" class="pause-sens-slider" type="range"
+                   min="0.4" max="2" step="0.05" value="1" aria-label="Exposure" />
+          </div>
           <div class="pause-sec-label">Scoreboard</div>
           <ul id="pauseScores" class="pause-scores"></ul>
           <div id="pauseHelpPanel" class="pause-help hidden">

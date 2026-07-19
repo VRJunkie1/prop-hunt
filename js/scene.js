@@ -20,6 +20,11 @@ import { worldColliderBoxes } from '/shared/bounds.js';
 // Web Audio (no THREE), so the game and the headless check (tools/check-audio-limiter.mjs) run the
 // exact same install code. See memory/notes/audio-limiter.md.
 import { installMasterLimiter } from '/shared/audio-limiter.js';
+// LIGHTING OVERHAUL (VRmike, 2026-07-19): the 4-tier quality rig (SH ambient probe, contact-shadow
+// light, angled fill, SSAO/bloom post, tonemap A/B). LightingRig owns the THREE objects; the pure
+// tier/tonemap/SH math lives in js/lighting-tiers.js (headless-guarded). See notes/lighting.md.
+import { LightingRig } from '/js/lighting.js';
+import { resolveTierConfig, mapSHOverride } from '/js/lighting-tiers.js';
 
 // HRTF BINAURAL PANNING for taunt audio (Jie, 2026-07-18). Web Audio's PannerNode has two
 // panningModels: 'equalpower' (a cheap constant-power L/R pan — THREE's default) and 'HRTF' (a
@@ -155,11 +160,19 @@ export function instantiateModel(template, target, dims, scale) {
 // props/scenery are untouched and keep their normal culling optimization. This is the
 // ONE choke point meshForPlayer routes every player mesh through — keep it that way so a
 // future refactor can't silently drop the flag (tools/check-flicker.mjs guards it).
+// LIGHTING OVERHAUL (2026-07-19): when the active tier has contact shadows on, player-attached
+// meshes must CAST (so props/players drop a contact shadow for jump accuracy). This module-level
+// flag is toggled by Scene3D._applyShadowFlags() so a mesh built lazily AFTER a tier change (a
+// mid-match join, a disguise swap) inherits the current shadow state through this same choke point.
+let PLAYER_SHADOWS = false;
+export function setPlayerShadowCasting(on) { PLAYER_SHADOWS = !!on; }
+
 export function preparePlayerModel(root) {
   if (!root) return root;
   root.traverse((o) => {
     if (!o.isMesh) return;
     o.frustumCulled = false; // never let animation/rescale blink a player-attached mesh
+    o.castShadow = PLAYER_SHADOWS; // contact shadows under props/players (tier >= T1)
     const g = o.geometry;
     if (g) {
       // Refresh bounds so post-swap/rescale raycasts + highlight boxes stay correct
@@ -183,6 +196,12 @@ export class Scene3D {
     // visible to the shooter themselves) renders. Tracers + muzzle flashes are added
     // directly to the scene. All re-established after buildWorld's scene.clear().
     this.scene.add(this.camera);
+    // LIGHTING OVERHAUL: the quality-tier rig. Delegated to for every render() so it can swap in
+    // the SSAO/bloom composer; drives the SH probe, contact-shadow light, angled fill + tonemap.
+    // Starts at T0 (today's exact look) until main.js applies the saved/auto tier.
+    this.lighting = new LightingRig(this.renderer, this.scene, this.camera);
+    this._lightingCfg = resolveTierConfig(0);
+    this._lastMap = null; // remembered so a runtime tier change can reattach lights to the live world
     this._viewModel = null; // local hunter's held-tool mesh (child of the camera), or null
     this._viewModelTool = null; // tool id the current viewmodel represents (rifle/finder/null)
     // PROP FINDER: the translucent AOE cylinder shown while the finder tool is selected. Built
@@ -365,6 +384,18 @@ export class Scene3D {
     // world itself is rebuilt on the next match start (buildWorld), which is the
     // only place that holds the map data.
     canvas.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
+    // LIGHTING OVERHAUL: on restore, the composer's render targets + the shadow map are gone.
+    // Rebuild the lighting GPU resources and reattach the lights/probe to the live world (the
+    // classic way phones silently lose new render state after a tab-switch). buildWorld handles a
+    // full world rebuild on the next match; this covers a restore DURING a match.
+    canvas.addEventListener('webglcontextrestored', () => {
+      try {
+        if (this.lighting) {
+          this.lighting.onContextRestored();
+          this._reattachLighting(this._lastMap);
+        }
+      } catch (e) { console.warn('[scene] lighting context-restore failed:', e); }
+    }, false);
   }
 
   resize() {
@@ -373,6 +404,62 @@ export class Scene3D {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (this.lighting) this.lighting.onResize(w, h);
+  }
+
+  // LIGHTING OVERHAUL: the auto-tuner's render-scale probe. `scale` 1 == full resolution; a lower
+  // value (~0.7) renders fewer pixels to test whether the frame is GPU-bound (FPS jumps → GPU). We
+  // scale the device pixel ratio (capped at 2) and re-size so the composer/passes follow.
+  setRenderScale(scale) {
+    const s = Math.max(0.3, Math.min(1, Number(scale) || 1));
+    this._renderScale = s;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2) * s);
+    this.resize();
+  }
+
+  // ---- LIGHTING OVERHAUL wiring (VRmike, 2026-07-19) -------------------------
+  // Apply a resolved tier config (from js/lighting-tiers.js resolveTierConfig) to the live scene:
+  // swap the effect switches, then reattach lights + shadow flags to the current world. Manual
+  // pause-menu picks and the auto-tuner both route through here.
+  setLightingTier(cfg) {
+    this._lightingCfg = cfg || resolveTierConfig(0);
+    if (this.lighting) this.lighting.setTierConfig(this._lightingCfg);
+    this._reattachLighting(this._lastMap);
+  }
+
+  // Tonemap A/B + exposure (pause menu). Applies straight to the renderer — works on every tier.
+  setTonemap(mode, exposure) {
+    if (this.lighting) this.lighting.setTonemap(mode, exposure);
+  }
+
+  // Re-add the tier's lights/probe/post to the world (buildWorld's scene.clear() drops them) and
+  // push the cast/receive-shadow flags onto every mesh. Safe with a null map (no-op-ish).
+  _reattachLighting(map) {
+    if (!this.lighting) return;
+    if (map) {
+      // Stash the parsed manual SH override (if the map JSON carries pre-baked coefficients) so the
+      // rig uses it instead of baking. mapSHOverride returns null → bake at load.
+      if (map.__shOverride === undefined) map.__shOverride = mapSHOverride(map);
+      this._lastMap = map;
+    }
+    this.lighting.reattach(this._lastMap);
+    this._applyShadowFlags();
+  }
+
+  // Push cast/receive-shadow flags onto the live scene meshes for the current tier. Ground/large
+  // flat surfaces receive; everything casts. Also flips the player-mesh choke-point flag so meshes
+  // built later (mid-join, disguise swap) inherit the state. Cheap; only runs on tier changes /
+  // world rebuilds, never per frame.
+  _applyShadowFlags() {
+    const on = this.lighting ? this.lighting.shadowsOn : false;
+    setPlayerShadowCasting(on);
+    this.scene.traverse((o) => {
+      if (!o.isMesh) return;
+      // The SH probe / lights aren't meshes, so they're skipped. Every world + player mesh casts;
+      // everything can also receive so props read against each other and the floor.
+      o.castShadow = on;
+      o.receiveShadow = on;
+    });
   }
 
   // Rebuild the world for a new match.
@@ -585,6 +672,12 @@ export class Scene3D {
     const hcfg = this.characterModels && this.characterModels.hunter;
     this._weaponVisible = !(hcfg && hcfg.weapon && hcfg.weapon.visibleByDefault === false);
     this._loadCharacterModels().catch(() => {});
+
+    // LIGHTING OVERHAUL: scene.clear() (top of buildWorld) dropped the tier's probe + effect
+    // lights. Reattach them to the fresh world, (re)bake the SH ambient probe from THIS map's
+    // room center behind the "Get ready…" loading banner, and push shadow flags onto the new
+    // meshes. The base HemisphereLight+sun above are T0's "current lighting" and always stay.
+    this._reattachLighting(map);
   }
 
   // Record a primitive that has a real GLB to swap in later. `entry` is the map's
@@ -2459,6 +2552,9 @@ export class Scene3D {
   }
 
   render() {
-    this.renderer.render(this.scene, this.camera);
+    // LIGHTING OVERHAUL: the rig picks direct render (T0/T1) vs the SSAO/bloom composer (T2/T3).
+    // Falls back to a direct render while an async post-import is still loading — never a black frame.
+    if (this.lighting) this.lighting.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 }
