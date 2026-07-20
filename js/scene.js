@@ -285,6 +285,13 @@ export class Scene3D {
     this._modelCache = new Map(); // '/assets/…​.glb' -> loaded template, or 'failed'
     this._modelSlots = []; // this match's primitives still awaiting their GLB
     this._buildToken = 0; // bumped each buildWorld so stale async loads no-op
+    // LATE-JOINER DISGUISE FIX (VRmike, 2026-07-20): paths of disguise GLBs we've kicked an
+    // ON-DEMAND load for (a prop wearing a model this client hasn't loaded via _modelSlots yet —
+    // typically a mid-game joiner whose snapshot references a disguise before its GLB downloaded).
+    // Dedup guard so we fire at most one load per path; entries self-clear on load/fail. Once the
+    // GLB lands in _modelCache the next snapshot's kind flips d:type:prim -> d:type:glb and
+    // syncPlayers rebuilds the avatar with the real mesh (no more stuck red placeholder box).
+    this._disguiseLoading = new Set();
 
     // ---- animated character models (the SWAT hunter) ------------------------
     // The soldier model OTHER players see for a REMOTE hunter (the local hunter
@@ -522,6 +529,9 @@ export class Scene3D {
     // start a fresh slot list (the primitives queued for a real-mesh swap).
     this._buildToken++;
     this._modelSlots = [];
+    // Drop any pending on-demand disguise-load guards from the previous match; the token bump above
+    // already makes their callbacks no-op, and clearing lets this match re-request cleanly if needed.
+    this._disguiseLoading.clear();
     // Clear previous scene contents.
     this.scene.clear();
     // scene.clear() detaches the camera (and any stray tracers); re-parent the camera so
@@ -785,7 +795,8 @@ export class Scene3D {
       // real mesh; otherwise (not yet loaded, or it failed) fall back to the
       // primitive so a disguise is always drawn.
       if (c.model) {
-        const tmpl = this._modelCache.get('/assets/' + c.model);
+        const path = '/assets/' + c.model;
+        const tmpl = this._modelCache.get(path);
         if (tmpl && tmpl !== 'failed') {
           // Disguise renders at the same measured scale as world decor.
           const scale = typeof c.modelScale === 'number' ? c.modelScale : this.modelScale;
@@ -793,6 +804,12 @@ export class Scene3D {
           inst.userData.baseY = 0;
           return inst;
         }
+        // LATE-JOINER DISGUISE FIX: the model isn't loaded yet. If it's not even in flight
+        // (a mid-game joiner disguised as a type this client never loaded via _modelSlots),
+        // kick an on-demand load so the primitive below is only ever a TEMPORARY placeholder —
+        // never the permanent red box. _disguiseModelReady()/kind flips it to the real mesh
+        // on a later snapshot once the GLB lands. No-op if already loaded/failed/in-flight.
+        if (tmpl === undefined) this._ensureDisguiseModel(path);
       }
       const built = makePropMesh(p.disguise, this.catalog);
       built.mesh.userData.baseY = built.baseY;
@@ -804,6 +821,62 @@ export class Scene3D {
     const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
     mesh.userData.baseY = 0.9;
     return mesh;
+  }
+
+  // The APPEARANCE SIGNATURE for a player — the string syncPlayers/_syncSelf compare against a
+  // cached entry to decide whether to rebuild the avatar. It folds the MODEL-READY state INTO the
+  // kind so an avatar first drawn with a placeholder rebuilds into the real mesh the instant its
+  // GLB finishes loading, and a fully-loaded/failed model settles to a stable kind (no churn):
+  //   • disguised prop -> `d:<type>:glb` once the disguise GLB is loaded, else `d:<type>:prim`
+  //     (the reddish primitive box). LATE-JOINER FIX (VRmike, 2026-07-20): before this, a disguise
+  //     kind was just `d:<type>`, so a late joiner who built the primitive placeholder (their GLBs
+  //     were still downloading when the first snapshot arrived) stayed a red box FOREVER — the kind
+  //     never changed, so syncPlayers never rebuilt it. Encoding readiness makes it swap in.
+  //   • remote hunter -> `hunter:swat` (soldier ready) / `hunter:cap` (capsule fallback). Only the
+  //     `animated` (remote) path renders the soldier; the LOCAL hunter is first-person → plain `hunter`.
+  //   • everything else -> `prop` (undisguised prop capsule).
+  _playerKind(p, animated) {
+    if (p.disguise) return `d:${p.disguise}:${this._disguiseModelReady(p.disguise) ? 'glb' : 'prim'}`;
+    if (p.hunter) return animated ? (this._hunterModelReady() ? 'hunter:swat' : 'hunter:cap') : 'hunter';
+    return 'prop';
+  }
+
+  // True when a disguise type's real GLB is loaded and usable (so the avatar should wear it). False
+  // when there's no GLB configured (the primitive IS the intended final look — a stable kind, never
+  // rebuilt), the GLB failed to load (primitive is the permanent fallback), or it's still downloading
+  // (a TEMPORARY placeholder that will swap in once ready). Mirrors the exact check _buildPlayerMesh
+  // uses to pick the real mesh, so the kind can never disagree with what actually gets built.
+  _disguiseModelReady(type) {
+    const c = this.catalog && this.catalog[type];
+    if (!c || !c.model) return false;
+    const tmpl = this._modelCache.get('/assets/' + c.model);
+    return !!(tmpl && tmpl !== 'failed');
+  }
+
+  // ON-DEMAND disguise-model load (LATE-JOINER DISGUISE FIX, VRmike 2026-07-20). A mid-game joiner
+  // can receive a snapshot referencing a disguise whose GLB this client never queued via _modelSlots
+  // (e.g. no live world instance of that type). Rather than leave it a red placeholder forever, pull
+  // the one GLB now; the result lands in the SAME _modelCache the disguise render + _disguiseModelReady
+  // read, so the next snapshot rebuilds the avatar with the real mesh. Deduped via _disguiseLoading so
+  // we fire at most one load per path; token-guarded so a match that ends mid-download drops the result.
+  _ensureDisguiseModel(path) {
+    if (this._modelCache.has(path)) return;        // already loaded or a known-bad 'failed' marker
+    if (this._disguiseLoading.has(path)) return;   // a load is already in flight for this path
+    this._disguiseLoading.add(path);
+    const token = this._buildToken;
+    this._ensureGltfLoader().then((ok) => {
+      if (!ok || token !== this._buildToken) { this._disguiseLoading.delete(path); return; }
+      this._gltfLoader.load(
+        path,
+        (gltf) => { this._modelCache.set(path, gltf.scene); this._disguiseLoading.delete(path); },
+        undefined,
+        (err) => {
+          console.warn('[scene] disguise mesh failed to load, keeping primitive:', path, err);
+          this._modelCache.set(path, 'failed');
+          this._disguiseLoading.delete(path);
+        }
+      );
+    }).catch(() => this._disguiseLoading.delete(path));
   }
 
   // Reconcile meshes against a snapshot's player list.
@@ -829,11 +902,11 @@ export class Scene3D {
       }
 
       let entry = this.players.get(p.id);
-      // `hunter:swat` vs `hunter:cap` fold the model-ready state INTO the kind, so an
-      // entry showing the capsule fallback rebuilds into the animated soldier the moment
-      // the GLB finishes loading (and a failed load stays a capsule forever).
-      let kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
-      if (kind === 'hunter') kind = this._hunterModelReady() ? 'hunter:swat' : 'hunter:cap';
+      // The kind folds MODEL-READY state in (see _playerKind), so an entry showing a placeholder
+      // rebuilds into the real mesh the moment its GLB loads: `hunter:cap`->`hunter:swat` for the
+      // animated soldier, and `d:<type>:prim`->`d:<type>:glb` for a disguise (the LATE-JOINER red-box
+      // fix — a stuck primitive now swaps to the real prop once its GLB arrives).
+      const kind = this._playerKind(p, true);
       if (!entry || entry.kind !== kind) {
         // New player, or appearance changed (disguised / role / model loaded) -> rebuild.
         if (entry) this.scene.remove(entry.mesh);
@@ -974,7 +1047,10 @@ export class Scene3D {
       this._removeSelfMesh();
       return;
     }
-    const kind = p.disguise ? `d:${p.disguise}` : p.hunter ? 'hunter' : 'prop';
+    // Non-animated (local) kind: a disguised self still encodes disguise model-readiness so our OWN
+    // avatar swaps its placeholder for the real mesh once the GLB loads (same late-joiner fix); a
+    // local hunter is first-person so this branch only builds a self mesh for props/disguises anyway.
+    const kind = this._playerKind(p, false);
     if (!this.selfMesh || this.selfKind !== kind) {
       this._removeSelfMesh();
       this.selfMesh = this.meshForPlayer(p);

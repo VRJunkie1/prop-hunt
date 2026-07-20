@@ -203,6 +203,15 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   bind-pose sphere, and a disguise clone whose bounds lag its runtime rescale. WORLD
   props/scenery keep normal culling (surgical — only the handful of player objects opt
   out). Guarded by `tools/check-flicker.mjs`. Detail: `memory/notes/flicker-culling.md`.
+  **Appearance `kind` encodes GLB readiness (late-joiner fix, #221, 2026-07-20):** a player avatar
+  rebuilds only when its `kind` string changes. The shared `_playerKind(p,animated)` folds model-
+  readiness INTO the kind so a placeholder swaps to the real mesh once its GLB loads: a disguise is
+  `d:<type>:glb` when loaded else `d:<type>:prim`, a remote hunter `hunter:swat`/`hunter:cap`. Before
+  this a disguise kind was the fixed `d:<type>`, so a late joiner who built the reddish primitive while
+  its GLB was still downloading stayed a red box forever (the kind never changed, no rebuild).
+  `_ensureDisguiseModel` pulls a disguise GLB on demand if it was never queued via `_modelSlots`. The
+  disguise identity itself was ALWAYS on the snapshot (gated by `hunterSafeSnapshot`/`blindHunterSnapshot`),
+  so this was a client render-swap bug with no protocol/referee change. Guard: `tools/check-late-join-disguise.mjs`.
   **LIGHTING OVERHAUL (VRmike, 2026-07-19):** scene.js owns a `LightingRig` (`this.lighting`, from
   `js/lighting.js`) that drives a 4-tier quality system (T0 potato → T3 bloom). `render()` delegates
   to the rig (direct render on T0/T1, an SSAO/bloom `EffectComposer` on T2/T3, falling back to direct
