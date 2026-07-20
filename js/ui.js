@@ -616,49 +616,109 @@ export class UI {
     // during that target's post-fail cooldown (the host enforces the real rule; this is the polite half).
     const vc = voteCtx || {};
     const now = vc.now || (typeof performance !== 'undefined' ? performance.now() : 0);
-    list.innerHTML = '';
-    for (const p of players || []) {
-      const li = document.createElement('li');
-      const who = document.createElement('span');
-      who.className = 'ps-name';
-      const showDisguise = p.disguise && !selfIsHunter; // hunters never see prop disguises
+    const roster = players || [];
+
+    // VOTE-KICK CLICK REGRESSION FIX (2026-07-20, VRmike): reconcile rows IN PLACE keyed by player id
+    // instead of clearing the whole list via innerHTML + full recreate every call. This refreshes on EVERY
+    // snapshot (~15 Hz) while the pause menu is open so health/roster stay live — but the old rebuild
+    // destroyed and recreated each row, INCLUDING the "vote kick" <button>, on every tick. A deliberate
+    // click lasts longer than the ~66 ms between snapshots, so the button was torn out of the DOM between
+    // mousedown and mouseup; the browser then fires `click` on the surviving common ancestor, never on the
+    // button, so onVoteKick never ran (the button just "flashed" and no vote/banner appeared — for
+    // everyone). Reusing the row + button NODES keeps the click target stable so the vote actually starts.
+    // #210's rules are all preserved (disguise-leak, host "can't kick" note, vote-active/cooldown greying).
+    if (!this._psRows) this._psRows = new Map(); // id -> { li, name, hp, action, actionType }
+    const rows = this._psRows;
+
+    // Empty roster (edge case — the local player is normally always present): clear and show the note.
+    if (!roster.length) {
+      for (const [, row] of rows) row.li.remove();
+      rows.clear();
+      if (!list.querySelector('.ps-empty')) { list.innerHTML = ''; list.appendChild(this._li('No players.')); }
+      return;
+    }
+    const emptyNote = list.querySelector('.ps-empty');
+    if (emptyNote) emptyNote.remove();
+
+    const seen = new Set();
+    let prev = null; // running "previous row" so we can order rows to match `roster` with minimal moves
+    for (const p of roster) {
+      seen.add(p.id);
+      let row = rows.get(p.id);
+      if (!row) {
+        const li = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'ps-name';
+        const hp = document.createElement('span');
+        hp.className = 'ps-hp';
+        li.append(name, hp);
+        row = { li, name, hp, action: null, actionType: 'none' };
+        rows.set(p.id, row);
+      }
+      const { li, name, hp } = row;
+
+      // Name + role. DISGUISE-INFO LEAK: only a PROP viewer sees a prop's disguise label; a hunter never
+      // does (the host also strips disguised props' NAMES from hunters, so a name-less prop shows as "a prop").
+      const showDisguise = p.disguise && !selfIsHunter;
       const roleTxt = showDisguise ? `prop · ${p.disguise}` : p.hunter ? 'hunter' : 'prop';
-      const nm = p.id === selfId ? (p.name || 'you') : (p.name || 'a prop'); // host may strip a disguised prop's name for hunters
-      who.textContent = `${nm}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
-      if (!p.alive) who.classList.add('ps-dead');
-      const hp = document.createElement('span');
-      hp.className = 'ps-hp';
+      const nm = p.id === selfId ? (p.name || 'you') : (p.name || 'a prop');
+      name.textContent = `${nm}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
+      name.classList.toggle('ps-dead', !p.alive);
+
+      // Health.
       const v = Math.max(0, Math.round(p.health == null ? 100 : p.health));
       hp.textContent = p.alive ? `❤ ${v}%` : '☠ dead';
-      if (p.alive && v <= 25) hp.classList.add('crit');
-      li.append(who, hp);
-      // VOTE-KICK button — on every OTHER player's row (host AND guests see it, so anyone can start a
-      // vote), never on our own row. The HOST's row shows a greyed "can't kick" note instead of a button:
-      // the host IS the server, so kicking them would end the match for everyone (needs host migration, a
-      // separate feature). Showing the note — rather than a bare empty row — makes clear WHY there's no
-      // button there, so a guest in a 2-player room doesn't read it as broken.
-      if (p.id !== selfId && p.id !== vc.hostId) {
-        const kick = document.createElement('button');
-        kick.type = 'button';
-        kick.className = 'ps-kick';
-        kick.textContent = 'vote kick';
+      hp.classList.toggle('crit', !!(p.alive && v <= 25));
+
+      // Action cell: a "vote kick" button on every OTHER player's row (host AND guests see it), a greyed
+      // "can't kick" note on the HOST's row (kicking the server would end the match for everyone), nothing
+      // on our own row. Only rebuild the action node when its TYPE changes — otherwise reuse it so the
+      // button the player is clicking is never swapped out mid-click.
+      const wantType = p.id === selfId ? 'none' : p.id === vc.hostId ? 'note' : 'button';
+      if (row.actionType !== wantType) {
+        if (row.action) { row.action.remove(); row.action = null; }
+        if (wantType === 'button') {
+          const kick = document.createElement('button');
+          kick.type = 'button';
+          kick.className = 'ps-kick';
+          kick.textContent = 'vote kick';
+          // Attached ONCE (rows are keyed by p.id, so this button only ever represents this player).
+          kick.addEventListener('click', () => this.onVoteKick(p.id));
+          li.append(kick);
+          row.action = kick;
+        } else if (wantType === 'note') {
+          const note = document.createElement('span');
+          note.className = 'ps-kick ps-kick-host';
+          note.textContent = 'host · can’t kick';
+          note.title = 'The host runs the match — kicking them would end it for everyone.';
+          li.append(note);
+          row.action = note;
+        }
+        row.actionType = wantType;
+      }
+      // Live button state: greyed while ANY vote is active or during THIS target's post-fail cooldown
+      // (the host enforces the real rule; this is the polite client half). Refreshed every call.
+      if (row.actionType === 'button') {
+        const kick = row.action;
         const cdUntil = (vc.cooldownUntil && vc.cooldownUntil.get(p.id)) || 0;
         const onCooldown = now < cdUntil;
         kick.disabled = !!vc.voteActive || onCooldown;
         if (onCooldown) kick.title = 'Recently voted on — try again shortly.';
         else if (vc.voteActive) kick.title = 'A vote is already in progress.';
-        kick.addEventListener('click', () => this.onVoteKick(p.id));
-        li.append(kick);
-      } else if (p.id !== selfId && p.id === vc.hostId) {
-        const note = document.createElement('span');
-        note.className = 'ps-kick ps-kick-host';
-        note.textContent = 'host · can’t kick';
-        note.title = 'The host runs the match — kicking them would end it for everyone.';
-        li.append(note);
+        else kick.removeAttribute('title');
       }
-      list.appendChild(li);
+
+      // Keep DOM order in sync with `roster`. insertBefore MOVES the existing node (never destroys it), so
+      // a click in progress on a moved button is unaffected; in the steady state nothing moves at all.
+      const after = prev ? prev.nextSibling : list.firstChild;
+      if (li !== after) list.insertBefore(li, after);
+      prev = li;
     }
-    if (!list.childElementCount) list.appendChild(this._li('No players.'));
+
+    // Drop rows for players who have left.
+    for (const [id, row] of rows) {
+      if (!seen.has(id)) { row.li.remove(); rows.delete(id); }
+    }
   }
 
   // VOTE-KICK banner (2026-07-19, VRmike). Render the top-of-screen live bar from the host's tally.

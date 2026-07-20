@@ -26,7 +26,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { S2C, PHASE, ROLE } from '../shared/protocol.js';
+import { C2S, S2C, PHASE, ROLE } from '../shared/protocol.js';
 import { Referee } from '../shared/referee.js';
 import { matchVoteKey } from '../js/input.js';
 
@@ -363,6 +363,64 @@ ok(matchVoteKey(null) === null, 'a null event is handled safely');
   const fn = src.slice(src.indexOf('export function matchVoteKey'), src.indexOf('export function matchVoteKey') + 400);
   ok(/e\.code === 'KeyY'/.test(fn) && /e\.code === 'KeyN'/.test(fn), 'matchVoteKey keys off e.code (the physical key)');
   ok(!/shiftKey|ctrlKey|altKey|metaKey/.test(fn), 'matchVoteKey never consults a modifier flag (modifier-independent by construction)');
+}
+
+// ===========================================================================
+// K) INITIATE FROM A CLIENT CLICK — the exact path build #210 regressed. A scoreboard "vote kick" click
+//    sends C2S.START_VOTEKICK{target} to the host; the host must OPEN a vote (initiator auto-YES) and the
+//    live banner must ride the NEXT snapshot to EVERY player — the initiator INCLUDED. The prior checks
+//    all called ref.startVoteKick / ref.castVote DIRECTLY, so they never exercised the message routing an
+//    actual click travels through — which is why #210 shipped with the click dead. Here we drive the real
+//    router (ref.handleMessage) with the literal message ui.onVoteKick sends. The DOM click layer (the
+//    button node must stay put across ~15 Hz scoreboard refreshes) is guarded statically in L.
+// ===========================================================================
+console.log('\nK) initiate from a client START_VOTEKICK message — opens the vote + banner for everyone');
+{
+  const t = makeRef();
+  t.add('HOST', ROLE.HUNTER);
+  t.add('P1', ROLE.PROP);   // the initiator (a guest clicking "vote kick" on the target's row)
+  t.add('P2', ROLE.PROP);   // the target
+  t.launchHunting();
+  ok(!t.ref.voteKick, 'no vote is running before the click (this is the FIRST click, not a vote change)');
+  // The exact message a scoreboard "vote kick" click sends: js/main.js ui.onVoteKick -> session.send.
+  t.ref.handleMessage('P1', { t: C2S.START_VOTEKICK, target: 'P2' });
+  ok(!!t.ref.voteKick && t.ref.voteKick.targetId === 'P2', 'the START_VOTEKICK message OPENS a vote against the target');
+  ok(t.ref.voteKick.initiatorId === 'P1' && t.ref.voteKick.votes.get('P1') === true, 'the initiator is recorded as the auto-YES');
+  // The banner (live tally) must ride the very next snapshot to EVERYONE — initiator included.
+  t.ref.broadcastSnapshot();
+  for (const who of ['P1', 'HOST', 'P2']) {
+    const snap = t.lastSnap(who);
+    ok(snap && snap.voteKick && snap.voteKick.target === 'P2', `${who} gets the vote banner in their snapshot`);
+    ok(Array.isArray(snap.voteKick.voters) && snap.voteKick.voters.includes(who), `${who} is in the electorate (eligible to vote)`);
+  }
+  const initSnap = t.lastSnap('P1');
+  ok(initSnap.voteKick.yes === 1 && initSnap.voteKick.no === 0, "the initiator's banner shows their auto-YES (1 yes, 0 no)");
+  // And a live vote via the message router still resolves (the change path from #210 stays intact).
+  t.ref.handleMessage('HOST', { t: C2S.CAST_VOTE, vote: true });
+  t.ref.handleMessage('P2', { t: C2S.CAST_VOTE, vote: false }); // all cast -> early resolve (2 yes, 1 no) -> kick
+  ok(!t.ref.voteKick && !t.ref.players.has('P2'), 'casts via the message router still tally + resolve (2 yes, 1 no -> kick)');
+  t.ref.destroy();
+}
+
+// ===========================================================================
+// L) DOM CLICK-TARGET STABILITY (static) — the #210 regression was purely client-side: updatePauseScoreboard
+//    blew the whole list away (`innerHTML = ''`) and recreated every row — INCLUDING the vote-kick <button> —
+//    on every ~15 Hz snapshot refresh, so a click that outlasted one frame had its button torn out between
+//    mousedown and mouseup and never fired. Guard that the scoreboard now reconciles rows IN PLACE (keyed)
+//    so the click target is stable, and still wires the onVoteKick handler.
+// ===========================================================================
+console.log('\nL) client scoreboard reconciles rows in place (the vote-kick button stays clickable across refreshes)');
+{
+  const src = readFileSync(join(root, 'js', 'ui.js'), 'utf8');
+  const s = src.indexOf('updatePauseScoreboard(');
+  const fn = src.slice(s, src.indexOf('VOTE-KICK banner', s)); // the function body (up to the next method's doc)
+  ok(s >= 0 && fn.length > 0, 'found updatePauseScoreboard for inspection');
+  ok(/_psRows/.test(fn), 'keeps a keyed row cache (_psRows) so row + button nodes are REUSED across refreshes');
+  ok(/insertBefore/.test(fn), 'rows are reordered in place (insertBefore MOVES nodes) rather than destroyed + recreated');
+  ok(/addEventListener\('click'/.test(fn), 'the vote-kick button still wires an onVoteKick click handler');
+  // The only innerHTML reset allowed is the empty-roster branch — never a per-refresh blanket wipe.
+  const wipes = (fn.match(/innerHTML\s*=\s*''/g) || []).length;
+  ok(wipes <= 1, `no per-refresh blanket list wipe (found ${wipes}; only the empty-roster path may keep one)`);
 }
 
 console.log(fails ? `\nFAILED (${fails})` : '\nAll vote-kick checks passed.');

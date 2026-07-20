@@ -86,6 +86,29 @@ snapshot-embedded over a separate stream: free live updates + free mid-join catc
   their vote. `onKeyDown` fires `onVote(bool)` before the pointer-lock gate (works locked or paused),
   no-op while typing / on touch. `main.js` gates it to an actual eligible live vote.
 
+## Regression: dead "vote kick" button — click swallowed by scoreboard rebuild (build/213, 2026-07-20)
+
+Symptom (VRmike playtest, follows #210): the scoreboard "vote kick" button **flashed but never activated
+for ANYONE** — no vote started, no banner popped. Diagnosis (git_show 3249ac4): #210's changes to the
+*initiate* path were all additive and correct — the message contract (`C2S.START_VOTEKICK` → referee
+`startVoteKick` → snapshot banner) and the referee logic were unchanged and the check-votekick suite (which
+drives the referee DIRECTLY) passed, which is exactly why #210 shipped with a dead button. The real fault
+was **client-side DOM**: `ui.updatePauseScoreboard` did `list.innerHTML = ''` + full recreate of every row
+(INCLUDING the `<button>`) on **every ~15 Hz snapshot** while the pause menu is open (js/main.js:1165 live
+refresh; host loopback hits it too). A deliberate click outlasts the ~66 ms between snapshots, so the button
+was torn out of the DOM between mousedown and mouseup → the browser fires `click` on the surviving common
+ancestor, never on the button → `onVoteKick` never ran. #210 didn't add the rebuild, but by (correctly)
+making the button appear for EVERY player it turned a mostly-unnoticed flaky click into an everyone-dead one.
+
+**Fix**: `updatePauseScoreboard` now **reconciles rows IN PLACE keyed by player id** (`this._psRows` map:
+id → {li, name, hp, action, actionType}). Row + button NODES are reused across refreshes; only mutable bits
+(name/role text, health, `disabled`/`title`, ordering via `insertBefore`) are patched. The action cell is
+only rebuilt when its TYPE changes (button ↔ host-note ↔ none), and the click handler is attached ONCE at
+button creation (safe because a row is keyed to one id). `innerHTML` is only cleared in the empty-roster
+branch. Net effect: the click target is stable so the vote actually starts; all #210 behaviour (disguise
+leak, host "can't kick" note, vote-active/cooldown greying, live health) is preserved. `insertBefore` MOVES
+nodes (never destroys), so even a mid-click roster reorder doesn't drop the gesture.
+
 ## Design choices
 
 - **No kick button on the HOST's row** (host = the server; kicking them ends the match — that needs host
@@ -106,4 +129,9 @@ AFK-timer-kick), one-at-a-time, per-target cooldown, early resolution, timer res
 cancel + voter-leaves shrink, guards (no self/host, lobby-refused), snapshot tally in every variant,
 **vote-change/flip** (initiator YES→NO overwrites, doesn't double-count or early-resolve; tally reflects
 it), and the modifier-independent hotkey matcher (Shift-held Y/N still votes) incl. a static check that
-`matchVoteKey` keys off `e.code` and never consults a modifier flag.
+`matchVoteKey` keys off `e.code` and never consults a modifier flag. Build/213 added **K) initiate from a
+client `START_VOTEKICK` message** — drives the real `ref.handleMessage` router (the path an actual click
+travels, not `startVoteKick` called directly) and asserts the vote opens + the banner rides the next
+snapshot to EVERY player incl. the initiator (the exact path that regressed) — and **L) a static guard**
+that `updatePauseScoreboard` reconciles rows in place (`_psRows`, `insertBefore`, no per-refresh blanket
+`innerHTML` wipe) so the button node stays clickable across refreshes.
