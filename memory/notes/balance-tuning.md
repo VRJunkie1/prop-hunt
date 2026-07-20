@@ -4,6 +4,27 @@ Central record of deliberate PLAYTEST-TUNING values (not arbitrary defaults). A 
 session/planner should treat these as intentional balance decisions, freely re-tunable, and
 NOT "restore to some prettier round number." All are HOT-TUNABLE config/CSS — no rebuild.
 
+## GRENADE BLAST — NEAREST SURFACE DISTANCE ⇒ BIG PROPS TAKE MORE (2026-07-20, VRmike, branch build/202-grenade-blast-radius-use)
+
+**One line:** grenades now measure damage/fling from the nearest point on a target's SURFACE, not its
+CENTRE — so big props (fridge/table) are no longer bomb-proof off their pivot. This is a bug FIX, but it
+carries a deliberate balance SHIFT that VRmike pre-approved.
+
+- **The intended shift:** because the surface is closer than the centre, the falloff distance `d` is
+  smaller for a big prop, so its grenade damage AND fling **scale UP**. A small prop (burger) barely
+  changes (its surface ≈ its centre); a large disguise gains the most. Example (radii 0.6 + 1.2): a table
+  player whose PIVOT sits 2.6 m from the blast used to take **0** (pivot past the 1.8 m edge); its side is
+  now ~1.5 m away ⇒ it takes real damage. **This is desired — do NOT "fix" it back to centre distance.**
+- **Nothing about the blast SIZE changed.** `rules.grenade.fullDamageRadius` (0.6) / `falloffDistance`
+  (1.2) / `baseDamage` (0.45) / `flingSpeed` (32) / the size-multiplier curve are all untouched — only
+  WHERE the distance is measured from moved. If big props now feel *too* fragile/flingy, the lever is
+  those existing knobs (shrink the radii or baseDamage), NOT reverting the surface measurement.
+- **Where:** `referee._blastDist` (host) prefers the live Rapier collider closest-point
+  (`physics.nearest{Prop,Player}SurfaceDistance`, `projectPoint` solid=true ⇒ inside = 0 = full damage),
+  falls back to `damage.boxBlastDistance` (bounding box), then centre for a sizeless target. Applies
+  uniformly to disguised prop PLAYERS and loose props (no hunter tell). Guards:
+  `tools/check-grenade.mjs §K` (offline) + `tools/check-grenade-surface.mjs` (real Rapier).
+
 ## PROP HEALTH SCALING — SIZE-COMPARISON FACTOR (2026-07-19, VRmike, branch build/196-prop-player-health-scaling)
 
 **One line:** bigger prop players were too easy to kill — the disguise-damage curve is now a size
