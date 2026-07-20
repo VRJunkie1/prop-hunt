@@ -1295,6 +1295,53 @@ export class PhysicsWorld {
     }
   }
 
+  // ---- GRENADE BLAST: NEAREST SURFACE DISTANCE (2026-07-20, VRmike) ---------
+  // The grenade referee scales damage/fling by the distance to the nearest point on a target's
+  // SURFACE, not its centre — so a big disguise (fridge/table) takes damage when the explosion is on
+  // its side even though its pivot is metres away (VRmike's playtest bug). These helpers ask Rapier
+  // for that closest point on ONE specific object's LIVE collider, which handles the real (possibly
+  // complex/hull) shape correctly. HOST-ONLY in practice (the referee is authoritative); the referee
+  // falls back to a bounding box (damage.boxBlastDistance) whenever these return null.
+  //
+  // Closest-surface distance from `center` to whichever collider passes `pick`. Uses world.projectPoint
+  // with solid=TRUE, so a `center` INSIDE the shape projects to itself => distance 0 (full damage, never
+  // negative / divide-by-zero). Returns a finite distance, or null if the query is unavailable or no
+  // collider matched (=> the referee uses its bounding-box fallback).
+  _nearestSurfaceDistance(center, pick) {
+    const world = this.world;
+    if (!center || !world || typeof world.projectPoint !== 'function' || typeof pick !== 'function') return null;
+    let proj;
+    try {
+      // 7-arg form (point, solid, filterFlags, filterGroups, excludeCollider, excludeBody, predicate) —
+      // the same predicate-filtered projectPoint the depenetration paths use, here solid=true.
+      proj = world.projectPoint({ x: center.x, y: center.y, z: center.z }, true, undefined, undefined, undefined, undefined, pick);
+    } catch {
+      return null; // API gap — let the referee fall back to its bounding-box math
+    }
+    if (!proj || !proj.point) return null; // nothing matched the predicate
+    const dx = proj.point.x - center.x, dy = proj.point.y - center.y, dz = proj.point.z - center.z;
+    const d = Math.hypot(dx, dy, dz);
+    return Number.isFinite(d) ? d : null;
+  }
+
+  // Nearest surface distance from a grenade `center` to PROP `propId`'s live collider (a dynamic body
+  // OR a capped-static obstacle — both live in _propHandleToId). null if the prop has no live collider.
+  nearestPropSurfaceDistance(propId, center) {
+    if (!this._propHandleToId || this._propHandleToId.size === 0) return null;
+    const map = this._propHandleToId;
+    return this._nearestSurfaceDistance(center, (col) => map.get(col.handle) === propId);
+  }
+
+  // Nearest surface distance from a grenade `center` to PLAYER `playerId`'s MOVEMENT collider — the
+  // prop-shaped body a disguised player wears (setPlayerCollider), so a player hiding as a fridge is
+  // measured from the fridge's SIDE exactly like a real fridge (no tell for hunters). null if absent.
+  nearestPlayerSurfaceDistance(playerId, center) {
+    const p = this.players && this.players.get(playerId);
+    if (!p || !p.collider) return null;
+    const handle = p.collider.handle;
+    return this._nearestSurfaceDistance(center, (col) => col.handle === handle);
+  }
+
   // ---- step ----------------------------------------------------------------
   // Advance the sim by dt (seconds) in FIXED _fixedDt substeps only — never a
   // variable partial step. Real elapsed time is banked in _acc and drained one

@@ -25,6 +25,13 @@
 //      backfire.
 //   G) HOST recomputes the blast point from the AIM ray (never trusts a client-supplied hit point).
 //   H) CLIENT source assertions: tool selection (3 tools), throw wiring, explosion + screen flash.
+//   I) FLING: loose props get an outward shove scaling linearly with the blast damage at their distance.
+//   J) SELF-KILL FLING: a lethal backfire still flings every loose prop in range.
+//   K) NEAREST-SURFACE distance (2026-07-20, VRmike): damage/fling are measured from the nearest point
+//      on a target's SURFACE, not its centre — so a big prop (fridge/table) whose PIVOT is out of range
+//      but whose SIDE the blast touches now takes damage. Live Rapier collider first (mocked here), else
+//      the bounding-box fallback (damage.boxBlastDistance); inside/touching clamps to full; small props
+//      barely change while big props gain (the desired balance shift).
 // The build FAILS if any assertion fails.
 
 import { readFileSync } from 'node:fs';
@@ -32,10 +39,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { C2S, S2C, PHASE, ROLE } from '../shared/protocol.js';
 import { Referee } from '../shared/referee.js';
-import { isArchEntry } from '../shared/physics.js';
+import { isArchEntry, halfExtentsFor } from '../shared/physics.js';
 import {
   resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius,
-  resolveDamageCfg, multiplierForDisguise,
+  resolveDamageCfg, multiplierForDisguise, boxBlastDistance,
 } from '../shared/damage.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -168,16 +175,22 @@ const archType = Object.keys(fixtures).find((t) => isArchEntry(fixtures[t]));
   const H = t.add('H', ROLE.HUNTER, 40, 0, 0, { health: 100000 }); // huge HP so backfire never kills here
   // No prop PLAYERS (so nobody dies -> the backfire actually lands). A spread of DECOY prop instances:
   t.ref.props = [
-    { id: 1, type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },            // full  -> +base
-    { id: 2, type: 'kitchen_table', disguisable: true, x: HALF, y: 0, z: 0 },  // mid   -> +base×0.5 (FLAT: size ignored)
+    { id: 1, type: 'burger', disguisable: true, x: 0, y: 0, z: 0 },            // surface 0        -> +full base
+    { id: 2, type: 'kitchen_table', disguisable: true, x: HALF, y: 0, z: 0 },  // big prop, side by the blast -> ~full (FLAT: size ignored)
     { id: 3, type: 'crate', disguisable: false, x: 0, y: 0, z: 0 },            // non-decoy -> 0
-    { id: 4, type: 'burger', disguisable: true, x: OUTER + 0.5, y: 0, z: 0 },  // beyond outer -> 0
+    { id: 4, type: 'burger', disguisable: true, x: OUTER + 0.5, y: 0, z: 0 },  // surface beyond outer -> 0
   ];
   if (archType) t.ref.props.push({ id: 5, type: archType, disguisable: true, x: 0, y: 0, z: 0 }); // architecture -> 0
   t.ref._resolveGrenadeBlast(H, { x: 0, y: 0, z: 0 });
   const took = 100000 - H.health;
-  const expected = baseHP * 1 + baseHP * 0.5; // burger@0 (full) + table@2 (half); everything else 0
-  ok(near(took, expected), `backfire = flat base×falloff over DECOYS only (${took.toFixed(1)} = ${expected.toFixed(1)})`);
+  // SURFACE-BASED backfire (2026-07-20, VRmike): with no live physics the guard measures each decoy's
+  // distance to its bounding-BOX surface (boxBlastDistance), not its centre — so a big table is reached
+  // at HALF even though its pivot sits HALF away. Derive the expected falloff from the SAME box math so
+  // this asserts the relationship (flat base × surface-falloff), not a frozen centre-distance number.
+  const C0 = { x: 0, y: 0, z: 0 };
+  const fSurf = (type, x) => grenadeFalloff(boxBlastDistance(C0, { x, y: 0, z: 0 }, catalog[type]), gcfg);
+  const expected = baseHP * fSurf('burger', 0) + baseHP * fSurf('kitchen_table', HALF); // burger@0 + table@HALF; others 0
+  ok(near(took, expected), `backfire = flat base×surface-falloff over DECOYS only (${took.toFixed(1)} = ${expected.toFixed(1)})`);
   const gren = t.events('H', 'grenade').find(Boolean);
   ok(gren && near(gren.backfire, Math.round(took * 100) / 100), `the grenade event reports the backfire (${gren && gren.backfire})`);
   t.ref.destroy();
@@ -373,7 +386,11 @@ ok(Number.isFinite(gcfg.flingSpeed) && gcfg.flingSpeed > 0, `resolveGrenadeCfg e
   ok(!!byId.CENTER && !!byId.MID, 'props inside the blast are flung (applyBlastImpulse called for CENTER + MID)');
   ok(!byId.OUT, 'a prop beyond the outer radius is NOT flung');
   ok(byId.CENTER && near(byId.CENTER.speed, gcfg.flingSpeed), `a prop at the centre is flung at the FULL flingSpeed (${byId.CENTER && byId.CENTER.speed} = ${gcfg.flingSpeed})`);
-  ok(byId.MID && near(byId.MID.speed, gcfg.flingSpeed * 0.5), `a prop at mid-falloff is flung at half the speed — LINEAR to damage (${byId.MID && byId.MID.speed} = ${gcfg.flingSpeed * 0.5})`);
+  // SURFACE-BASED fling magnitude (2026-07-20): the fling speed scales off the same nearest-surface
+  // distance the damage uses (box fallback in the guard), so a MID prop is flung at flingSpeed × its
+  // SURFACE-falloff — derived from the same box math rather than a frozen centre-distance 0.5.
+  const fMid = grenadeFalloff(boxBlastDistance({ x: 0, y: 0, z: 0 }, { x: HALF, y: 0, z: 0 }, catalog['burger']), gcfg);
+  ok(byId.MID && near(byId.MID.speed, gcfg.flingSpeed * fMid), `a prop at mid-falloff is flung at flingSpeed × surface-falloff — LINEAR to damage (${byId.MID && byId.MID.speed} = ${(gcfg.flingSpeed * fMid).toFixed(2)})`);
   ok(byId.CENTER && byId.MID && byId.CENTER.speed > byId.MID.speed, 'closer prop is flung harder than an edge one (more damage = more fling)');
   ok(flings.every((f) => f.center && f.center.x === 0 && f.center.z === 0), 'every fling passes the blast centre (physics derives the outward direction from the body)');
   t.ref.destroy();
@@ -465,6 +482,119 @@ console.log('\nJ) self-kill fling: a lethal backfire still flings every loose pr
   const flungIds = new Set(flings.map((f) => f.propId));
   ok(decoys.every((d) => flungIds.has(d.id)), 'EVERY loose prop in range is still flung despite the thrower dying in the blast');
   ok(flings.every((f) => f.speed > 0), 'the fling impulses carry real (positive) speed — the shove is not zeroed by the death');
+  t.ref.destroy();
+}
+
+// ---------------------------------------------------------------------------
+// K) NEAREST-SURFACE DISTANCE (2026-07-20, VRmike playtest bug): the blast measures damage/fling from
+//    the nearest point on a target's SURFACE, not its CENTRE, so a big prop (fridge/table) isn't
+//    bomb-proof when the explosion is on its side but its pivot is metres away. The RADIUS is unchanged
+//    — only where the distance is measured FROM. Preference order asserted here: live collider
+//    (physics.nearest*SurfaceDistance) > bounding box (damage.boxBlastDistance) > centre (no known size).
+// ---------------------------------------------------------------------------
+console.log('\nK) nearest-surface distance: big props take damage off their pivot; near > far; small props ~unchanged');
+const C0 = { x: 0, y: 0, z: 0 };
+const surfDmgAt = (type, x) => {
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, x, 0, 0, { disguise: type, health: 100000 });
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  const d = 100000 - P.health; t.ref.destroy(); return d;
+};
+{
+  // THE BUG: a table player whose PIVOT is beyond the outer radius but whose SURFACE is inside it. The
+  // old centre-distance dealt ZERO here (VRmike's "grenades bounce off big props"); surface deals real damage.
+  const tHalf = halfExtentsFor(catalog['kitchen_table']);
+  const tableX = OUTER + tHalf.hx - 0.3; // pivot beyond OUTER; surface 0.3 m inside
+  const centreDist = Math.hypot(tableX, 0, 0);
+  ok(centreDist >= OUTER, `the table player's PIVOT is beyond the outer radius (${centreDist.toFixed(2)} >= ${OUTER.toFixed(2)}) — centre-distance would deal ZERO`);
+  const dmg = surfDmgAt('kitchen_table', tableX);
+  ok(dmg > 0, `but a blast on its SURFACE still damages it (${dmg.toFixed(1)} HP) — the exact playtest bug, fixed`);
+  const surf = boxBlastDistance(C0, { x: tableX, y: 0, z: 0 }, catalog['kitchen_table']);
+  const mT = multiplierForDisguise('kitchen_table', catalog, dcfg);
+  ok(near(dmg, baseHP * mT * grenadeFalloff(surf, gcfg)), `surface damage = base × size-mult × surface-falloff (${dmg.toFixed(1)} = ${(baseHP * mT * grenadeFalloff(surf, gcfg)).toFixed(1)})`);
+}
+{
+  // Near-surface hurts MORE than far-surface (falloff still applies, just measured from the shell).
+  const tHalf = halfExtentsFor(catalog['kitchen_table']);
+  const dNear = surfDmgAt('kitchen_table', tHalf.hx + 0.2); // surface 0.2 m from the blast
+  const dFar = surfDmgAt('kitchen_table', tHalf.hx + 1.2);  // surface 1.2 m from the blast
+  ok(dNear > dFar && dFar > 0, `a grenade nearer the table's SURFACE hurts more (near ${dNear.toFixed(1)} > far ${dFar.toFixed(1)} > 0)`);
+}
+{
+  // Small props ~unchanged: the measurement point moves inward by only the target's half-extent, so a
+  // tiny prop shifts a little and a big one shifts a lot (the invariant, in distance terms).
+  const X = 3.0; // beyond both boxes along +x, so surface = X - hx exactly
+  const bHalf = halfExtentsFor(catalog['burger']).hx;
+  const tHx = halfExtentsFor(catalog['kitchen_table']).hx;
+  const burgerShift = X - boxBlastDistance(C0, { x: X, y: 0, z: 0 }, catalog['burger']);
+  const tableShift = X - boxBlastDistance(C0, { x: X, y: 0, z: 0 }, catalog['kitchen_table']);
+  ok(near(burgerShift, bHalf), `a SMALL prop's measurement point moves in only by its (small) half-extent (${burgerShift.toFixed(2)} = ${bHalf.toFixed(2)}) — ~unchanged`);
+  ok(near(tableShift, tHx) && tableShift > burgerShift, `a BIG prop's moves in by its (large) half-extent (${tableShift.toFixed(2)} = ${tHx.toFixed(2)}) — far more than the small prop`);
+}
+{
+  // PREFERENCE: a live collider surface distance (physics) beats box/centre. The player's PIVOT is far
+  // outside the blast (box + centre => 0), so ONLY the mocked physics distance can produce damage.
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, 50, 0, 0, { disguise: 'kitchen_table', health: 100000 });
+  t.ref.physics = { nearestPlayerSurfaceDistance: (id) => (id === 'P' ? 0.5 : null), destroy: () => {} };
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  const mT = multiplierForDisguise('kitchen_table', catalog, dcfg);
+  ok(near(100000 - P.health, baseHP * mT * grenadeFalloff(0.5, gcfg)), `the live-collider surface distance is PREFERRED over box/centre (${(100000 - P.health).toFixed(1)} = ${(baseHP * mT * grenadeFalloff(0.5, gcfg)).toFixed(1)})`);
+  t.ref.destroy();
+}
+{
+  // Touching/inside (surface distance 0) => FULL damage, never NaN/negative/divide-by-zero.
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, 50, 0, 0, { disguise: 'kitchen_table', health: 100000 });
+  t.ref.physics = { nearestPlayerSurfaceDistance: () => 0, destroy: () => {} };
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  const mT = multiplierForDisguise('kitchen_table', catalog, dcfg);
+  ok(near(100000 - P.health, baseHP * mT), `a blast ON/INSIDE the surface (dist 0) => FULL damage (${(100000 - P.health).toFixed(1)} = ${(baseHP * mT).toFixed(1)})`);
+  t.ref.destroy();
+}
+{
+  // A negative surface distance (defensive) is clamped to 0 — full damage, no negative/divide-by-zero.
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, 50, 0, 0, { disguise: 'kitchen_table', health: 100000 });
+  t.ref.physics = { nearestPlayerSurfaceDistance: () => -0.2, destroy: () => {} };
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  const mT = multiplierForDisguise('kitchen_table', catalog, dcfg);
+  ok(near(100000 - P.health, baseHP * mT), 'a negative surface distance is clamped to 0 (full damage, no divide-by-zero / negative)');
+  t.ref.destroy();
+}
+{
+  // FALLBACK: physics returns null (no live collider) => the referee uses the BOUNDING BOX, never
+  // silently the centre. A disguised (sized) player => box; an undisguised (unknown-size) player => centre.
+  const tHalf = halfExtentsFor(catalog['kitchen_table']);
+  const x = OUTER + tHalf.hx - 0.3;
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, x, 0, 0, { disguise: 'kitchen_table', health: 100000 });
+  t.ref.physics = { nearestPlayerSurfaceDistance: () => null, destroy: () => {} };
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  const surf = boxBlastDistance(C0, { x, y: 0, z: 0 }, catalog['kitchen_table']);
+  const mT = multiplierForDisguise('kitchen_table', catalog, dcfg);
+  ok(near(100000 - P.health, baseHP * mT * grenadeFalloff(surf, gcfg)), 'physics null => BOUNDING-BOX fallback (never silently centre)');
+  t.ref.destroy();
+}
+{
+  // Undisguised / unknown-size player: no box either => plain CENTRE distance (behaviour unchanged).
+  const t = makeTable();
+  const H = t.add('H', ROLE.HUNTER, 40, 0, 0);
+  const P = t.add('P', ROLE.PROP, HALF, 0, 0, { disguise: null, health: 100000 });
+  t.ref.physics = { nearestPlayerSurfaceDistance: () => null, destroy: () => {} };
+  t.ref.props = [];
+  t.ref._resolveGrenadeBlast(H, C0);
+  ok(near(100000 - P.health, baseHP * grenadeFalloff(HALF, gcfg)), 'an undisguised player (no known size) falls back to CENTRE distance (unchanged)');
   t.ref.destroy();
 }
 

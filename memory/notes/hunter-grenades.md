@@ -107,6 +107,52 @@ positive fling impulse. Plus §I source asserts: the fling loop precedes the bac
 steps physics during ENDING; `integrate` freezes players during ENDING. Live-confirm the props actually
 tumble on both screens after a self-kill (headless can't render the motion).
 
+## NEAREST-SURFACE DISTANCE — measure to the surface, not the pivot (2026-07-20, VRmike)
+
+Symptom (playtest bug, screenshots): a grenade "3 m from a fridge" was treated as "3 m from the
+fridge's CENTRE," so a big prop PLAYER (fridge/table) shrugged off blasts that were visibly touching
+its side — you had to hit the pivot. Fix: measure damage/fling distance from the nearest point on the
+target's SURFACE. The blast **radius and falloff curve are UNCHANGED** — only where `d` is measured FROM.
+
+Side effect (intended, VRmike): big props take noticeably MORE grenade damage/fling now (the surface
+is closer than the centre, so falloff scales UP). If fridges feel *too* fragile, that's a follow-up
+balance knob (radii / baseDamage in rules.json), NOT a bug in this change.
+
+Preference order for `d` (in `referee._blastDist(center, physDist, pos, entry)`):
+1. **Live Rapier collider** — the exact closest point on the object's real (possibly hull/complex)
+   shape via `world.projectPoint(center, solid=true, …predicate)` filtered to that ONE collider's
+   handle. `solid=true` → a `center` INSIDE the shell projects to itself ⇒ distance **0** (full
+   damage, never negative / divide-by-zero). Two `PhysicsWorld` methods:
+   `nearestPropSurfaceDistance(propId, center)` (dynamic body OR capped-static obstacle — both in
+   `_propHandleToId`) and `nearestPlayerSurfaceDistance(playerId, center)` (a disguised player's
+   MOVEMENT collider — the true prop shape from `setPlayerCollider`, so a fridge-player measures from
+   the fridge's side exactly like a real fridge). Both return `null` if the collider isn't queryable.
+2. **Bounding-box fallback** — `damage.boxBlastDistance(center, pos, entry)`: nearest point on an
+   axis-aligned box carrying the target's `halfExtentsFor` half-extents, seated with its BASE at `pos`
+   (centre = base + hy). Used offline (the guard has no Rapier) or when a target has no live collider.
+   Cruder than the real collider but **NEVER worse than the old centre distance**. 0 when inside.
+3. **Centre distance** (`dist3`) ONLY when the target has no known size (undisguised / unknown type) —
+   the one case with no box to measure. NEVER a silent centre fallback for a sized target.
+
+`_blastDist` clamps `physDist` to `>= 0`. All three blast loops (prop-PLAYER damage, decoy BACKFIRE,
+and FLING magnitude) now feed surface distance into the SAME `grenadeFalloff`. FLING **direction** is
+still derived inside `applyBlastImpulse` from the body position vs `center` (push away from the blast),
+so the measuring point and the shove direction are decided separately — big props fly the right way.
+
+Guards:
+- `tools/check-grenade.mjs` §K (offline, mock physics + box fallback): a table player whose PIVOT is
+  beyond `outer` but whose SIDE the blast touches now takes real damage (`surface = base×size-mult×
+  surface-falloff`); near-surface > far-surface; small props' measurement point moves in by only their
+  (small) half-extent while big props move a lot; the live-collider distance is PREFERRED over
+  box/centre; dist 0 (and a defensive negative) ⇒ FULL damage; physics `null` ⇒ box fallback;
+  undisguised ⇒ centre. §D/§I were updated to assert surface-based (box) distances, derived from the
+  same `boxBlastDistance` (relationship, not frozen centre numbers).
+- `tools/check-grenade-surface.mjs` (NEW, real Rapier, SKIPs+exit 3 if the WASM package is absent):
+  stands up a real `PhysicsWorld` and proves the query itself — a 2.4 m table's surface distance from a
+  blast 3 m off its pivot is ~1.8 m (= centre − half-width), 0 inside, monotonic with distance, `null`
+  for an unknown id; and a table-DISGUISED player is measured from the box side identically. Exits via
+  `process.exitCode` (not `process.exit`) so Rapier's WASM teardown can't abort a clean pass on Windows.
+
 ## Netcode (host-authoritative, matches the rifle)
 
 `C2S.GRENADE {dx,dy,dz}` → `referee.applyGrenade`:
@@ -134,8 +180,13 @@ raycast + bogus client hit coords that are ignored).
 
 - `shared/config/rules.json` — `grenade` block (`baseDamage` 0.45, `fullDamageRadius` 1,
   `falloffDistance` 2), all hot-tunable, authored as 1+2.
-- `shared/damage.js` — `resolveGrenadeCfg`, `grenadeOuterRadius`, `grenadeFalloff` (pure; shared by
-  referee + guard).
+- `shared/damage.js` — `resolveGrenadeCfg`, `grenadeOuterRadius`, `grenadeFalloff`, `boxBlastDistance`
+  (pure; shared by referee + guard).
+- `shared/physics.js` — `nearestPropSurfaceDistance` / `nearestPlayerSurfaceDistance` (+ the shared
+  `_nearestSurfaceDistance` projectPoint helper) for the live-collider surface distance.
+- `shared/referee.js` — `_blastDist` (surface-distance preference: live collider → box → centre), wired
+  into all three blast loops.
+- `tools/check-grenade-surface.mjs` (new) — real-Rapier live guard for the surface-distance query.
 - `shared/protocol.js` — `C2S.GRENADE` + `S2C.EVENT kind:'grenade'` doc.
 - `shared/referee.js` — `applyGrenade` (host raycast) + `_resolveGrenadeBlast` (redemption ordering
   + backfire) + `_propBlastPos` + `dist3` helper; `C2S.GRENADE` case. (rifle/finder/taunt UNCHANGED.)

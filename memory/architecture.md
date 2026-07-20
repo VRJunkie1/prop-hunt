@@ -410,7 +410,15 @@ Full detail: `notes/hunter-tools-combat.md` + `DECISIONS.md` #1. Shape:
   damage — a self-kill (thrower dies → round ends → `setPhase(ENDING)`) no longer cancels it; and
   `tick()` keeps `integrate()` STEPPING during ENDING (players frozen) so the flung props actually fly
   + settle on the results screen instead of freezing mid-blast. Guard: `tools/check-grenade.mjs` §J.
-  Detail: `notes/hunter-grenades.md`.
+  **NEAREST-SURFACE DISTANCE (2026-07-20, VRmike):** all three blast loops (prop-player damage, decoy
+  backfire, fling magnitude) measure distance to the target's nearest SURFACE point, not its centre, so
+  a big prop player (fridge/table) takes damage when the blast is on its side even though its pivot is
+  metres away. `referee._blastDist` prefers the live Rapier collider
+  (`physics.nearestProp/PlayerSurfaceDistance` → `world.projectPoint(solid=true)` filtered to one
+  handle; inside ⇒ 0 = full damage), else the bounding box (`damage.boxBlastDistance`), else centre
+  (unknown-size only). Radius/falloff UNCHANGED; big props just take more (intended). Fling DIRECTION
+  still from `applyBlastImpulse` (body vs centre). Guards: `check-grenade.mjs` §K + real-Rapier
+  `check-grenade-surface.mjs`. Detail: `notes/hunter-grenades.md`.
 
 ## Vote-kick (player-driven kicks, 2026-07-19, VRmike — build/194)
 

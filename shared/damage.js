@@ -192,3 +192,26 @@ export function grenadeFalloff(d, cfg) {
   if (d >= outer) return 0; // past the outer edge — no damage
   return 1 - (d - c.fullDamageRadius) / c.falloffDistance;
 }
+
+// NEAREST-SURFACE BLAST DISTANCE — bounding-box fallback (2026-07-20, VRmike). The grenade now
+// measures damage/fling from the nearest point on a target's SURFACE, not its centre, so a big prop
+// (fridge/table) isn't bomb-proof when the blast is on its side but its pivot is metres away. The host
+// prefers Rapier's exact closest-point on the live collider (physics.nearest*SurfaceDistance); THIS is
+// the fallback for when that's unavailable (the offline guard has no Rapier; or a target with no
+// queryable collider): the nearest point on an axis-aligned BOUNDING BOX carrying the target's collider
+// half-extents (halfExtentsFor), seated with its BASE at `pos` (x/z = footprint centre, y = base
+// height) exactly how physics seats a prop/disguise collider on the ground. Returns 0 when `center` is
+// inside the box (=> full damage, never a divide-by-zero / negative). Cruder than the real collider but
+// NEVER worse than the old centre distance. Pure so the referee and the offline guard compute the
+// identical curve. The blast RADIUS is unchanged — this only moves where the distance is measured FROM.
+export function boxBlastDistance(center, pos, entry) {
+  const h = halfExtentsFor(entry);
+  const p = pos || {};
+  const cx = p.x || 0;
+  const cy = (p.y || 0) + h.hy; // the box base sits at pos.y; its centre is hy above that
+  const cz = p.z || 0;
+  const dx = Math.max(Math.abs((center.x || 0) - cx) - h.hx, 0);
+  const dy = Math.max(Math.abs((center.y || 0) - cy) - h.hy, 0);
+  const dz = Math.max(Math.abs((center.z || 0) - cz) - h.hz, 0);
+  return Math.hypot(dx, dy, dz);
+}

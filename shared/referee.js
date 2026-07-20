@@ -16,7 +16,7 @@
 import { C2S, S2C, PHASE, ROLE, HUNTER_TOOL_IDS } from './protocol.js';
 import { loadRapier, PhysicsWorld, isFixedBodyEntry, isArchEntry, isDisguisableEntry } from './physics.js';
 import { WALL_INSET } from './bounds.js';
-import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius, playerSizeFromRules } from './damage.js';
+import { resolveDamageCfg, multiplierForDisguise, wrongGuessPenalty, resolveGrenadeCfg, grenadeFalloff, grenadeOuterRadius, playerSizeFromRules, boxBlastDistance } from './damage.js';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -1115,7 +1115,12 @@ export class Referee {
     const playerHits = [];
     for (const p of this.players.values()) {
       if (p.role !== ROLE.PROP || !p.alive) continue;
-      const d = dist3(center, p.pos);
+      // NEAREST SURFACE, not centre (2026-07-20): a big disguise (fridge/table) is measured from its
+      // side, so a blast touching it damages it even when its pivot is metres away. Live collider first
+      // (physics), else the disguise's bounding box, else plain centre distance (undisguised/unknown).
+      const surf = this.physics && this.physics.nearestPlayerSurfaceDistance
+        ? this.physics.nearestPlayerSurfaceDistance(p.id, center) : null;
+      const d = this._blastDist(center, surf, p.pos, catalog[p.disguise]);
       if (d >= outer) continue;
       const f = grenadeFalloff(d, g);
       if (f <= 0) continue;
@@ -1135,7 +1140,9 @@ export class Referee {
       const c = catalog[prop.type];
       if (!c || isArchEntry(c)) continue; // architecture (walls/floors) never backfires
       const pos = this._propBlastPos(prop);
-      const d = dist3(center, pos);
+      const surf = this.physics && this.physics.nearestPropSurfaceDistance
+        ? this.physics.nearestPropSurfaceDistance(prop.id, center) : null;
+      const d = this._blastDist(center, surf, pos, c); // nearest surface, not centre
       if (d >= outer) continue;
       const f = grenadeFalloff(d, g);
       if (f > 0) backfire += baseHP * f;
@@ -1158,7 +1165,13 @@ export class Referee {
     if (this.physics && this.physics.applyBlastImpulse && g.flingSpeed > 0) {
       for (const prop of this.props) {
         const pos = this._propBlastPos(prop);
-        const d = dist3(center, pos);
+        // Fling MAGNITUDE scales off the same nearest-surface distance the damage uses (big props no
+        // longer under-flung off their pivot); the fling DIRECTION stays "away from the blast centre"
+        // (derived inside applyBlastImpulse from the body position vs `center`) so props are pushed
+        // outward sanely, not shoved oddly (2026-07-20).
+        const surf = this.physics.nearestPropSurfaceDistance
+          ? this.physics.nearestPropSurfaceDistance(prop.id, center) : null;
+        const d = this._blastDist(center, surf, pos, catalog[prop.type]);
         if (d >= outer) continue;
         const f = grenadeFalloff(d, g);
         if (f <= 0) continue;
@@ -1192,6 +1205,21 @@ export class Referee {
       hits: playerHits.filter((h) => !h.player.alive).length,
       backfire: round2(redeemed ? 0 : backfire), redeemed,
     });
+  }
+
+  // Distance from a grenade blast `center` to the NEAREST point on a target's SURFACE (not its centre)
+  // — the fix for VRmike's "big props are bomb-proof off their pivot" playtest bug (2026-07-20). The
+  // blast RADIUS is unchanged; this only moves where the distance is measured FROM. Preference order:
+  //   1. `physDist` — the live Rapier collider's exact closest point (physics.nearest*SurfaceDistance),
+  //      which handles the true (possibly hull/complex) shape and returns 0 when the blast is inside it;
+  //   2. the target's bounding BOX (damage.boxBlastDistance) when the collider isn't queryable (offline
+  //      guard, or a target with no live collider) — cruder but never worse than centre distance;
+  //   3. plain CENTRE distance only when the target has no known size (undisguised player / unknown type).
+  // Clamped to >= 0 so a touching/inside blast is full damage, never negative (no divide-by-zero).
+  _blastDist(center, physDist, pos, entry) {
+    if (Number.isFinite(physDist)) return Math.max(0, physDist);
+    if (entry) return boxBlastDistance(center, pos, entry);
+    return dist3(center, pos);
   }
 
   // Best-known world position of a decoy prop for blast-distance: its LIVE shoved x/z (propLive,
