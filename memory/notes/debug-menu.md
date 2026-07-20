@@ -1,5 +1,14 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-20 (check-repair) — `check-debug-menu.mjs` onLockError regex loosened.** The pause-menu QoL
+pack (commit f6800ad) rewrote `main.js` `input.onLockError` to show a calm "Click to recapture the
+mouse" hint — `ui.setClickToPlay(true, 'Click to recapture the mouse', true)` inside a `{ }` block —
+instead of the old `ui.setClickToPlay(true, reason)`. The check's regex was hard-pinned to the old
+call signature and failed even though the asserted contract (the `!state.uiMode` guard that suppresses
+the overlay in UI mode) was still intact. Relaxed the regex to match the guard + `ui.setClickToPlay(true,`
+regardless of the trailing args/block. No shipped-code change.
+
+
 **2026-07-20 (VRmike) — NEW "Held-item alignment" panel (`?debug=1` only).** A human-in-the-loop tuner
 to align the rifle/grenade/finder in the hunter's hand + on the character model (attempt 4 — automated
 offset guessing kept missing). Per-item tabs (rifle/finder/grenade, `●` = equipped), seven +/− steppers

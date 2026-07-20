@@ -166,7 +166,7 @@ ok(/if \(state\.uiMode\) \{ ui\.setClickToPlay\(false\); return; \}/.test(mainSr
   'onLockChange: UI mode suppresses BOTH the Click-to-play overlay AND the pause menu (state-driven)');
 ok(/if \(locked\) \{[\s\S]*?state\.uiMode = false;/.test(mainSrc),
   'onLockChange clears uiMode the instant the pointer re-locks (derive/reset, never latch)');
-ok(/if \(inGame && !state\.paused && !state\.uiMode\) ui\.setClickToPlay\(true, reason\)/.test(mainSrc),
+ok(/if \(inGame && !state\.paused && !state\.uiMode\)\s*\{?\s*ui\.setClickToPlay\(true,/.test(mainSrc),
   'onLockError also suppresses the overlay in UI mode (no stale prompt)');
 // (d) every resume/pause path clears the flag. openPause + the two match-exit resets + STARTED
 //     + onLockChange-on-lock = at least 5 assignments; require the key ones explicitly.
