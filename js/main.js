@@ -1196,7 +1196,13 @@ function onSnapshot(msg) {
     ui.setHealth(me.health);
     const wasAlive = state.alive;
     state.alive = me.alive !== false;
-    if (state.alive !== wasAlive) { applyToolView(); updateControlsList(); } // B8: death/respawn re-filters controls
+    if (state.alive !== wasAlive) {
+      applyToolView(); updateControlsList(); // B8: death/respawn re-filters controls
+      // STOP OWN TAUNT ON DEATH (VRmike, 2026-07-20): the 'eliminated' event already cuts our taunt,
+      // but the snapshot alive→dead flip is a distinct code path that can arrive first (or alone, e.g.
+      // a death by a non-attack health drain). Cut our own taunt here too so self-death is airtight.
+      if (!state.alive && scene && scene.stopTaunt) scene.stopTaunt(state.selfId);
+    }
     const activePhase = msg.phase === PHASE.HIDING || msg.phase === PHASE.HUNTING;
     setSpectating(!state.alive && activePhase);
     state.serverSelf.x = me.x;
@@ -1354,6 +1360,12 @@ function onEvent(msg) {
     case 'eliminated':
       // hunter=true => a hunter died (no respawn); else a prop was found.
       ui.feed(msg.hunter ? `${msg.name} (hunter) was taken down!` : `${msg.name} was found!`);
+      // STOP TAUNT ON DEATH (VRmike, 2026-07-20): cut the dead player's taunt audio the INSTANT
+      // they die instead of letting the clip ring out. This authoritative death event reaches EVERY
+      // client (that's how the kill shows up for all), so the taunt goes silent on every phone/PC in
+      // earshot — including the victim's own screen (they receive their own 'eliminated' too, so
+      // self-death is covered here as well). No-op if nothing was playing for them.
+      if (scene && scene.stopTaunt) scene.stopTaunt(msg.victim);
       if (msg.victim === state.selfId) {
         ui.banner(msg.hunter ? 'You died — spectating.' : 'You were caught!', 3000);
       }
@@ -1415,6 +1427,9 @@ function onEvent(msg) {
       ui.feed(`Disguised as a ${msg.type}.`);
       break;
     case 'roundOver': {
+      // SILENCE SEAM (VRmike, 2026-07-20): a taunt still ringing when the round ends should stop with
+      // it — no clip bleeding into the results banner / next round. Cheap at this existing seam.
+      if (scene && scene.clearAllTaunts) scene.clearAllTaunts();
       const won =
         (msg.winner === ROLE.HUNTER && state.role === ROLE.HUNTER) ||
         (msg.winner === ROLE.PROP && state.role === ROLE.PROP);

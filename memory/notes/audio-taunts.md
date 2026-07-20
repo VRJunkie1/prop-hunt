@@ -201,7 +201,34 @@ call (the "a missing scene method silently kills the render loop every frame" le
 inverse-square falloff knobs/formula, AND the HRTF panning setup (the `TAUNT_PANNING` knob + the
 guarded `panner.panningModel = model || fallback` in `playTaunt`).
 
+## Cut taunt audio on prop death (VRmike, 2026-07-20, build/216-stop-taunt-audio-on)
+Playtest bug: when a taunting prop was killed, the clip kept ringing out until it finished. It now
+cuts the INSTANT they die, on every screen in earshot (including the victim's own). The whole fix is
+client-side audio bookkeeping riding the host's EXISTING authoritative death signal — no
+server/referee change (the referee already broadcasts `eliminated{victim}` to everyone on any death,
+via `_damagePlayer`). `scene.stopTaunt(playerId)` already existed and does exactly the right thing
+(immediate stop + dispose of that player's emitter, safe no-op if silent), so this is pure wiring:
+- **Death seam (the main one) — `js/main.js` `onEvent` `case 'eliminated'`:** calls
+  `scene.stopTaunt(msg.victim)`. Because the `eliminated` event is broadcast to ALL clients, this
+  cuts the dead prop's taunt on every phone/PC — and covers **self-death too** (the victim receives
+  their own `eliminated`).
+- **Self-death belt-and-suspenders — `js/main.js` `onSnapshot` alive→dead flip:** when the local
+  snapshot flips `state.alive` true→false, also `scene.stopTaunt(state.selfId)`. The snapshot flip is
+  a DISTINCT path that can arrive first (or alone, e.g. a non-attack health drain), so self-death is
+  airtight regardless of which message lands first. Idempotent with the event path (double-stop is a
+  no-op).
+- **Silence seams (free, at existing teardown points):** round end (`case 'roundOver'` →
+  `scene.clearAllTaunts()`), return-to-lobby (`backToMenu` already called `clearAllTaunts` — preserved),
+  and a player disconnecting mid-taunt (`js/scene.js` `syncPlayers` removal loop now `stopTaunt(id)`
+  before removing their mesh, so the sound doesn't chase a mesh that's about to vanish).
+- **Headless guard — `tools/check-taunt-death-silence.mjs`:** drives the REAL referee (prop taunts →
+  killed → asserts `eliminated{victim:PROP}` reaches every client), models the lifecycle against a
+  faithful per-player-Map stand-in for the scene (taunt tracked → death event → stopped/disposed, dead
+  prop only, bystander untouched, self-death stopped, silent-stop no-op), and source-asserts the REAL
+  wiring at all four seams so the model isn't fiction. Passes. (Existing `check-taunts.mjs` still green.)
+
 ## Owed live pass
 Taunt from a phone (iOS sound actually plays), hear it directionally on a second device, spam cut-off
 with the menu staying open, stop button kills it, ✕ closes without playing. Then confirm dropping real
-clips + manifest lines needs ZERO code change.
+clips + manifest lines needs ZERO code change. **For the death fix:** kill a taunting prop mid-track
+both as another player AND as the dying prop, confirm instant silence on both screens.

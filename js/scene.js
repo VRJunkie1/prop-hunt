@@ -885,6 +885,9 @@ export class Scene3D {
     // Remove players no longer present.
     for (const [id, entry] of this.players) {
       if (!seen.has(id)) {
+        // SILENCE SEAM (VRmike, 2026-07-20): if this player left mid-taunt, cut their emitter now —
+        // otherwise the sound would keep following a mesh that's about to be removed. No-op if silent.
+        this.stopTaunt(id);
         this.scene.remove(entry.mesh);
         this.players.delete(id);
       }
