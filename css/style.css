@@ -194,13 +194,17 @@ button.ghost:hover { background: #3d2a66; }
   font-size: 22px;
   text-align: center;
 }
-/* VOTE-KICK banner (2026-07-19, VRmike). Pinned to the TOP-CENTRE, BELOW the .hud-top row (health bar
-   etc) so nothing overlaps. Shown to ALL players while a vote runs; live tally + countdown text plus
-   tappable Yes/No buttons labelled (Y)/(N). #hud is pointer-events:none; the buttons re-enable it. On a
-   narrow/portrait screen the .hud-top wraps to two rows, so the banner drops lower there (media query). */
+/* VOTE-KICK banner (2026-07-19, VRmike). Pinned TOP-CENTRE. Shown to ALL players while a vote runs; live
+   tally + countdown text plus tappable Yes/No buttons labelled (Y)/(N). #hud is pointer-events:none; the
+   buttons re-enable it.
+   OVERLAP FIX (QoL pack 2026-07-20, VRmike): on PC it used to sit at 62px and overlap the props' taunt
+   button (top 88px) + its stop button (top 140px), making it unreadable. It now anchors BELOW the whole
+   top-of-screen strip — the .hud-top pills, the taunt button, AND the (transient) red taunt-stop button
+   (top 140px + ~46px tall ⇒ ~186px). At ~196px it clears every top UI element at any screen width, so the
+   old narrow-screen media override is no longer needed. */
 .votekick {
   position: absolute;
-  top: 62px; left: 50%;
+  top: calc(196px + env(safe-area-inset-top, 0px)); left: 50%;
   transform: translateX(-50%);
   max-width: 92vw;
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
@@ -233,9 +237,8 @@ button.ghost:hover { background: #3d2a66; }
 .votekick-btn.chosen { box-shadow: 0 0 0 2px #fff, 0 0 8px #ffffffaa; }
 .votekick-btn.yes.chosen { background: #38a568; }
 .votekick-btn.no.chosen { background: #cf463b; }
-@media (max-width: 640px) {
-  .votekick { top: 108px; } /* .hud-top's health bar wraps to its own row on narrow/portrait screens */
-}
+/* (The old narrow-screen .votekick top override was removed with the 2026-07-20 reposition — the banner
+   now anchors below the entire top strip at every width, so it no longer needs a per-width nudge.) */
 .feed {
   position: absolute;
   bottom: 16px; left: 16px;
@@ -258,6 +261,19 @@ button.ghost:hover { background: #3d2a66; }
   cursor: pointer;
   touch-action: none;
   z-index: 10; /* above the touch controls (z-index:5) so it always gets the tap */
+}
+/* CALM POINTER-LOCK HINT (QoL pack 2026-07-20, VRmike). When re-capturing the mouse right after closing
+   the pause menu is refused — almost always Chrome's ~1.25s cooldown after an Esc-exit, NOT a real
+   failure — we no longer flash the scary full-screen "Browser blocked mouse capture" nag. Instead the
+   overlay shrinks to a small, calm hint near the bottom: no dim, small type, still click-anywhere to
+   re-lock (the whole overlay stays the tap target). One more click lands once the cooldown passes. */
+.overlay.overlay-hint {
+  align-items: flex-end;
+  padding-bottom: 14dvh;
+  font-size: 15px;
+  color: #e6ecff;
+  background: transparent;
+  text-shadow: 0 1px 4px #000c;
 }
 
 /* HUNTER BLINDFOLD overlay — a dark, blurred blackout with a centered countdown,
@@ -722,9 +738,12 @@ button.ghost:hover { background: #3d2a66; }
   justify-content: center;
   padding: 16px;
   z-index: 50; /* above the HUD / toolbar / overlays */
-  background: #060010cc;
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+  /* HALVED dim + blur (VRmike QoL 2026-07-20): the paused world was too dark/blurry. Dim
+     opacity cut ~in half (cc≈0.80 → 66≈0.40) and the backdrop blur 3px → 1.5px, so you can
+     still read the world behind the menu. */
+  background: #06001066;
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
   pointer-events: auto;
 }
 .pause-menu.hidden { display: none; }
@@ -780,6 +799,26 @@ button.ghost:hover { background: #3d2a66; }
 }
 .pause-scores .ps-name { color: #ece3ff; word-break: break-word; }
 .pause-scores .ps-name.ps-dead { opacity: .5; text-decoration: line-through; }
+/* MID-GAME NAME CHANGE (QoL pack 2026-07-20, VRmike). YOUR own row is highlighted + the name reads as
+   clickable (a small ✎ affordance via ::after); clicking it swaps in the inline editor below. Works on
+   touch (tap to edit → on-screen keyboard). */
+.pause-scores li.ps-self-row { background: #ff2fd012; border-radius: 6px; }
+.pause-scores .ps-name.ps-editable { cursor: pointer; color: #ffd7f6; }
+.pause-scores .ps-name.ps-editable::after {
+  content: " ✎"; opacity: .6; font-size: 11px;
+}
+.pause-scores .ps-name.ps-editable:hover { text-decoration: underline; }
+/* Inline name editor: a compact text box that replaces the name text while editing. Enter/blur commits,
+   Esc cancels (ui.js). Sized to sit in the row without reflowing it. */
+.pause-scores .ps-name-edit {
+  font: inherit; font-size: 13px;
+  width: min(180px, 60%);
+  padding: 2px 6px; margin: -2px 0;
+  color: #fff; background: #0d0620;
+  border: 1px solid #ff2fd0aa; border-radius: 6px;
+  outline: none;
+}
+.pause-scores .ps-name-edit:focus { border-color: #ff8ae8; box-shadow: 0 0 0 2px #ff2fd044; }
 .pause-scores .ps-hp { color: #7be38b; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pause-scores .ps-hp.crit { color: #ff6b6b; }
 .pause-scores .ps-empty { justify-content: center; color: #9a86c4; }

@@ -302,26 +302,34 @@ export class Referee {
     if (player) player._lastSeen = Date.now();
   }
 
-  // ---- lobby rename (host-authoritative) ----------------------------------
-  // Change a player's OWN display name from the lobby. Every player — the host and
-  // an invite-link guest alike — routes here through C2S.RENAME (no special-casing);
-  // a player can only rename THEMSELVES because the referee looks up the sender by
-  // their connection id (handleMessage), never a name in the payload. The host is the
-  // authority: it trims whitespace, caps the length, REJECTS an empty name (keeps the
-  // old one), and de-dupes so two people can't share a name. Then it rebroadcasts the
-  // roster (broadcastLobby) — the SAME rebroadcast a join fires — so every lobby list,
-  // including late joiners, updates live. LOBBY-ONLY: a rename mid-round is ignored so
-  // scoreboards and elimination messages don't shuffle names mid-match (rename again
-  // back in the lobby). The chosen name rides every later snapshot, so it carries into
-  // the game for the scoreboard/feed automatically.
+  // ---- rename (host-authoritative) ----------------------------------------
+  // Change a player's OWN display name — from the lobby OR mid-match (the pause-menu
+  // scoreboard, for latecomers who joined with a default name — VRmike QoL pack
+  // 2026-07-20). Every player — the host and an invite-link guest alike — routes here
+  // through C2S.RENAME (no special-casing); a player can only rename THEMSELVES because
+  // the referee looks up the sender by their connection id (handleMessage), never a name
+  // in the payload. The host is the authority: it trims whitespace, caps the length,
+  // REJECTS an empty name (keeps the old one), and de-dupes so two people can't share a
+  // name.
+  //
+  // HOW THE NEW NAME PROPAGATES, and the ANTI-CHEAT reason it MUST ride the snapshot:
+  //   • In the LOBBY we rebroadcast the roster (broadcastLobby) — the SAME rebroadcast a
+  //     join fires — so every lobby list, including late joiners, updates live.
+  //   • MID-MATCH we do NOT announce the rename separately. The new name simply rides the
+  //     next per-recipient snapshot (broadcastSnapshot). That path already BLANKS a
+  //     disguised prop's name for every HUNTER recipient (hunterSafeSnapshot), so a
+  //     mid-game rename can never leak a hiding prop's identity to hunters. A stray
+  //     broadcastLog("X renamed to Y") would BYPASS that blank, so we deliberately emit
+  //     no log line here.
   applyRename(player, rawName) {
-    if (this.phase !== PHASE.LOBBY) return; // lobby-only; a live match keeps its names
     const cleaned = String(rawName == null ? '' : rawName).slice(0, NAME_MAX).trim();
     if (!cleaned) return; // reject empty/whitespace-only — keep the current name
     const unique = this._uniqueName(cleaned, player.id);
     if (unique === player.name) return; // no actual change → no needless rebroadcast
     player.name = unique;
-    this.broadcastLobby();
+    // Lobby: push the roster now. Mid-match: the change rides the next snapshot (which
+    // blanks disguised-prop names for hunters) — no separate, blank-bypassing announcement.
+    if (this.phase === PHASE.LOBBY) this.broadcastLobby();
   }
 
   // Resolve a name clash so two players never share a display name: if `name` is taken

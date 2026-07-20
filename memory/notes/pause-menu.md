@@ -1,5 +1,40 @@
 # Pause menu + rapid fire + mouse lock (2026-07-12, VRmike)
 
+## Pause-menu QoL pack (2026-07-20, VRmike — build/218) — 5 fixes in one pass
+
+1. **Mid-game name change (pause scoreboard).** Your OWN scoreboard row is highlighted (`.ps-self-row`) and
+   its name is click-to-edit (`.ps-name.ps-editable`, a ✎ affordance). Clicking swaps the name text for an
+   inline `<input.ps-name-edit>` (`ui._beginNameEdit`); **Enter/blur commits, Esc cancels**. Commit relays
+   `C2S.RENAME` via the SAME `ui.onRename` the lobby uses → host validates (trim/cap-16/reject-empty/de-dupe,
+   `referee.applyRename`). Works on touch (tap → keyboard). **Survives the ~15 Hz reused-row refresh** (build
+   #213 / 7954df9): `updatePauseScoreboard` skips rewriting the name cell while `this._psEditId === p.id`, so
+   a snapshot can't stomp the box or typed text; everything else on the row keeps updating live. `hidePause()`
+   blurs the box first (commits a typed name) then clears the edit marker so a reopen renders fresh.
+2. **Rename netcode is NOW mid-match too.** `referee.applyRename` dropped its LOBBY-only early-return. Lobby →
+   `broadcastLobby()`; **mid-match → the new name just rides the next snapshot** (`broadcastSnapshot`), whose
+   hunter variant (`hunterSafeSnapshot`) already BLANKS a disguised prop's name — so a mid-game rename can
+   never leak a hiding prop's identity to hunters. NO `broadcastLog` announcement (that would bypass the
+   blank). Guarded: `check-lobby-rename.mjs` section D (applied + rides snapshot + hunter-blanked + no LOBBY).
+3. **Click-outside closes.** `.pause-menu` IS the dim backdrop, `.pause-card` sits inside it. A click whose
+   `e.target === pauseMenu` (backdrop, never a card child) → `ui.onPauseOutsideClick` → `closePause(true)`,
+   the EXACT Resume path. Requests pointer lock synchronously inside that real click (the browser gesture).
+4. **Halved dim + blur.** `.pause-menu` background `#060010cc → #06001066` (opacity ~0.80→0.40) and
+   `backdrop-filter blur(3px) → blur(1.5px)`.
+5. **Pointer-lock nag de-scared.** Chrome refuses a pointer-lock re-request for ~1.25 s after an Esc-exit —
+   and the pause menu is opened by exactly that Esc-exit, so a quick Resume/click-outside close often lands in
+   the cooldown and the lock is (briefly) blocked. That's NOT a real failure. `input.js pointerlockerror` now
+   calls `onLockError()` with no message; `main.js` shows a small, **calm** hint ("Click to recapture the
+   mouse") via `setClickToPlay(true, msg, /*calm*/true)` → `.overlay.overlay-hint` (no dim, small type, still
+   click-anywhere-to-relock). The old scary red "Browser blocked mouse capture" nag is gone. Touch has no
+   pointer lock, so none of this fires there.
+
+**Vote-kick banner overlap (same pack, #5).** The banner used to sit at a fixed `top:62px` and overlap the
+props' taunt button (top 88px) + red stop button (top 140px) on PC. It now anchors BELOW the whole top strip:
+`.votekick { top: calc(196px + env(safe-area-inset-top,0)) }` clears the taunt-stop bottom (140+46=186) at any
+width; the old 108px narrow-screen override was removed. Guarded: `check-votekick.mjs` section M (numeric).
+See `notes/vote-kick.md`.
+
+
 ## Pause-menu additions (2026-07-17, VRmike — team switch / room copy / leak fix)
 Full detail: `notes/team-switch-flipped-rounds.md`. Three pause-menu-facing changes:
 - **Switch teams** (`#pauseSwitch`) → `main.js ui.onPauseSwitch` sends `C2S.SWITCH_TEAM` + `closePause(true)`.

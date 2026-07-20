@@ -151,7 +151,7 @@ export class Input {
 
     this.onAction = () => {}; // (name) => void  for 'disguise' | 'tag' | 'primary'
     this.onLockChange = () => {}; // (locked: boolean) => void  (desktop pointer lock)
-    this.onLockError = () => {}; // (reason: string) => void    (desktop pointer lock)
+    this.onLockError = () => {}; // () => void  desktop pointer-lock request refused (main.js shows a calm hint)
     // Backtick (`) toggles a DESKTOP "UI mode": release the mouse for the DEBUG menu / any UI
     // WITHOUT opening the pause menu (main.js owns the state). onRequestPause is Escape while the
     // pointer is already unlocked (e.g. in UI mode) — pause takes over. Both no-op while typing.
@@ -214,7 +214,9 @@ export class Input {
     });
     document.addEventListener('pointerlockerror', () => {
       this.locked = document.pointerLockElement === canvas;
-      if (!this.locked) this.onLockError('Browser blocked mouse capture — click again (and allow pointer lock if your browser asks).');
+      // Refused (almost always Chrome's ~1.25s post-Esc-exit cooldown, not a real failure). main.js
+      // decides the UI — a small, calm "click to recapture" hint, never the old scary nag.
+      if (!this.locked) this.onLockError();
     });
     document.addEventListener('mousemove', (e) => {
       if (!this.locked) return;

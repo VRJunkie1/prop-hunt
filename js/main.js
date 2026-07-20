@@ -343,10 +343,19 @@ input.onLockChange = (locked) => {
   if (state.hasLocked) openPause(); // explicit Escape after playing -> pause menu
   else ui.setClickToPlay(true); // haven't captured yet -> the entry prompt
 };
-input.onLockError = (reason) => {
+// POINTER-LOCK NAG FIX (QoL pack 2026-07-20, VRmike). A pointer-lock re-request can be REFUSED even from
+// a genuine click: Chrome enforces a ~1.25s cooldown after an Esc-exit, and the pause menu is opened by
+// exactly that Esc-exit. So a quick Resume/click-outside close often lands inside the cooldown and the
+// lock is (briefly) blocked — NOT a real failure. We no longer flash the old scary red "Browser blocked
+// mouse capture" nag; we show a small, calm "click to recapture" hint (no dim). The overlay stays a full
+// click target, so the player's next click re-locks fine once the cooldown passes. On touch there's no
+// pointer lock at all, so this never fires there.
+input.onLockError = () => {
   if (state.editing) return;
   const inGame = !ui.el.game.classList.contains('hidden');
-  if (inGame && !state.paused && !state.uiMode) ui.setClickToPlay(true, reason);
+  if (inGame && !state.paused && !state.uiMode) {
+    ui.setClickToPlay(true, 'Click to recapture the mouse', true); // calm = small, no-dim hint
+  }
 };
 // UI mode (backtick) + Esc-in-UI-mode routing. See enterUiMode()/exitUiMode() below.
 input.onToggleUiMode = () => {
@@ -2154,6 +2163,10 @@ function wireMenu() {
   // Pause menu wiring (Resume re-locks / Exit leaves the match). The ☰ button opens it on
   // touch (and works on desktop when unlocked); Escape opens it on desktop via onLockChange.
   ui.onPauseResume = () => closePause(true);
+  // CLICK-OUTSIDE TO CLOSE (QoL pack 2026-07-20, VRmike): clicking the dim area around the pause card
+  // resumes through the EXACT same path as Resume. closePause(true) requests pointer lock synchronously
+  // inside this real click event — the user gesture the browser needs to grant re-capture.
+  ui.onPauseOutsideClick = () => closePause(true);
   ui.onPauseExit = () => backToMenu('Left the match.');
   // PAUSE-MENU TEAM SWITCH: ask the host to respawn us on the opposite team (host-authoritative; it
   // broadcasts the public "X switched to …" log). Close the menu + re-lock so we drop back into play.

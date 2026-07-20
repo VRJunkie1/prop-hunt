@@ -423,5 +423,62 @@ console.log('\nL) client scoreboard reconciles rows in place (the vote-kick butt
   ok(wipes <= 1, `no per-refresh blanket list wipe (found ${wipes}; only the empty-roster path may keep one)`);
 }
 
+// ===========================================================================
+// M) VOTE-KICK BANNER PLACEMENT (static, QoL pack 2026-07-20, VRmike) — the banner used to sit at a fixed
+//    62px and OVERLAP the props' taunt button (top 88px) + its red stop button (top 140px) on PC, making
+//    it unreadable. It must now anchor BELOW the entire top-of-screen strip — never overlapping any top UI
+//    element at any width. We parse the shipped CSS and assert the banner's top clears the LOWEST fixed top
+//    element (the taunt-stop button: top + its min-height).
+// ===========================================================================
+console.log('\nM) vote-kick banner sits BELOW all top-of-screen UI (never overlaps the taunt button/HUD)');
+{
+  const css = readFileSync(join(root, 'css', 'style.css'), 'utf8');
+  const topPx = (sel) => {
+    // first `top: <n>px` or `top: calc(<n>px ...)` inside the given rule block
+    const re = new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{[^}]*?top:\\s*(?:calc\\(\\s*)?(\\d+)px');
+    const m = re.exec(css);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const minH = (() => { const m = /\.taunt-btn,\s*\.taunt-stop-btn\s*\{[^}]*?min-height:\s*(\d+)px/.exec(css); return m ? parseInt(m[1], 10) : 46; })();
+  const vk = topPx('.votekick');
+  const tauntBtn = topPx('.taunt-btn');
+  const tauntStop = topPx('.taunt-stop-btn');
+  ok(vk != null && tauntBtn != null && tauntStop != null, `parsed banner + taunt tops (banner=${vk}, taunt=${tauntBtn}, stop=${tauntStop})`);
+  ok(vk >= tauntBtn + minH, `banner (${vk}px) clears the taunt button bottom (${tauntBtn}+${minH}=${tauntBtn + minH}px)`);
+  ok(vk >= tauntStop + minH, `banner (${vk}px) clears the taunt STOP button bottom (${tauntStop}+${minH}=${tauntStop + minH}px)`);
+  // The old overlapping absolute positions must be gone (62px fixed, and the 108px narrow-screen override).
+  ok(!/\.votekick\s*\{[^}]*top:\s*62px/.test(css), 'the old fixed 62px banner top (which overlapped the taunt button) is gone');
+  ok(!/\.votekick\s*\{\s*top:\s*108px/.test(css), 'the old 108px narrow-screen override (still overlapping) is gone');
+}
+
+// ===========================================================================
+// N) MID-GAME NAME EDIT SURVIVES THE ~15 Hz SNAPSHOT REFRESH (static, QoL pack 2026-07-20, VRmike). Since
+//    build #213 the scoreboard reuses rows and redraws ~15×/s from snapshots. The inline rename box must
+//    survive that: while it's open the refresh must NOT overwrite the name cell (which holds the <input>).
+//    Guard the mechanism statically — the case VRmike explicitly warned about.
+// ===========================================================================
+console.log('\nN) pause-scoreboard rename box survives a snapshot refresh (edit state guards the name cell)');
+{
+  const src = readFileSync(join(root, 'js', 'ui.js'), 'utf8');
+  const s = src.indexOf('updatePauseScoreboard(');
+  const defAt = src.indexOf('_beginNameEdit(row, id)'); // the METHOD definition (not the call site)
+  const fn = src.slice(s, defAt); // just the refresh function (up to the editor method)
+  ok(s >= 0 && defAt > s && fn.length > 0, 'found updatePauseScoreboard for inspection');
+  // The refresh must SKIP writing the name cell while THIS row is being edited (guarded by _psEditId).
+  ok(/_psEditId/.test(fn), 'the refresh consults the edit-in-progress marker (_psEditId)');
+  ok(/if\s*\(!\(isSelf && this\._psEditId === p\.id\)\)/.test(fn), 'the name cell is only rewritten when NOT editing this row (survives the refresh)');
+  ok(/ps-self-row/.test(fn) && /ps-editable/.test(fn), 'your own row is highlighted + made click-to-edit');
+
+  // The editor itself: commits via onRename, cancels on Esc, and stops key propagation so Esc/typing
+  // never leaks to the game/pause handlers on window.
+  const edit = src.slice(defAt, src.indexOf('setVoteKick(', defAt));
+  ok(edit.length > 0, 'found _beginNameEdit for inspection');
+  ok(/this\.onRename\(/.test(edit), 'committing relays the rename via onRename (host validates + de-dupes)');
+  ok(/stopPropagation\(\)/.test(edit), 'the editor stops key propagation (Esc cancels the edit, not the pause menu)');
+  ok(/Escape/.test(edit) && /cancelled\s*=\s*true/.test(edit), 'Esc cancels the edit');
+  ok(/'Enter'|"Enter"/.test(edit), 'Enter commits (blur → commit)');
+  ok(/this\._psEditId = null/.test(edit), 'commit/cancel clears _psEditId so the refresh resumes rendering the name');
+}
+
 console.log(fails ? `\nFAILED (${fails})` : '\nAll vote-kick checks passed.');
 process.exitCode = fails ? 1 : 0;

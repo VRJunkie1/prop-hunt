@@ -13,7 +13,9 @@
 //   B) the host cleans it up: trims whitespace, caps length (~16), REJECTS empty names,
 //      and de-dupes so two players never share a name (auto-suffix);
 //   C) the host can rename ITSELF the same way (no special-casing);
-//   D) a rename mid-round is IGNORED (lobby-only) so scoreboards stay stable;
+//   D) a MID-GAME rename (pause-menu scoreboard, QoL pack 2026-07-20) is APPLIED host-validated, rides
+//      the snapshot (never S2C.LOBBY), and stays behind the anti-cheat blank (a hunter never gets a
+//      disguised prop's new name);
 //   E) a rename can only touch the SENDER (the referee resolves the player by connection id,
 //      never a name/id in the payload) — an unknown sender is a no-op.
 // The build FAILS if any assertion fails.
@@ -21,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { C2S, S2C, PHASE } from '../shared/protocol.js';
+import { C2S, S2C, PHASE, ROLE } from '../shared/protocol.js';
 import { Referee } from '../shared/referee.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -56,11 +58,17 @@ function makeTable() {
     for (let i = box.length - 1; i >= 0; i--) if (box[i].t === S2C.LOBBY) return box[i];
     return null;
   };
-  const nameFor = (lobby, id) => {
-    const e = lobby && lobby.players.find((p) => p.id === id);
+  const lastSnap = (id) => {
+    const box = inbox.get(id) || [];
+    for (let i = box.length - 1; i >= 0; i--) if (box[i].t === S2C.SNAPSHOT) return box[i];
+    return null;
+  };
+  const lobbyCount = (id) => (inbox.get(id) || []).filter((m) => m.t === S2C.LOBBY).length;
+  const nameFor = (msg, id) => { // works on a LOBBY or a SNAPSHOT (both carry .players[{id,name}])
+    const e = msg && msg.players.find((p) => p.id === id);
     return e ? e.name : undefined;
   };
-  return { ref, inbox, add, lastLobby, nameFor };
+  return { ref, inbox, add, lastLobby, lastSnap, lobbyCount, nameFor };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,23 +140,57 @@ console.log('\nC) host renames itself');
 }
 
 // ---------------------------------------------------------------------------
-// D) Lobby-only: a rename during a live round is ignored.
+// D) MID-GAME NAME CHANGE (QoL pack 2026-07-20, VRmike). A rename during a live round is NOW APPLIED
+//    (the pause-menu scoreboard edit, mainly for latecomers on a default name). It must:
+//      • apply host-validated (same trim/cap/de-dupe rules as the lobby);
+//      • NOT rebroadcast S2C.LOBBY (there's no lobby mid-match) — the new name rides the next snapshot;
+//      • stay behind the anti-cheat blank: a HUNTER never receives a DISGUISED prop's name, so a mid-game
+//        rename can't leak a hiding prop's identity (it flows through hunterSafeSnapshot like every field).
 // ---------------------------------------------------------------------------
-console.log('\nD) rename mid-round is ignored (lobby-only)');
+console.log('\nD) mid-game rename is applied, rides the snapshot, and never leaks a disguised prop to hunters');
 {
   const t = makeTable();
   t.add('HOST', 'Host');
   t.add('GUEST', 'Guest');
-  t.ref.phase = PHASE.HUNTING; // simulate a live round
-  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'MidMatch' });
-  ok(t.ref.players.get('GUEST').name === 'Guest', 'name unchanged while HUNTING');
-  t.ref.phase = PHASE.HIDING;
-  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'MidHide' });
-  ok(t.ref.players.get('GUEST').name === 'Guest', 'name unchanged while HIDING');
-  // Back in the lobby it works again.
+  // A live HUNTING round: HOST is a hunter, GUEST is a prop disguised as a burger.
+  t.ref.phase = PHASE.HUNTING;
+  t.ref.phaseEndsAt = Date.now() + 300000;
+  const guest = t.ref.players.get('GUEST');
+  const host = t.ref.players.get('HOST');
+  guest.role = ROLE.PROP; guest.disguise = 'burger'; guest.alive = true;
+  host.role = ROLE.HUNTER; host.alive = true;
+
+  const lobbyBefore = t.lobbyCount('HOST');
+  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: '  MidMatch  ' });
+  ok(guest.name === 'MidMatch', 'a mid-match rename is applied + trimmed (host-authoritative)');
+  ok(t.lobbyCount('HOST') === lobbyBefore, 'a mid-match rename does NOT rebroadcast S2C.LOBBY (it rides the snapshot)');
+
+  // Host cleanup rules still apply mid-match: over-long capped, empty rejected, duplicate de-duped.
+  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'y'.repeat(30) });
+  ok(guest.name.length === 16, 'mid-match rename still length-capped (~16)');
+  const keep = guest.name;
+  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: '   ' });
+  ok(guest.name === keep, 'mid-match empty/whitespace rename rejected (name kept)');
+  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'Host' });
+  ok(guest.name.toLowerCase() !== 'host' && guest.name.toLowerCase().startsWith('host'), 'mid-match duplicate de-duped');
+
+  // Now settle on a clean name and confirm the snapshot propagation + anti-cheat blank.
+  t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'Latecomer' });
+  t.ref.broadcastSnapshot();
+  const propSnap = t.lastSnap('GUEST');   // GUEST is a prop → full feed keeps names
+  const hunterSnap = t.lastSnap('HOST');  // HOST is a hunter → disguised-prop names are blanked
+  ok(t.nameFor(propSnap, 'GUEST') === 'Latecomer', 'the new name rides the snapshot to non-hunters');
+  ok(t.nameFor(hunterSnap, 'GUEST') === null, 'a HUNTER never receives the disguised prop\'s new name (no anti-cheat leak)');
+  // Sanity: the disguise SHAPE the hunter needs to render is still intact (only the name is blanked).
+  const he = hunterSnap.players.find((p) => p.id === 'GUEST');
+  ok(he && he.disguise === 'burger', 'the render shape (disguise) is preserved for the hunter — only the name is stripped');
+
+  // Back in the lobby a rename still pushes the roster (unchanged behaviour).
   t.ref.phase = PHASE.LOBBY;
+  const lobbyBeforeL = t.lobbyCount('HOST');
   t.ref.handleMessage('GUEST', { t: C2S.RENAME, name: 'BackInLobby' });
-  ok(t.ref.players.get('GUEST').name === 'BackInLobby', 'rename works again back in the lobby');
+  ok(t.ref.players.get('GUEST').name === 'BackInLobby', 'rename still works in the lobby');
+  ok(t.lobbyCount('HOST') > lobbyBeforeL, 'a lobby rename DOES rebroadcast S2C.LOBBY');
   t.ref.destroy();
 }
 

@@ -12,12 +12,13 @@
 // Client -> Referee message types (over the DataConnection to the host, or loopback).
 export const C2S = {
   READY: 'ready', // { ready }                     -> toggle ready in lobby
-  // Change your OWN lobby display name. { name }. Any player (host or an invite-link
-  // guest) may rename only themselves; the HOST is the authority — it trims/caps/rejects
-  // -empty/de-dupes the name (referee.applyRename), updates the shared roster, and
-  // rebroadcasts S2C.LOBBY so every peer's lobby list updates live. LOBBY-only: a rename
-  // during a live round is ignored (keeps scoreboards / "who tagged whom" stable).
-  RENAME: 'rename', // { name }                    -> rename yourself in the lobby
+  // Change your OWN display name. { name }. Any player (host or an invite-link guest) may
+  // rename only themselves; the HOST is the authority — it trims/caps/rejects-empty/de-dupes
+  // the name (referee.applyRename). In the LOBBY it rebroadcasts S2C.LOBBY; MID-MATCH (the
+  // pause-menu scoreboard, VRmike QoL 2026-07-20) the new name just rides the next snapshot,
+  // whose hunter variant blanks disguised-prop names — so a mid-game rename can't leak a
+  // hiding prop's identity to hunters (no separate announcement that would bypass the blank).
+  RENAME: 'rename', // { name }                    -> rename yourself (lobby or mid-match)
   START: 'start', // {}                            -> host starts the match
   PICK_MAP: 'pickMap', // { mapId }                     -> host chooses the lobby map (host-only; referee is the gate)
   INPUT: 'input', // { seq, mx, mz, yaw, pitch, jump, rotUnlock } -> movement + look intent

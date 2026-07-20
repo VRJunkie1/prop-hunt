@@ -97,6 +97,14 @@ export class UI {
     if (this.el.voteNo) this.el.voteNo.addEventListener('click', () => this.onVoteCast(false));
     if (this.el.pauseResume) this.el.pauseResume.addEventListener('click', () => this.onPauseResume());
     if (this.el.pauseExit) this.el.pauseExit.addEventListener('click', () => this.onPauseExit());
+    // CLICK-OUTSIDE TO CLOSE (QoL pack 2026-07-20, VRmike). The .pause-menu element IS the dim backdrop;
+    // the .pause-card sits inside it. A click whose target is the backdrop itself (never a card child)
+    // means the player clicked OUTSIDE the panel → resume, through the EXACT same path as the Resume
+    // button (onPauseOutsideClick → closePause(true) in main.js). Requesting pointer lock happens
+    // synchronously inside THIS real click event, which is what the browser needs to grant re-capture.
+    if (this.el.pauseMenu) this.el.pauseMenu.addEventListener('click', (e) => {
+      if (e.target === this.el.pauseMenu) this.onPauseOutsideClick();
+    });
     if (this.el.pauseHelp) this.el.pauseHelp.addEventListener('click', () => this._togglePauseHelp());
     if (this.el.pauseSwitch) this.el.pauseSwitch.addEventListener('click', () => this.onPauseSwitch());
     if (this.el.pauseCopyRoom) this.el.pauseCopyRoom.addEventListener('click', () => this.onPauseCopyRoom());
@@ -208,6 +216,16 @@ export class UI {
     this._nameDraft = '';
     this._nameInput = null;
     this._rerendering = false;
+
+    // MID-GAME NAME CHANGE (QoL pack 2026-07-20, VRmike). The pause scoreboard lets you edit YOUR OWN
+    // name mid-match. The board reconciles rows in place and refreshes ~15 Hz from snapshots (build #213),
+    // so while the inline editor is open we must NOT let a refresh stomp the box / typed text: _psEditId
+    // is the id of the row currently being edited (null = none). onPauseOutsideClick fires when the dim
+    // area around the pause card is clicked (click-outside-to-close). See _beginNameEdit / updatePauseScoreboard.
+    this._psEditId = null;
+    this._psNameInput = null;
+    this._psSelfName = '';
+    this.onPauseOutsideClick = () => {};
   }
 
   show(screen) {
@@ -562,9 +580,13 @@ export class UI {
 
   // Overlay visibility is driven by input.js pointer-lock events, not polling:
   // shown while the mouse is uncaptured, hidden once the browser confirms lock.
-  // An optional message replaces the default prompt to explain a refusal.
-  setClickToPlay(visible, message) {
+  // An optional message replaces the default prompt to explain a refusal. `calm`
+  // (QoL pack 2026-07-20) shrinks it to the small, non-alarming pointer-lock hint
+  // (no dim, small type) instead of the big prompt — used when a re-lock is merely
+  // on the browser's post-Esc cooldown, not genuinely broken.
+  setClickToPlay(visible, message, calm) {
     this.el.clickToPlay.textContent = message || 'Click to play';
+    this.el.clickToPlay.classList.toggle('overlay-hint', !!calm);
     this.el.clickToPlay.classList.toggle('hidden', !visible);
   }
 
@@ -598,6 +620,11 @@ export class UI {
   }
 
   hidePause() {
+    // If the mid-game rename box is open, blur it first so a typed name COMMITS (same as clicking away),
+    // then clear the edit marker belt-and-suspenders so a later reopen renders a fresh name cell.
+    if (this._psNameInput) this._psNameInput.blur();
+    this._psEditId = null;
+    this._psNameInput = null;
     if (this.el.pauseMenu) this.el.pauseMenu.classList.add('hidden');
     if (this.el.pauseHelpPanel) this.el.pauseHelpPanel.classList.add('hidden');
   }
@@ -656,14 +683,36 @@ export class UI {
         rows.set(p.id, row);
       }
       const { li, name, hp } = row;
+      const isSelf = p.id === selfId;
+
+      // MID-GAME NAME CHANGE (QoL pack 2026-07-20, VRmike). YOUR own row is highlighted and its name is
+      // click-to-edit. The click handler is wired ONCE (rows are keyed by id, so this row is always this
+      // same player). We remember our current official name so the editor can seed the box.
+      li.classList.toggle('ps-self-row', isSelf);
+      if (isSelf) {
+        this._psSelfName = p.name || '';
+        if (!row._nameEditBound) {
+          name.classList.add('ps-editable');
+          name.title = 'Click to change your name';
+          name.addEventListener('click', () => this._beginNameEdit(row, p.id));
+          row._nameEditBound = true;
+        }
+      }
 
       // Name + role. DISGUISE-INFO LEAK: only a PROP viewer sees a prop's disguise label; a hunter never
       // does (the host also strips disguised props' NAMES from hunters, so a name-less prop shows as "a prop").
       const showDisguise = p.disguise && !selfIsHunter;
       const roleTxt = showDisguise ? `prop · ${p.disguise}` : p.hunter ? 'hunter' : 'prop';
-      const nm = p.id === selfId ? (p.name || 'you') : (p.name || 'a prop');
-      name.textContent = `${nm}${p.id === selfId ? ' (you)' : ''} — ${roleTxt}`;
-      name.classList.toggle('ps-dead', !p.alive);
+      const nm = isSelf ? (p.name || 'you') : (p.name || 'a prop');
+      // SURVIVE THE REFRESH (build #213 reused rows + ~15 Hz snapshot redraws): while YOUR inline name
+      // editor is open, DON'T touch this row's name cell — a refresh must never stomp the text box or the
+      // text being typed. Role/health/kick-state below still update live; normal name rendering resumes
+      // the instant the edit commits/cancels. _label is kept so a commit/cancel restores with no empty flash.
+      if (!(isSelf && this._psEditId === p.id)) {
+        name.textContent = `${nm}${isSelf ? ' (you)' : ''} — ${roleTxt}`;
+        name.classList.toggle('ps-dead', !p.alive);
+        row._label = name.textContent;
+      }
 
       // Health.
       const v = Math.max(0, Math.round(p.health == null ? 100 : p.health));
@@ -717,8 +766,55 @@ export class UI {
 
     // Drop rows for players who have left.
     for (const [id, row] of rows) {
-      if (!seen.has(id)) { row.li.remove(); rows.delete(id); }
+      if (!seen.has(id)) {
+        if (this._psEditId === id) { this._psEditId = null; this._psNameInput = null; } // editor's player left
+        row.li.remove();
+        rows.delete(id);
+      }
     }
+  }
+
+  // MID-GAME NAME CHANGE (QoL pack 2026-07-20, VRmike). Swap YOUR scoreboard row's name text for an inline
+  // editor. Enter or blur COMMITS (relays C2S.RENAME via onRename — the host trims/caps/de-dupes and the
+  // new name rides the next snapshot, blanked from hunters for a disguised prop); Esc CANCELS. _psEditId
+  // guards updatePauseScoreboard so a ~15 Hz snapshot refresh can't stomp the box (the case VRmike warned
+  // about). Works on touch — focusing the input pops the on-screen keyboard.
+  _beginNameEdit(row, id) {
+    if (this._psEditId != null) return; // already editing (this row or another) — ignore re-entry
+    this._psEditId = id;
+    const name = row.name;
+    const prevLabel = row._label || name.textContent; // restored on commit/cancel (no empty flash)
+    name.textContent = '';
+    name.classList.remove('ps-editable'); // no ✎ / pointer cue while the box is open
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'ps-name-edit';
+    input.maxLength = 16;
+    input.value = this._psSelfName || '';
+    input.setAttribute('aria-label', 'Your display name');
+    name.appendChild(input);
+    this._psNameInput = input;
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* not all inputs */ }
+
+    let cancelled = false;
+    const finish = () => {
+      if (this._psEditId !== id) return; // already torn down (e.g. our player left) — nothing to do
+      const v = input.value;
+      this._psEditId = null;
+      this._psNameInput = null;
+      name.textContent = prevLabel;      // restore now; the official name re-renders on the next snapshot
+      name.classList.add('ps-editable');
+      if (!cancelled && v.trim() && v.trim() !== (this._psSelfName || '').trim()) this.onRename(v);
+    };
+    // stopPropagation so typing never reaches the game/pause key handlers on window — critically, so Esc
+    // CANCELS the edit rather than also closing the pause menu. Enter commits (blur); Esc cancels.
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelled = true; input.blur(); }
+    });
+    input.addEventListener('blur', finish);
   }
 
   // VOTE-KICK banner (2026-07-19, VRmike). Render the top-of-screen live bar from the host's tally.
