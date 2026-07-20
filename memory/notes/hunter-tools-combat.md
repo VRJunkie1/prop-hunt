@@ -1,5 +1,22 @@
 # Hunter Tools v1 + Health / Damage (2026-07-12, VRmike)
 
+## 2026-07-20 — SMALLEST-PROP FRAGILITY BOUNDARY (VRmike balance tweak, branch build/204-rifle-damage-multiplier-smallest)
+- **Problem:** the smallest disguises (mustard bottle, entrySize 0.584 m) only took ~1.85× ⇒ ~9%/hit ⇒
+  ~11 rifle hits to kill. The size-comparison hyperbola (`pivot/size`) is shallow near the pivot, so all
+  the 0.5–0.65 m props clustered around 1.5–2.3× — no clamp was even binding (the smallMult ceiling 10
+  never triggered; max real raw mult ~2.3). The task's "it's clamping" guess was WRONG.
+- **Fix (`shared/damage.js sizeMultiplier`):** added a boundary branch — `if (size <= smallPropSize)
+  return smallMult (clamped)`; else the existing hyperbola. `base 5 × smallMult 11 = 55%` health/hit ⇒
+  the smallest props die in 2 rifle hits. Curve stays monotonic (smallMult is the ceiling).
+- **Knobs (rules.json `damage`):** NEW `smallPropSize` 0.68 m (cutoff, in the size gap between the tiny
+  cluster ≤0.647 and the medium cluster ≥0.713) + `smallMult` 10→11 (ceiling AND flat smallest-prop mult;
+  the bump to 11 doesn't touch medium/large — the ceiling never binds for them).
+- **Scope:** the WHOLE tiny cluster (potato 0.477, tomato 0.487, stool 0.563, ketchup/mustard 0.584,
+  stew_bowl 0.589, lettuce 0.605, onion 0.647) now = 55%/hit. Medium/large (burger 0.713+ … table 2.25)
+  are byte-identical to before. Shared curve ⇒ grenades also hit tiny props harder now (flagged).
+- **Guard:** `tools/check-smallest-prop.mjs` (real referee path + medium/large reference lock). See
+  `notes/balance-tuning.md` (SMALLEST-PROP FRAGILITY section) for the full rationale + caveats.
+
 ## 2026-07-19 — PROP HEALTH SCALING: SIZE-COMPARISON FACTOR (VRmike balance tweak)
 - **The disguise damage curve is no longer a lerp between size anchors — it's a size RATIO to the
   player.** VRmike: bigger prop players were too easy to kill (the old lerp gave a fridge ~1.88 m a

@@ -4,6 +4,37 @@ Central record of deliberate PLAYTEST-TUNING values (not arbitrary defaults). A 
 session/planner should treat these as intentional balance decisions, freely re-tunable, and
 NOT "restore to some prettier round number." All are HOT-TUNABLE config/CSS — no rebuild.
 
+## SMALLEST-PROP FRAGILITY BOUNDARY — mustard bottle dies in 2 rifle hits (2026-07-20, VRmike, branch build/204-rifle-damage-multiplier-smallest)
+
+**One line:** the smallest disguises (mustard bottle & the tiny-food cluster) were ~9%/hit (~11 rifle hits
+to kill) — far too tanky. A new size BOUNDARY makes props ≤ `smallPropSize` take `smallMult` FLAT ⇒
+55%/hit ⇒ dead in 2 hits. Medium/large props are byte-for-byte UNCHANGED.
+
+- **The mechanism:** `shared/damage.js sizeMultiplier` now returns `smallMult` (clamped) for any prop whose
+  `entrySize <= damage.smallPropSize`; above the boundary it's the unchanged `pivot/size` hyperbola. So the
+  curve is: flat-high for the tiniest props, then the normal ratio falloff for everyone else. Still monotonic
+  (smallMult is the ceiling, so nothing above is more fragile).
+- **The knobs (rules.json `damage`):** NEW `smallPropSize` = **0.68 m** (the "smallest prop" cutoff) +
+  `smallMult` 10 → **11** (now BOTH the ceiling clamp AND the flat smallest-prop multiplier). `base 5 × 11 =
+  55%`. Raising `smallMult` 10→11 changed NOTHING for medium/large (the ceiling never bound — max real raw
+  mult is ~2.3). 0.68 sits in the genuine size GAP between the tiny cluster (potato 0.477 … onion 0.647) and
+  the medium cluster (burger/plate/bowl 0.713, cheese 0.732) — robust to a hull-rebake nudging a size by mm.
+- **Which props are "smallest" (the whole cluster, not just mustard):** potato 0.477, tomato 0.487,
+  kitchen_stool 0.563, ketchup 0.584, **mustard 0.584**, stew_bowl 0.589, lettuce 0.605, onion 0.647 — ALL
+  now 55%/hit / 2 hits. Note potato & tomato are actually SMALLER than the mustard VRmike named. To restrict
+  to ONLY the bottles, drop `smallPropSize` toward 0.6 — but that's fragile (mustard 0.584 vs lettuce 0.605
+  is a 0.02 m margin), so a wider, robust boundary was chosen over a razor-thin one.
+- **Premise correction (don't repeat the wrong mental model):** the task guessed the formula was
+  "clamping/compressing" tiny props. It was NOT — no clamp bound; the hyperbola is just shallow near the
+  pivot. This is a deliberate ~6× BUFF to the smallest props, not an un-clamp.
+- **Shared with the grenade (flagged, not scoped out):** `sizeMultiplier` is the ONE curve for rifle AND
+  grenade blast. Tiny props are now more fragile to grenades too (a mid-falloff blast that used to leave a
+  mustard alive now kills it). Consistent (“small = fragile everywhere”) but was not explicitly requested;
+  if VRmike wants rifle-only, that needs a curve split (a bigger change than this one-boundary tweak).
+- **Guard:** `tools/check-smallest-prop.mjs` (permanent) drives the real `referee._applyShotDamage`
+  (mustard 100→45→dead in 2) + locks the medium/large reference multipliers + boundary coherence + the
+  size-gap margin. `tools/check-combat.mjs` still green (smallMult now 11).
+
 ## GRENADE BLAST — NEAREST SURFACE DISTANCE ⇒ BIG PROPS TAKE MORE (2026-07-20, VRmike, branch build/202-grenade-blast-radius-use)
 
 **One line:** grenades now measure damage/fling from the nearest point on a target's SURFACE, not its

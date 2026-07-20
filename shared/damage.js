@@ -25,8 +25,15 @@ export function resolveDamageCfg(d) {
     // KEPT because the prop-"ouch" pitch curve (resolveOuchCfg / main.js) still anchors to them.
     smallSize: num(c.smallSize, 0.72),
     largeSize: num(c.largeSize, 2.2),
-    // smallMult/largeMult are now the multiplier CLAMPS (guardrails): smallMult = ceiling (a tiny
-    // prop can't be one-shot-vaporised), largeMult = floor (a huge prop can't become immortal).
+    // smallPropSize (2026-07-20, VRmike): the "smallest prop" size BOUNDARY (metres). A disguise whose
+    // footprint size is <= this takes the smallMult multiplier FLAT (see sizeMultiplier) so the tiniest
+    // props (mustard bottle, etc.) die in ~2 rifle hits instead of ~11. Sits in the size gap between the
+    // tiny-food cluster (<=0.65 m) and the medium burger/plate/cheese cluster (~0.71 m) so medium/large
+    // props are untouched. Default 0.68.
+    smallPropSize: num(c.smallPropSize, 0.68),
+    // smallMult/largeMult are now the multiplier CLAMPS (guardrails) AND smallMult is the smallest-prop
+    // multiplier: smallMult = ceiling / small-prop value (props <= smallPropSize take it flat; nothing
+    // can be tankier-than-floor), largeMult = floor (a huge prop can't become immortal).
     smallMult: num(c.smallMult, 5.0),
     largeMult: num(c.largeMult, 0.34),
     defaultMult: num(c.defaultMult, 1.0),
@@ -67,8 +74,17 @@ export function entrySize(c) {
 // same guardrails as before (tiny props stay fragile-not-vaporised, huge props never immortal).
 export function sizeMultiplier(size, cfg) {
   const c = resolveDamageCfg(cfg); // idempotent: accepts a resolved or a raw config
-  const { smallMult, largeMult, playerSize, sizeComparisonFactor } = c;
+  const { smallMult, largeMult, playerSize, sizeComparisonFactor, smallPropSize } = c;
   if (!(size > 0)) return c.defaultMult; // unknown size => treat as a default player
+  // SMALLEST-PROP FRAGILITY BOUNDARY (2026-07-20, VRmike). The hyperbola below compresses the tiniest
+  // disguises toward the pivot (a mustard bottle ~0.58 m only reached ~1.85×, ~9%/hit, ~11 rifle hits
+  // to kill — far too tanky for the smallest props). Props at or below smallPropSize are the "tiny"
+  // class and take the smallMult multiplier FLAT (base 5 × 11 = 55% health/hit => dead in ~2 hits).
+  // Monotonic still holds: smallMult is the CEILING, so this is the highest value on the curve and the
+  // formula below only ever yields less as size grows. This ONLY lifts props <= smallPropSize; every
+  // medium/large prop stays on the exact same curve. (Clamped for safety in case of a misconfigured
+  // smallMult < largeMult.)
+  if (size <= smallPropSize) return Math.min(smallMult, Math.max(largeMult, smallMult));
   const pivot = playerSize * sizeComparisonFactor; // prop size that yields the neutral multiplier 1.0
   const mult = pivot / size; // = 1 / (size / (playerSize * sizeComparisonFactor))
   return Math.min(smallMult, Math.max(largeMult, mult)); // clamp to the [largeMult, smallMult] guardrails
