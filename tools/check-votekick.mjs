@@ -319,6 +319,36 @@ console.log('\nH) snapshot — the live tally rides every snapshot (incl. the bl
 // ===========================================================================
 // I) HOTKEY — matchVoteKey matches the physical key IGNORING modifier state.
 // ===========================================================================
+// ===========================================================================
+// J) VOTE CHANGE — an elector may FLIP their pick before the vote resolves. The initiator starts on an
+//    automatic YES but can switch to NO and just watch (VRmike, 2026-07-20). A re-cast OVERWRITES the
+//    previous pick — it never adds a second vote, so early resolution (votes.size ≥ electorate) is intact.
+// ===========================================================================
+console.log('\nJ) vote change — an elector (incl. the initiator) can flip their pick before resolution');
+{
+  const t = makeRef();
+  t.add('HOST', ROLE.HUNTER);
+  t.add('P1', ROLE.PROP);
+  t.add('P2', ROLE.PROP); // target
+  t.add('P3', ROLE.PROP);
+  t.launchHunting();       // electorate = {HOST, P1, P2, P3}
+  t.start('P1', 'P2');     // P1 is the initiator = auto-YES
+  ok(t.ref.voteKick.votes.get('P1') === true, 'the initiator starts on an automatic YES');
+  const sizeBefore = t.ref.voteKick.votes.size;
+  t.cast('P1', false);     // the initiator flips to NO
+  ok(t.ref.voteKick && t.ref.voteKick.votes.get('P1') === false, 'the initiator can flip their pick to NO');
+  ok(t.ref.voteKick.votes.size === sizeBefore, 'flipping OVERWRITES the pick — it never adds a second vote');
+  ok(!!t.ref.voteKick, 'flipping does NOT trigger premature resolution (others still owe a vote)');
+  // A regular voter can flip too, and the live tally reflects it.
+  t.cast('P3', true);      // P3 → YES
+  t.cast('P3', false);     // P3 changes their mind → NO
+  ok(t.ref.voteKick.votes.get('P3') === false, 'a regular elector can also change their pick');
+  t.ref.broadcastSnapshot();
+  const snap = t.lastSnap('HOST');
+  ok(snap && snap.voteKick.yes === 0 && snap.voteKick.no === 2, 'the flipped picks ride the live snapshot tally (0 yes, 2 no)');
+  t.ref.destroy();
+}
+
 console.log('\nI) hotkey — Y/N matched by physical key, modifier-independent (Shift-held still votes)');
 ok(matchVoteKey({ code: 'KeyY' }) === true, 'Y (KeyY) → yes');
 ok(matchVoteKey({ code: 'KeyN' }) === false, 'N (KeyN) → no');

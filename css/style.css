@@ -228,6 +228,11 @@ button.ghost:hover { background: #3d2a66; }
 .votekick-btn.no { background: #b0392f; }
 .votekick-btn.no:active { background: #cf463b; transform: scale(.97); }
 .votekick-btn .vk-key { opacity: .8; font-weight: 400; font-size: 12px; }
+/* Our current pick, highlighted so we can see our choice and that it's still changeable (an elector,
+   incl. the initiator's default YES, can flip any time before the vote resolves). */
+.votekick-btn.chosen { box-shadow: 0 0 0 2px #fff, 0 0 8px #ffffffaa; }
+.votekick-btn.yes.chosen { background: #38a568; }
+.votekick-btn.no.chosen { background: #cf463b; }
 @media (max-width: 640px) {
   .votekick { top: 108px; } /* .hud-top's health bar wraps to its own row on narrow/portrait screens */
 }
@@ -790,6 +795,13 @@ button.ghost:hover { background: #3d2a66; }
 }
 .pause-scores .ps-kick:hover:not(:disabled) { background: #8a2b52; }
 .pause-scores .ps-kick:disabled { opacity: .4; cursor: default; }
+/* Non-interactive "host can't be kicked" note on the host's row — greyed + dashed so it clearly reads
+   as an intentional exclusion, not a broken/missing button. */
+.pause-scores .ps-kick-host {
+  background: transparent; color: #ffffff66;
+  border: 1px dashed #ffffff33; cursor: default; font-style: italic;
+}
+.pause-scores .ps-kick-host:hover { background: transparent; }
 .pause-help { text-align: left; }
 .pause-help.hidden { display: none; }
 .pause-help-body { display: flex; flex-direction: column; gap: 2px; }

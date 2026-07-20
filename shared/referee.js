@@ -585,14 +585,16 @@ export class Referee {
     this._maybeResolveVoteKick();
   }
 
-  // Record `voter`'s Yes/No in the running vote-kick. Ignored if there's no vote, the sender isn't
-  // eligible (joined mid-vote), or they've already voted (no double-voting, no changing a vote).
+  // Record `voter`'s Yes/No in the running vote-kick. Ignored if there's no vote or the sender isn't
+  // eligible (joined mid-vote). An elector MAY change their pick any time before the vote resolves — the
+  // initiator starts on an automatic YES but can flip to NO and just watch (VRmike, 2026-07-20). A re-cast
+  // overwrites the previous pick; it never adds a second vote, so `votes.size` (and thus early resolution,
+  // which fires once everyone eligible has cast) is unaffected.
   castVote(voter, vote) {
     const v = this.voteKick;
     if (!v || !voter) return;
     if (!v.electorate.has(voter.id)) return; // not eligible — a mid-vote joiner just watches
-    if (v.votes.has(voter.id)) return;       // already voted
-    v.votes.set(voter.id, !!vote);
+    v.votes.set(voter.id, !!vote);           // set OR change this elector's pick
     this._maybeResolveVoteKick();
   }
 

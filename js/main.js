@@ -235,9 +235,13 @@ const state = {
   // we've already cast in (so the banner hides our buttons; reset when the vote's target changes).
   // voteKickCooldowns = targetId → performance.now() ms until which we grey that player's kick button
   // (set locally on a failed-vote result; the host enforces the real cooldown). All host-authoritative.
+  // myVoteChoice = OUR current Yes/No pick in the running vote (true|false), or null if we haven't cast.
+  // The initiator starts on true (auto-YES) but can flip to false — the banner buttons stay live so an
+  // elector can change their mind any time before the vote resolves; votedTarget scopes it to a target.
   hostId: null,
   voteKick: null,
   votedTarget: null,
+  myVoteChoice: null,
   voteKickCooldowns: new Map(),
 
   // Desktop "UI mode" (backtick `). A deliberate THIRD state — not playing, not paused: the
@@ -388,17 +392,21 @@ function voteCtx() {
   return { hostId: state.hostId, voteActive: !!state.voteKick, cooldownUntil: state.voteKickCooldowns, now: nowMs() };
 }
 // VOTE-KICK: cast our Yes/No in the running vote — the ONE path both the banner buttons and the Y/N
-// hotkeys use. No-op unless there's an active vote WE'RE eligible for and haven't already voted in (the
-// host also enforces all of this — this is the client-side guard so a stray keypress doesn't spam it).
-// Latch votedTarget so the banner hides our buttons immediately (the host confirms via the next snapshot).
+// hotkeys use. No-op unless there's an active vote WE'RE eligible for (the host also enforces this — the
+// client guard just avoids spamming it). An elector may CHANGE their pick any time before the vote
+// resolves (the initiator starts on YES but can flip to NO and watch), so we do NOT lock after the first
+// cast — only skip a re-send of the identical pick. Reflect the pick on the banner immediately (the host
+// confirms via the next snapshot); the buttons stay live so it can be flipped again.
 function castVote(yes) {
   const vk = state.voteKick;
   if (!vk) return;
-  if (state.votedTarget === vk.target) return; // already voted in this vote
   if (!(Array.isArray(vk.voters) && vk.voters.includes(state.selfId))) return; // not eligible (mid-vote joiner)
-  session.send({ t: C2S.CAST_VOTE, vote: !!yes });
+  const val = !!yes;
+  if (state.votedTarget === vk.target && state.myVoteChoice === val) return; // no-op: identical pick already sent
+  session.send({ t: C2S.CAST_VOTE, vote: val });
   state.votedTarget = vk.target;
-  ui.setVoteKick(vk, state.selfId, true); // hide our buttons right away
+  state.myVoteChoice = val;
+  ui.setVoteKick(vk, state.selfId, val);
 }
 function closePause(relock) {
   if (!state.paused) return;
@@ -887,8 +895,9 @@ function handleGameMessage(msg) {
           // VOTE-KICK: no vote/banner survives the return to the lobby between rounds.
           state.voteKick = null;
           state.votedTarget = null;
+          state.myVoteChoice = null;
           state.voteKickCooldowns.clear();
-          ui.setVoteKick(null, state.selfId, false);
+          ui.setVoteKick(null, state.selfId, null);
           input.lookFrozen = false;
           state.aimPropId = null;
           // HUNTER-TOOLS v1: tidy the tool bar / spectator / tool state for the next round.
@@ -1053,8 +1062,9 @@ function backToMenu(msg) {
   // VOTE-KICK: no vote state survives leaving the match.
   state.voteKick = null;
   state.votedTarget = null;
+  state.myVoteChoice = null;
   state.voteKickCooldowns.clear();
-  ui.setVoteKick(null, state.selfId, false);
+  ui.setVoteKick(null, state.selfId, null);
   // AUDIO TAUNTS: tear the taunt UI + any playing clip down on the way out (a taunt is a Web Audio
   // node, not a scene child, so it must be explicitly stopped or it bleeds past the match).
   state.tauntMenuOpen = false;
@@ -1139,14 +1149,16 @@ function onSnapshot(msg) {
   // banner from it. A NEW vote (different target than the one we last cast in) clears our local "voted"
   // latch so the Yes/No buttons show again. The countdown + counts come straight from the host.
   const vk = msg.voteKick || null;
-  // A genuinely NEW vote (target changed from a KNOWN previous one) clears our local "voted" latch so
-  // the Yes/No buttons show again. We do NOT reset on the FIRST snapshot of a vote (state.voteKick still
-  // null) — that preserves the initiator's optimistic auto-YES latch set in ui.onVoteKick.
-  if (vk && state.voteKick && state.voteKick.target !== vk.target) state.votedTarget = null;
-  if (!vk) state.votedTarget = null;
+  // A genuinely NEW vote (target changed from a KNOWN previous one) clears our local pick so we start
+  // fresh. We do NOT reset on the FIRST snapshot of a vote (state.voteKick still null) — that preserves
+  // the initiator's optimistic auto-YES set in ui.onVoteKick.
+  if (vk && state.voteKick && state.voteKick.target !== vk.target) { state.votedTarget = null; state.myVoteChoice = null; }
+  if (!vk) { state.votedTarget = null; state.myVoteChoice = null; }
   state.voteKick = vk;
-  const myVote = vk && state.votedTarget === vk.target;
-  ui.setVoteKick(vk, state.selfId, myVote);
+  // Our current pick (true|false) for THIS vote, or null if we haven't cast — highlights the chosen
+  // button. Buttons stay live for every elector so a pick can be changed before the vote resolves.
+  const myChoice = vk && state.votedTarget === vk.target ? state.myVoteChoice : null;
+  ui.setVoteKick(vk, state.selfId, myChoice);
   // Newest roster for the pause scoreboard; refresh it live if the pause menu is open (the
   // world keeps running underneath, so health/roster keep updating behind the overlay).
   state.lastPlayers = msg.players;
@@ -1364,7 +1376,8 @@ function onEvent(msg) {
       // target's kick button locally for the configured cooldown (the host enforces the real rule).
       state.voteKick = null;
       state.votedTarget = null;
-      ui.setVoteKick(null, state.selfId, false);
+      state.myVoteChoice = null;
+      ui.setVoteKick(null, state.selfId, null);
       if (msg.cancelled) {
         ui.feed(`Vote to kick ${msg.name || 'player'} cancelled.`);
       } else if (msg.kicked) {
@@ -1381,8 +1394,9 @@ function onEvent(msg) {
     case 'voteKickDenied':
       // VOTE-KICK: the host refused OUR start request (a vote already running / target on cooldown /
       // the host can't be kicked). Private to us — explain in the feed and drop the optimistic auto-YES
-      // latch we set on the click, since no vote actually opened.
+      // pick we set on the click, since no vote actually opened.
       state.votedTarget = null;
+      state.myVoteChoice = null;
       if (msg.reason) ui.feed(msg.reason);
       break;
     case 'world':
@@ -2138,7 +2152,11 @@ function wireMenu() {
   ui.onVoteKick = (targetId) => {
     if (!targetId) return;
     session.send({ t: C2S.START_VOTEKICK, target: targetId });
-    state.votedTarget = targetId; // we're the initiator = an automatic YES → hide our own Yes/No buttons
+    // We're the initiator = an automatic YES, but the banner buttons stay LIVE so we can flip to NO and
+    // just watch (VRmike). Optimistically mark our pick so the banner + our YES highlight appear the
+    // instant the vote opens; the host confirms it via the next snapshot.
+    state.votedTarget = targetId;
+    state.myVoteChoice = true;
     closePause(true);
   };
   // VOTE-KICK: cast Yes/No from the banner buttons. Routes through the ONE castVote() helper the Y/N

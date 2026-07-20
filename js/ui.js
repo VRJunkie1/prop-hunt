@@ -632,7 +632,11 @@ export class UI {
       hp.textContent = p.alive ? `❤ ${v}%` : '☠ dead';
       if (p.alive && v <= 25) hp.classList.add('crit');
       li.append(who, hp);
-      // VOTE-KICK button — only on OTHER players' rows, never self, never the host.
+      // VOTE-KICK button — on every OTHER player's row (host AND guests see it, so anyone can start a
+      // vote), never on our own row. The HOST's row shows a greyed "can't kick" note instead of a button:
+      // the host IS the server, so kicking them would end the match for everyone (needs host migration, a
+      // separate feature). Showing the note — rather than a bare empty row — makes clear WHY there's no
+      // button there, so a guest in a 2-player room doesn't read it as broken.
       if (p.id !== selfId && p.id !== vc.hostId) {
         const kick = document.createElement('button');
         kick.type = 'button';
@@ -645,6 +649,12 @@ export class UI {
         else if (vc.voteActive) kick.title = 'A vote is already in progress.';
         kick.addEventListener('click', () => this.onVoteKick(p.id));
         li.append(kick);
+      } else if (p.id !== selfId && p.id === vc.hostId) {
+        const note = document.createElement('span');
+        note.className = 'ps-kick ps-kick-host';
+        note.textContent = 'host · can’t kick';
+        note.title = 'The host runs the match — kicking them would end it for everyone.';
+        li.append(note);
       }
       list.appendChild(li);
     }
@@ -652,11 +662,13 @@ export class UI {
   }
 
   // VOTE-KICK banner (2026-07-19, VRmike). Render the top-of-screen live bar from the host's tally.
-  // `vote` is the snapshot's voteKick object (or null to hide). `selfId` decides eligibility: the
-  // Yes/No buttons show only for an electorate member (present at vote start) who hasn't voted yet —
-  // `myVote` is true once WE'VE cast (so we swap the buttons for a "you voted" note). A mid-vote joiner
-  // (not in `voters`) sees the banner but no buttons — they just watch. Pure DOM; main.js drives it.
-  setVoteKick(vote, selfId, myVote) {
+  // `vote` is the snapshot's voteKick object (or null to hide). `selfId` decides eligibility: the Yes/No
+  // buttons show for any electorate member (present at vote start), incl. the target (they get a vote per
+  // spec) and the INITIATOR — and they stay LIVE after casting so a pick can be changed any time before
+  // the vote resolves (the initiator starts on YES but may flip to NO and watch — VRmike 2026-07-20).
+  // `myChoice` (true|false|null) highlights our current pick. A mid-vote joiner (not in `voters`) sees the
+  // banner but no buttons — they just watch. Pure DOM; main.js drives it.
+  setVoteKick(vote, selfId, myChoice) {
     const el = this.el.voteKick;
     if (!el) return;
     if (!vote) { el.classList.add('hidden'); el.setAttribute('aria-hidden', 'true'); return; }
@@ -665,12 +677,15 @@ export class UI {
       this.el.voteKickText.textContent =
         `Kick ${vote.name || 'player'}?  VOTES: ${vote.yes} Yes, ${vote.no} No, ${vote.waiting} Waiting · Timer: ${secs}s`;
     }
-    // Eligibility: a member of the electorate who hasn't voted yet gets the Yes/No buttons (the target
-    // IS allowed to vote per spec — they're in `voters`). Once WE'VE voted (myVote) OR we joined
-    // mid-vote (not in `voters`), the buttons are hidden — we just watch the tally tick.
+    // Eligibility: a member of the electorate gets the Yes/No buttons (the target IS allowed to vote per
+    // spec — they're in `voters`). We keep them shown even after casting so an elector can change their
+    // mind; only a mid-vote joiner (not in `voters`) gets no buttons — they just watch the tally tick.
     const eligible = Array.isArray(vote.voters) && selfId != null && vote.voters.includes(selfId);
     const btns = this.el.voteKickBtns;
-    if (btns) btns.classList.toggle('hidden', !(eligible && !myVote));
+    if (btns) btns.classList.toggle('hidden', !eligible);
+    // Highlight our current pick (null = not cast yet) so we can see our choice and that it's changeable.
+    if (this.el.voteYes) this.el.voteYes.classList.toggle('chosen', myChoice === true);
+    if (this.el.voteNo) this.el.voteNo.classList.toggle('chosen', myChoice === false);
     el.classList.remove('hidden');
     el.setAttribute('aria-hidden', 'false');
   }
