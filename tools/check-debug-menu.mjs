@@ -37,9 +37,9 @@ const ok = (cond, msg) => {
 console.log('debug-menu acceptance check');
 
 // ---------------------------------------------------------------------------
-// 1) debug.js PARSES + exports DebugMenu. It intentionally imports nothing and touches
-//    no browser globals at module top level, so importing it in node both proves it
-//    parses and confirms the export exists.
+// 1) debug.js PARSES + exports DebugMenu. Its only dependency is the PURE shared/item-tuner.js core
+//    (no browser globals / no CDN), so importing debug.js in node BOTH proves it parses AND proves
+//    it drags no browser-only dep into a headless import (that's the real guarantee this asserts).
 // ---------------------------------------------------------------------------
 const debugSrc = read('js', 'debug.js');
 let mod = null;
@@ -51,9 +51,12 @@ try {
 }
 ok(!!mod && typeof mod.DebugMenu === 'function', 'js/debug.js parses and exports class DebugMenu');
 
-// 2) Self-contained: no import statements (so it can never drag a browser-only dep into a
-//    headless import), and its DOM ids are all debug-prefixed.
-ok(!/^\s*import\s/m.test(debugSrc), 'js/debug.js has no import statements (pure DOM/logic module)');
+// 2) Self-contained: the ONLY import allowed is the pure shared item-tuner core (asserted via the
+//    node import above — a browser-only dep would have thrown). Any OTHER import is forbidden so
+//    debug.js can never drag a browser-only module into a headless import. DOM ids stay dbg-prefixed.
+const debugImports = debugSrc.match(/^\s*import\s.*$/gm) || [];
+ok(debugImports.length <= 1 && debugImports.every((l) => /item-tuner\.js/.test(l)),
+  'js/debug.js imports nothing but the pure shared item-tuner core (headless-safe)');
 ok(/#dbgToggle/.test(debugSrc) && /id = 'dbgPanel'/.test(debugSrc), 'debug DOM ids are dbg-prefixed');
 
 // ---------------------------------------------------------------------------

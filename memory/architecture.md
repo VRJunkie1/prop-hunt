@@ -187,7 +187,15 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   remote model's `Head` + `UpperArm.R` tilt to the networked look `pitch` (new snapshot field, hunters
   only), clamped, applied post-mixer in `updateAnimations` (bone-local so the item rides the pitched
   arm). Both cosmetic-only + hot-tunable (`hunter.pitch` block). Detail:
-  `memory/notes/hunter-character-model.md`. **Flicker/strobe fix (2026-07-13):** every
+  `memory/notes/hunter-character-model.md`. **Held-item alignment tuner (2026-07-20, `?debug=1`):**
+  the held item is placed by TWO independent paths — the first-person viewmodel (`_buildViewModel`,
+  hardcoded transforms) and this third-person model (`_buildHunterModel`, config offsets) — the
+  "right in my hand / wrong in others' view" split. `scene.setItemTuner(store)` layers a per-item
+  debug override (`_itemTuner`, null = shipped defaults) on BOTH: each held mesh records its
+  shipped-default transform + the build-time wrist frame, and `_applyItemTunerToCtl` /
+  `_applyItemTunerToViewModel` re-apply `base (+) override` live (and at every build, so respawns keep
+  it). Pure merge/export core `shared/item-tuner.js`; UI in `js/debug.js`. No default change.
+  Detail: `memory/notes/held-item-tuner.md`. **Flicker/strobe fix (2026-07-13):** every
   PLAYER-ATTACHED mesh (skinned hunter, disguise GLB/primitive, capsule) is built through
   the ONE choke point `meshForPlayer` → module-level `preparePlayerModel(root)`, which
   traverses and sets `frustumCulled=false` + recomputes geometry bounds. This stops
@@ -300,7 +308,11 @@ failed a headless page load — see netcode.md.) All internal refs are root-abso
   to `scene.colliders`. Free cam is rendering-only: `main.js` freezes the physics player
   (skips prediction, sends zeroed movement) while it's on. `tools/check-blindfold.mjs` was
   widened to scan debug.js's `scene.*()` calls too (the "missing scene method blanks the
-  render loop" guard now covers this module). Detail: `memory/notes/debug-menu.md`.
+  render loop" guard now covers this module). **Held-item alignment tuner (2026-07-20):** under
+  `?debug=1` only, a "Held-item alignment" panel gives per-item (rifle/finder/grenade) +/− steppers
+  (pos/rot/scale) + Export, driving `scene.setItemTuner` live and persisting in localStorage — the one
+  place debug.js imports a module (the pure `shared/item-tuner.js` core). Detail:
+  `memory/notes/held-item-tuner.md`. Detail: `memory/notes/debug-menu.md`.
 
 ## Hunter tools + health/damage (HUNTER-TOOLS v1, 2026-07-12)
 

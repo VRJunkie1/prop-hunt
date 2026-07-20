@@ -1,5 +1,16 @@
 # In-game debug menu (ON BY DEFAULT as of 2026-07-12)
 
+**2026-07-20 (VRmike) — NEW "Held-item alignment" panel (`?debug=1` only).** A human-in-the-loop tuner
+to align the rifle/grenade/finder in the hunter's hand + on the character model (attempt 4 — automated
+offset guessing kept missing). Per-item tabs (rifle/finder/grenade, `●` = equipped), seven +/− steppers
+with live values (pos X/Y/Z, rot pitch/yaw/roll, scale), per-item Reset, and Export (JSON block →
+clipboard + selectable box). Gated on `ctx.debugFlag` — a normal launch (menu is on by default) never
+builds it or reads its `localStorage` (`ph_debug_item_tuner`). Drives `scene.setItemTuner` live at BOTH
+held-item mount sites (first-person viewmodel + third-person model); ships NO default-offset change.
+debug.js gained its FIRST import — the pure `shared/item-tuner.js` core (`check-debug-menu.mjs`
+invariant relaxed to allow exactly that one). Guard: `tools/check-item-tuner.mjs`. Full detail:
+`memory/notes/held-item-tuner.md`.
+
 **2026-07-13 (VRmike) — NEW "True Colliders" toggle (diagnostic).** A SECOND collider toggle in
 the view-buttons row, separate from "Colliders" so both can be on at once. "Colliders" draws
 box/capsule approximations from `shared/bounds.js`; **"True Colliders"** draws the ACTUAL Rapier

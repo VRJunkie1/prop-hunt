@@ -16,6 +16,11 @@
 //
 // See memory/notes/debug-menu.md.
 
+// The ONLY import in this module — a PURE core (no browser globals, no CDN), so it's still safe to
+// import headless (the debug-menu check imports this whole module in Node to prove it parses). A
+// relative specifier resolves in both the browser and Node. See tools/check-item-tuner.mjs.
+import { TUNER_ITEMS, normalizeTuning, zeroTuning, exportTuning } from '../shared/item-tuner.js';
+
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -35,8 +40,123 @@ export class DebugMenu {
     this._prevSelf = null; // previous predicted position, for a velocity estimate
     this._vel = { x: 0, y: 0, z: 0 };
     this._lastSlow = 0; // throttle timer for the heavier list rebuilds
+    // HELD-ITEM ALIGNMENT TUNER (?debug=1 only). Live knobs to align the rifle/grenade/finder in the
+    // hunter's hand + on the character model, with export-to-chat + localStorage persistence. Gated on
+    // ctx.debugFlag so a normal launch (the menu is on by default) never builds it or reads its
+    // storage — the shipped held-item defaults stay byte-for-byte untouched without the flag.
+    this._tunerOn = !!(ctx && ctx.debugFlag);
+    this._tuner = this._tunerOn ? this._loadTuner() : null; // normalized { rifle, finder, grenade }
+    this._tunerItem = 'rifle'; // which item's values are being edited
+    this._tunerScene = null; // last scene we pushed the override to (re-push on scene identity change)
+    this._tunerValEls = {}; // control-key → value <span>
+    this._tunerTabEls = {}; // item id → tab <button>
     this._injectStyles();
     this._buildDom();
+  }
+
+  // ---- HELD-ITEM ALIGNMENT TUNER (?debug=1 only) ----------------------------
+  // localStorage key (debug-only): a tuning session survives respawn, round flips, and page reload.
+  static get TUNER_KEY() { return 'ph_debug_item_tuner'; }
+
+  _loadTuner() {
+    let raw = null;
+    try { raw = typeof localStorage !== 'undefined' ? localStorage.getItem(DebugMenu.TUNER_KEY) : null; } catch (e) { raw = null; }
+    let parsed = null;
+    if (raw) { try { parsed = JSON.parse(raw); } catch (e) { parsed = null; } }
+    return normalizeTuning(parsed); // every item present + normalized (defaults when absent/garbage)
+  }
+
+  _saveTuner() {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(DebugMenu.TUNER_KEY, JSON.stringify(this._tuner));
+    } catch (e) { /* private-mode / quota — the in-session override still applies */ }
+  }
+
+  // Push the current override into the live scene so both mount sites (first-person viewmodel +
+  // third-person character model) reflect it immediately. Safe to call whenever a scene exists.
+  _pushTuner() {
+    const scene = this.ctx.getScene && this.ctx.getScene();
+    if (scene && scene.setItemTuner) { scene.setItemTuner(this._tuner); this._tunerScene = scene; }
+  }
+
+  // Descriptor for the seven per-item controls: dotted path into an item's override + a stepper size.
+  _tunerControls() {
+    return [
+      { key: 'position.x', label: 'pos X (m)', step: 0.01, dp: 3 },
+      { key: 'position.y', label: 'pos Y (m)', step: 0.01, dp: 3 },
+      { key: 'position.z', label: 'pos Z (m)', step: 0.01, dp: 3 },
+      { key: 'rotationDeg.pitch', label: 'rot pitch°', step: 1, dp: 1 },
+      { key: 'rotationDeg.yaw', label: 'rot yaw°', step: 1, dp: 1 },
+      { key: 'rotationDeg.roll', label: 'rot roll°', step: 1, dp: 1 },
+      { key: 'scale', label: 'scale ×', step: 0.02, dp: 3, min: 0.05 },
+    ];
+  }
+
+  _tunerGet(item, path) {
+    const t = this._tuner[item] || (this._tuner[item] = zeroTuning());
+    const parts = path.split('.');
+    return parts.length === 1 ? t[parts[0]] : t[parts[0]][parts[1]];
+  }
+
+  _tunerSet(item, path, val) {
+    const t = this._tuner[item] || (this._tuner[item] = zeroTuning());
+    const parts = path.split('.');
+    if (parts.length === 1) t[parts[0]] = val; else t[parts[0]][parts[1]] = val;
+  }
+
+  // Nudge one control by ±step, clamp scale to a sane floor, persist, push to the scene, redraw.
+  _tunerStep(ctrl, dir) {
+    const cur = +this._tunerGet(this._tunerItem, ctrl.key) || 0;
+    let next = Math.round((cur + dir * ctrl.step) * 1e6) / 1e6; // kill FP dust
+    if (ctrl.min != null && next < ctrl.min) next = ctrl.min;
+    this._tunerSet(this._tunerItem, ctrl.key, next);
+    this._saveTuner();
+    this._pushTuner();
+    this._renderTuner();
+  }
+
+  _selectTunerItem(id) {
+    if (!TUNER_ITEMS.includes(id)) return;
+    this._tunerItem = id;
+    this._renderTuner();
+  }
+
+  _resetTunerItem() {
+    this._tuner[this._tunerItem] = zeroTuning();
+    this._saveTuner();
+    this._pushTuner();
+    this._renderTuner();
+  }
+
+  _exportTuner() {
+    const text = exportTuning(this._tuner);
+    if (this._tunerOut) {
+      this._tunerOut.value = text;
+      this._tunerOut.style.display = 'block';
+      try { this._tunerOut.focus(); this._tunerOut.select(); } catch (e) { /* ignore */ }
+    }
+    // Best-effort clipboard copy (phone clipboards are unreliable — the selectable box is the
+    // real fallback the player can long-press + copy). Never throws into the caller.
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {});
+    } catch (e) { /* ignore */ }
+    if (this.ctx.ui && this.ctx.ui.feed) this.ctx.ui.feed('Held-item tuning exported — paste it in chat.');
+  }
+
+  // Update the tab highlight (active = editing, ● = currently-equipped tool) and every value box.
+  _renderTuner() {
+    if (!this._tunerOn) return;
+    const equipped = this.ctx.state && this.ctx.state.tool;
+    for (const id of TUNER_ITEMS) {
+      const b = this._tunerTabEls[id];
+      if (!b) continue;
+      b.classList.toggle('on', id === this._tunerItem);
+      b.textContent = id + (id === equipped ? ' ●' : '');
+    }
+    for (const ctrl of this._tunerControls()) {
+      const span = this._tunerValEls[ctrl.key];
+      if (span) span.textContent = (+this._tunerGet(this._tunerItem, ctrl.key) || 0).toFixed(ctrl.dp);
+    }
   }
 
   // ---- styling (self-contained; nothing lands in css/style.css) -------------
@@ -86,6 +206,19 @@ export class DebugMenu {
         border-radius:6px;background:#1a1030;color:#d9c9ff;font:11px monospace;cursor:pointer;}
       #dbgInspect{white-space:pre-wrap;color:#d9f5d9;background:#0c0616;border-radius:8px;
         padding:6px;margin-top:4px;min-height:18px;font-size:11px;}
+      /* HELD-ITEM ALIGNMENT TUNER (?debug=1): per-item tabs, ± steppers with the live numeric value,
+         and a selectable export box (phone clipboards are unreliable, so the box is the real copy path). */
+      .dbg-tuner-tabs{display:flex;gap:4px;margin:4px 0;}
+      .dbg-tuner-tabs .dbg-btn{flex:1 1 0;text-transform:capitalize;min-height:30px;}
+      .dbg-tuner-row{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin:3px 0;}
+      .dbg-tuner-row .lbl{color:#8ad9ff;flex:1 1 auto;}
+      .dbg-tuner-row .val{color:#f0e6ff;min-width:58px;text-align:right;font-variant-numeric:tabular-nums;}
+      .dbg-step{width:32px;min-height:32px;padding:0;border:1px solid #ffffff33;border-radius:6px;
+        background:#2a1b4a;color:#f5eaff;font:bold 16px/1 monospace;cursor:pointer;}
+      .dbg-step:active{transform:scale(.94);}
+      #dbgTunerOut{display:none;width:100%;box-sizing:border-box;margin-top:6px;height:120px;resize:vertical;
+        background:#0c0616;color:#d9f5d9;border:1px solid #ff2fd066;border-radius:8px;padding:6px;
+        font:10px/1.35 monospace;white-space:pre;}
     `;
     document.head.appendChild(s);
   }
@@ -194,6 +327,9 @@ export class DebugMenu {
     this._inspectBody.textContent = 'Aim + tap Inspect (or enable Focus box).';
     panel.appendChild(this._inspectBody);
 
+    // --- held-item alignment tuner (?debug=1 only) ---
+    if (this._tunerOn) this._buildTunerSection(panel);
+
     document.body.append(toggle, panel);
     // Mark the body so the HUD reserves left-room for the DEBUG pill (see the injected
     // `body.dbg-present .hud-top` rule) — the button now flows WITH the top-row pills.
@@ -245,6 +381,62 @@ export class DebugMenu {
       this._morph.appendChild(b);
     }
     if (!types.length) this._morph.appendChild(el('div', 'dbg-note', 'no props catalog'));
+  }
+
+  // Build the held-item alignment tuner: item tabs, seven ± steppers with live values, per-item
+  // reset, and export. Only called under ?debug=1 (see _buildDom).
+  _buildTunerSection(panel) {
+    panel.appendChild(el('div', 'dbg-sec', 'Held-item alignment'));
+    panel.appendChild(el('div', 'dbg-note',
+      'Align the equipped item in your hand AND on the character model (other players\' view). ' +
+      'Tune, then Export to paste in chat. ● = currently equipped.'));
+
+    // Item tabs — pick which item's values you're editing (each tuned independently).
+    const tabs = el('div', 'dbg-tuner-tabs');
+    for (const id of TUNER_ITEMS) {
+      const b = el('button', 'dbg-btn', id);
+      b.type = 'button';
+      b.addEventListener('click', () => this._selectTunerItem(id));
+      this._tunerTabEls[id] = b;
+      tabs.appendChild(b);
+    }
+    panel.appendChild(tabs);
+
+    // Seven controls: pos X/Y/Z, rot pitch/yaw/roll, scale — as −/+ steppers with the live value.
+    for (const ctrl of this._tunerControls()) {
+      const row = el('div', 'dbg-tuner-row');
+      const minus = el('button', 'dbg-step', '−');
+      const plus = el('button', 'dbg-step', '+');
+      minus.type = 'button';
+      plus.type = 'button';
+      minus.addEventListener('click', () => this._tunerStep(ctrl, -1));
+      plus.addEventListener('click', () => this._tunerStep(ctrl, +1));
+      const val = el('span', 'val', '0');
+      this._tunerValEls[ctrl.key] = val;
+      row.append(el('span', 'lbl', ctrl.label), minus, val, plus);
+      panel.appendChild(row);
+    }
+
+    const btns = el('div', 'dbg-btns');
+    const bReset = el('button', 'dbg-btn warn', 'Reset item');
+    const bExport = el('button', 'dbg-btn', 'Export ⧉');
+    bReset.addEventListener('click', () => this._resetTunerItem());
+    bExport.addEventListener('click', () => this._exportTuner());
+    btns.append(bReset, bExport);
+    panel.appendChild(btns);
+
+    // Selectable export box (shown on Export) — the reliable copy path on phones.
+    const out = el('textarea');
+    out.id = 'dbgTunerOut';
+    out.readOnly = true;
+    out.spellcheck = false;
+    this._tunerOut = out;
+    panel.appendChild(out);
+
+    // Start on the currently-equipped item if we know it, then draw the values.
+    const equipped = this.ctx.state && this.ctx.state.tool;
+    if (TUNER_ITEMS.includes(equipped)) this._tunerItem = equipped;
+    this._renderTuner();
   }
 
   _toggleCollapse() {
@@ -365,6 +557,15 @@ export class DebugMenu {
     const { state, input } = this.ctx;
     const scene = this.ctx.getScene();
 
+    // HELD-ITEM ALIGNMENT TUNER: (re)push the stored override whenever a fresh scene appears (page
+    // reload / new match / first scene), so a tuning session persists across respawns, round flips,
+    // and reloads. Within one scene the override rides model rebuilds automatically (_buildHunterModel
+    // / setViewModel read scene._itemTuner), so this only fires on a scene identity change.
+    if (this._tunerOn && this._tuner && scene && scene !== this._tunerScene && scene.setItemTuner) {
+      scene.setItemTuner(this._tuner);
+      this._tunerScene = scene;
+    }
+
     // FPS (smoothed) + coords + a velocity estimate off the predicted position.
     if (dt > 0) this._fps += (1 / dt - this._fps) * 0.1;
     const self = state.self || { x: 0, y: 0, z: 0 };
@@ -419,6 +620,7 @@ export class DebugMenu {
       this._lastSlow = now;
       this._renderStates();
       this._renderRoster();
+      if (this._tunerOn) this._renderTuner(); // refresh the ● equipped-item marker
     }
   }
 

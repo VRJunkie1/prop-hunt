@@ -12,6 +12,7 @@ import { isFixedBodyEntry, halfExtentsFor } from '/shared/physics.js';
 // header + memory/notes/hunter-model.md for why measuring the skeleton (not the raw
 // 4 mm geometry) is the fix for the tiny/orbiting SWAT model.
 import { sizeHunterRig, measureRigBones, findBone, heldItemBoneOffset } from '/shared/hunter-sizing.js';
+import { normalizeTuning } from '/shared/item-tuner.js';
 // Collider bounds, the ONE shared source (see shared/bounds.js). Used ONLY by the ?debug=1
 // wireframe overlay below — the same function the headless misalignment guard reads, so
 // what you SEE in debug is exactly what the guard checks and the engine builds.
@@ -226,6 +227,13 @@ export class Scene3D {
     this._lastMap = null; // remembered so a runtime tier change can reattach lights to the live world
     this._viewModel = null; // local hunter's held-tool mesh (child of the camera), or null
     this._viewModelTool = null; // tool id the current viewmodel represents (rifle/finder/null)
+    // HELD-ITEM ALIGNMENT TUNER (debug-only, ?debug=1). A per-item override { rifle,finder,grenade }
+    // layered on top of the shipped held-item placement at BOTH mount sites — the first-person
+    // viewmodel (_buildViewModel) and the third-person character model (_buildHunterModel). null =
+    // no override = shipped behaviour byte-for-byte (defaults untouched). Set live by js/debug.js via
+    // setItemTuner(); read at every held-item build so it survives respawns/round flips. Each entry is
+    // { position:{x,y,z}, rotationDeg:{pitch,yaw,roll}, scale }. See memory/notes/held-item-tuner.md.
+    this._itemTuner = null;
     // PROP FINDER: the translucent AOE cylinder shown while the finder tool is selected. Built
     // lazily on first use, added straight to the scene (so buildWorld's scene.clear() drops it —
     // we null the handle there). Follows the hunter + recolours ready(green)/cooling(grey) via
@@ -1421,6 +1429,7 @@ export class Scene3D {
     // — _applyHeldTool toggles which of the three is visible per snapshot. Before B7 only the
     // rifle was ever attached, so props saw a gun no matter what the hunter actually held.
     let weaponRoot = null;
+    let gripFrame = null; // build-time wrist orientation/scale for the alignment tuner (below)
     const heldTools = { rifle: null, finder: null, grenade: null };
     const wcfg = cm.weapon;
     // Tolerant bone lookup — GLTFLoader sanitizes "Wrist.R" to "WristR", so a strict name match
@@ -1477,6 +1486,18 @@ export class Scene3D {
           if (m) m.position.add(off);
         }
       }
+      // HELD-ITEM ALIGNMENT TUNER: snapshot each held mesh's SHIPPED-DEFAULT local transform so the
+      // debug override (setItemTuner / _applyItemTunerToCtl) can layer on top without losing the
+      // default — and capture the wrist's BUILD-TIME orientation + inverse scale (group yaw is still
+      // 0 here, matching heldItemBoneOffset's frame) so a character-space nudge converts to bone-local.
+      for (const toolId of ['rifle', 'finder', 'grenade']) {
+        const m = heldTools[toolId];
+        if (m) m.userData.tunerBase = { pos: m.position.clone(), quat: m.quaternion.clone(), scale: m.scale.clone() };
+      }
+      const _bs = new THREE.Vector3();
+      bone.getWorldScale(_bs);
+      const _bscale = (Math.abs(_bs.x) + Math.abs(_bs.y) + Math.abs(_bs.z)) / 3 || 1;
+      gripFrame = { qiBuild: bone.getWorldQuaternion(new THREE.Quaternion()).invert(), invScale: 1 / _bscale };
     } else if (wcfg && wcfg.model && !bone) {
       console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
     }
@@ -1503,6 +1524,7 @@ export class Scene3D {
       pitch: pitchRig,
       targetPitch: 0, // last networked pitch (rad); set per snapshot in syncPlayers
       curPitch: 0,    // smoothed toward targetPitch in _applyLookPitch
+      grip: gripFrame, // build-time wrist frame for the debug alignment tuner (may be null)
     };
     group.userData.hunterCtl = ctl;
     // Start on idle so a fresh hunter isn't frozen in bind pose for a beat.
@@ -1510,6 +1532,9 @@ export class Scene3D {
     // B7: show the rifle by default (host `tool` starts on rifle); syncPlayers re-applies each
     // snapshot, so a hunter who joined already holding the finder/grenade updates immediately.
     this._applyHeldTool(ctl, 'rifle');
+    // HELD-ITEM ALIGNMENT TUNER: fold in any active debug override so a respawn / round flip /
+    // mid-tune model rebuild keeps the tuned placement (no-op when no tuner is installed).
+    this._applyItemTunerToCtl(ctl);
     return group;
   }
 
@@ -1713,6 +1738,91 @@ export class Scene3D {
     }
   }
 
+  // ---- HELD-ITEM ALIGNMENT TUNER (debug-only override at BOTH mount sites) -----------------
+  // The rifle/grenade/finder are placed by TWO independent code paths reading DIFFERENT numbers:
+  // the first-person viewmodel (_buildViewModel, hardcoded transforms) and the third-person
+  // character model (_buildHunterModel, character-models.json weapon offsets). That split is the
+  // classic "looks right in my hand, floats wrong in everyone else's view" signature. This tuner
+  // layers ONE per-item override on BOTH so a ?debug=1 player can nudge alignment live and see it in
+  // first-person AND on the model (the reported bug lives in other players' third-person views).
+
+  // Install/replace the whole override store (already NORMALIZED by shared/item-tuner.js — every
+  // item present with finite numbers) and re-apply it LIVE to the current viewmodel and every
+  // hunter model on screen. Passing null clears it back to the shipped defaults. Cheap: it only
+  // rewrites transforms on already-built meshes (no rebuild). Called only from js/debug.js under
+  // ?debug=1; a normal launch never calls it, so this._itemTuner stays null and nothing changes.
+  setItemTuner(overrides) {
+    // Normalize through the shared core so every item is present with finite numbers (scale > 0),
+    // whatever the caller passes — the same code the export/round-trip is verified against.
+    this._itemTuner = overrides ? normalizeTuning(overrides) : null;
+    this._applyItemTunerToViewModel();
+    for (const entry of this.players.values()) {
+      if (entry && entry.hunterCtl) this._applyItemTunerToCtl(entry.hunterCtl);
+    }
+  }
+
+  // The normalized override for one item, or a zeroed default (no offset, scale 1) when there's no
+  // tuner installed / no entry for that item. Never returns null so callers stay branch-free.
+  _tunerFor(toolId) {
+    const t = this._itemTuner && toolId ? this._itemTuner[toolId] : null;
+    if (t && t.position && t.rotationDeg) return t;
+    return { position: { x: 0, y: 0, z: 0 }, rotationDeg: { pitch: 0, yaw: 0, roll: 0 }, scale: 1 };
+  }
+
+  // Re-apply the override to a third-person hunter's three held meshes. Each mesh stored its
+  // shipped-default local transform (tunerBase) at build; here we set final = base (+) override.
+  // The position offset is authored in CHARACTER space (x=right, y=up, z=forward) and converted to
+  // the wrist-bone LOCAL frame via the BUILD-TIME wrist orientation (ctl.grip, captured while the
+  // group yaw was 0 — the same frame heldItemBoneOffset baked the shipped forward/down offset into),
+  // so a "+Y" nudge is world-up on the model and the offset rides the arm as the hunter turns/tilts.
+  _applyItemTunerToCtl(ctl) {
+    if (!ctl || !ctl.heldTools) return;
+    const D = Math.PI / 180;
+    for (const toolId in ctl.heldTools) {
+      const m = ctl.heldTools[toolId];
+      if (!m || !m.userData || !m.userData.tunerBase) continue;
+      const base = m.userData.tunerBase;
+      const ov = this._tunerFor(toolId);
+      // position: base + character-space offset converted to bone-local.
+      m.position.copy(base.pos);
+      const grip = ctl.grip;
+      if (grip && grip.qiBuild) {
+        const inv = grip.invScale || 1;
+        const p = ov.position;
+        if (p.x) m.position.add(new THREE.Vector3(1, 0, 0).applyQuaternion(grip.qiBuild).multiplyScalar(p.x * inv));
+        if (p.y) m.position.add(new THREE.Vector3(0, 1, 0).applyQuaternion(grip.qiBuild).multiplyScalar(p.y * inv));
+        if (p.z) m.position.add(new THREE.Vector3(0, 0, -1).applyQuaternion(grip.qiBuild).multiplyScalar(p.z * inv));
+      }
+      // rotation: base orientation, then layer pitch/yaw/roll in the mesh's local frame.
+      m.quaternion.copy(base.quat);
+      const r = ov.rotationDeg;
+      if (r.pitch || r.yaw || r.roll) {
+        m.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(r.pitch * D, r.yaw * D, r.roll * D, 'XYZ')));
+      }
+      // scale: shipped base × the override multiplier.
+      m.scale.copy(base.scale).multiplyScalar(ov.scale > 0 ? ov.scale : 1);
+    }
+  }
+
+  // Re-apply the override to the first-person viewmodel group. The viewmodel sits in CAMERA space
+  // (x=right, y=up, −Z=forward), so the character-space offset maps to (dx, dy, −dz). Same rotation
+  // + scale layering as the third-person path, on the group's stored shipped-default transform.
+  _applyItemTunerToViewModel() {
+    const g = this._viewModel;
+    if (!g || !g.userData || !g.userData.tunerBase) return;
+    const D = Math.PI / 180;
+    const base = g.userData.tunerBase;
+    const ov = this._tunerFor(this._viewModelTool);
+    const p = ov.position;
+    g.position.copy(base.pos).add(new THREE.Vector3(p.x, p.y, -p.z));
+    g.quaternion.copy(base.quat);
+    const r = ov.rotationDeg;
+    if (r.pitch || r.yaw || r.roll) {
+      g.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(r.pitch * D, r.yaw * D, r.roll * D, 'XYZ')));
+    }
+    g.scale.copy(base.scale).multiplyScalar(ov.scale > 0 ? ov.scale : 1);
+  }
+
   // ---- HUNTER-TOOLS v1: aim, first-person viewmodel, tracers -----------------
 
   // The camera-forward aim direction through the fixed screen-centre reticle — the SAME
@@ -1743,7 +1853,15 @@ export class Scene3D {
     }
     if (!id) return;
     const g = this._buildViewModel(id);
-    if (g) { this.camera.add(g); this._viewModel = g; }
+    if (g) {
+      this.camera.add(g);
+      this._viewModel = g;
+      // HELD-ITEM ALIGNMENT TUNER: record the group's shipped-default transform, then fold in any
+      // active debug override so a tool switch keeps the tuned first-person placement (no-op when
+      // no tuner is installed → the viewmodel keeps its hardcoded default position/scale exactly).
+      g.userData.tunerBase = { pos: g.position.clone(), quat: g.quaternion.clone(), scale: g.scale.clone() };
+      this._applyItemTunerToViewModel();
+    }
   }
 
   _buildViewModel(toolId) {
