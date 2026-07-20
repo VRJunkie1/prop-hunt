@@ -1,5 +1,38 @@
 # netcode
 
+## 2026-07-20 LATE-JOINER SEES PROPS AS RED CUBES — disguise placeholder never swapped in (VRmike, #221)
+A mid-game joiner saw disguised props as reddish primitive boxes (e.g. `diner_chair` = `#c0392b` box)
+instead of the furniture GLB, forever. **The bug was NOT a missing-data / wire gap — it was a client
+render-swap bug.** Filed here because the report named the netcode as the suspect; the real fix is in
+`js/scene.js`, but the diagnosis is a netcode fact worth keeping.
+
+**WHAT ACTUALLY CROSSES THE WIRE (verified, unchanged).** The per-tick `broadcastSnapshot` player entry
+already carries `disguise` (the render shape id), plus `tool`/`alive`/`health`. A late joiner gets it
+within one tick of joining, through the SAME anti-cheat gate everyone else uses:
+- `blindHunterSnapshot` — a HUNTER (or dead spectator) during HIDING gets ZERO prop entries (no disguise
+  or position leak); full stream resumes at HUNTING.
+- `hunterSafeSnapshot` — a HUNTING hunter keeps every disguised prop's SHAPE (`disguise`) but the roster
+  NAME is blanked (no name↔disguise identity leak).
+So the disguise identity was ALWAYS reaching a late joiner correctly. `protocol.js` + `referee.js` were
+left untouched (the report's "only broadcast at transform time" hypothesis was wrong — the `kind:'disguised'`
+EVENT is only a private "you disguised" feed line to the disguising player; everyone else, veteran or late
+joiner, learns disguises from the snapshot).
+
+**THE REAL ROOT CAUSE (client, `js/scene.js`).** A player avatar rebuilds only when its appearance `kind`
+string changes (`syncPlayers`/`_syncSelf` compare kind vs the cached entry). A disguise kind was the FIXED
+`d:<type>` — it did NOT encode whether the disguise GLB had loaded. A late joiner whose `_loadModels()`
+was still downloading when the first snapshot arrived built the primitive placeholder; the kind never
+changed, so the entry NEVER rebuilt when the GLB finished → stuck red box. Veterans escaped it only by
+timing (their GLBs loaded long before anyone disguised).
+
+**THE FIX.** `_playerKind(p, animated)` now folds GLB readiness into the disguise kind: `d:<type>:glb`
+once loaded, else `d:<type>:prim` (the same pattern hunters already had: `hunter:cap`→`hunter:swat`). One
+helper, used by both `syncPlayers(p,true)` and `_syncSelf(p,false)`, so they can't drift. `_disguiseModelReady`
+mirrors the exact readiness check `_buildPlayerMesh` uses. `_ensureDisguiseModel(path)` (deduped via
+`_disguiseLoading`, token-guarded, cleared in `buildWorld`) pulls a disguise GLB on demand if it was never
+queued via `_modelSlots`, so the placeholder is only ever temporary. **Siblings** (`tool`, `alive`) were
+swept and are fine — re-applied every snapshot, so they never stick. Guard: `tools/check-late-join-disguise.mjs`.
+
 ## 2026-07-19 CONNECTION LIVENESS VIA DEDICATED PINGS — input-based liveness is GONE (VRmike, #192)
 Implements the fix direction from `notes/disconnect-diagnosis.md`. **Pings are now the SINGLE source of
 truth for "connected."** An AFK-but-connected player (idle in the bathroom, no inputs) must NEVER be
