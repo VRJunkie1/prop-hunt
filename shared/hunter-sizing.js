@@ -67,6 +67,42 @@ export function findBone(root, name) {
   return found;
 }
 
+// Bone-LOCAL held-item offset (2026-07-20 redo). Given the wrist BONE and its wrapper GROUP,
+// returns the bone-local vector that displaces a CHILD mesh by `forwardOffset` metres along the
+// character's facing (group -Z) and `downOffset` metres down the model's vertical (group -Y),
+// expressed in WORLD terms and converted through the bone's CURRENT world orientation + scale.
+//
+// CRITICAL — pose first. The returned vector is baked into the item's fixed bone-local position so
+// it rides the arm as the wrist tilts. But the item RENDERS while the mixer poses the rig in the
+// aim clips (arm raised, wrist rotated ~90° from the bind/A-pose the GLB loads in). So this MUST be
+// called with the rig already POSED into its rendered aim frame — otherwise a down+forward vector
+// computed in the bind pose lands as up/sideways once the arm raises (the reason builds #188/#190
+// never showed in-game; proven headless in tools/_probe_posed_offset.mjs). The offset is UNIT-
+// direction × metres ÷ bone world scale (the bone carries the group scale × the armature's baked
+// 100×), so the world displacement equals the requested metres regardless of rig scale. Pure given
+// an injected THREE, so js/scene.js and tools/check-held-item-offset.mjs run the SAME code.
+export function heldItemBoneOffset(THREE, bone, group, cfg) {
+  group.updateMatrixWorld(true);
+  const qi = bone.getWorldQuaternion(new THREE.Quaternion()).invert();
+  const bs = new THREE.Vector3();
+  bone.getWorldScale(bs);
+  const boneScale = (Math.abs(bs.x) + Math.abs(bs.y) + Math.abs(bs.z)) / 3 || 1;
+  const inv = 1 / boneScale;
+  const off = new THREE.Vector3();
+  const fwd = cfg && cfg.forwardOffset;
+  const down = cfg && cfg.downOffset;
+  // group -Z = the character's forward (yawOffsetDeg is baked into `inner`, so the wrapper group's
+  // -Z is the visual facing); group -Y = model-vertical down. Convert each into the bone's local
+  // frame via the bone's inverse world rotation, then reapply-on-render cancels back to world.
+  if (Number.isFinite(fwd) && fwd !== 0) {
+    off.add(new THREE.Vector3(0, 0, -1).applyQuaternion(qi).normalize().multiplyScalar(fwd * inv));
+  }
+  if (Number.isFinite(down) && down !== 0) {
+    off.add(new THREE.Vector3(0, -1, 0).applyQuaternion(qi).normalize().multiplyScalar(down * inv));
+  }
+  return off;
+}
+
 // Size + centre a cloned hunter rig from its BONES and return the placed wrapper
 // Group (feet centroid at the group origin, x/z centred on the vertical axis, facing
 // corrected by cfg.yawOffsetDeg). `inner` MUST be a SkeletonUtils.clone of the GLB

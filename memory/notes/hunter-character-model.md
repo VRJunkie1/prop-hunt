@@ -1,6 +1,45 @@
 # Hunter character model (v1) — animated SWAT soldier
 
-## 2026-07-19 — HELD-ITEM DOWN NUDGE (#190, VRmike; follows #188 below)
+## 2026-07-20 — HELD-ITEM OFFSET REDO — the real root cause (#188/#190 never landed)
+
+VRmike: the rifle/grenade/finder STILL float off the hunter's hand on remote models after #188
+(forward) and #190 (down). This build root-caused WHY the two prior offsets never showed in-game,
+and it's a textbook "the check asserted the code exists, not that its OUTPUT is right" repeat of the
+sizing saga.
+
+**Root cause — the offset was computed in the BIND pose, but rendered in the AIM pose.** The offset
+is baked as a FIXED bone-local vector on the held item (so it rides the arm). #188/#190 computed that
+vector in `_buildHunterModel` ABOVE where the AnimationMixer is created — i.e. from the wrist bone's
+BIND (A-)pose orientation. But the item RENDERS while the mixer poses the rig in the aim clips
+(`Idle_Gun_Pointing`/`Run_Shoot`), where the wrist is rotated ~90° from bind. A "down+forward" vector
+in the bind frame maps to up/sideways once the arm raises. Proven headless in
+`tools/_probe_posed_offset.mjs`: with the SHIPPED config (fwd 0.22, down 0.17), the bind-baked offset
+rendered in `Idle_Gun_Pointing` as forward **+0.24 m** but down **−0.14 m (i.e. UP)** — so the down
+nudge #190 added was actively lifting the item, matching #188's "floats above the hand" report. The
+down correction literally never worked.
+
+**Fix — pose first, then anchor.** `_buildHunterModel` now builds the mixer + movement actions
+up-front, plays the idle aim clip + `mixer.update(0.2)` to pose the rig into its rendered frame, and
+ONLY THEN computes the held-item offset. The offset math moved to a shared pure helper
+`shared/hunter-sizing.js::heldItemBoneOffset(THREE, bone, group, {forwardOffset, downOffset})` so the
+browser and the check run the SAME code (the anti-copy-paste rule this subsystem lives by). Config is
+UNCHANGED (forwardOffset 0.22, downOffset 0.17 — already in the requested 0.15–0.20 m band); the
+numbers were fine, the frame they were applied in was wrong. `scene._boneWorldScale` was folded into
+the helper and removed; `_boneLocalDir` stays (the look-pitch rig still uses it).
+
+**Verification that BITES — `tools/check-held-item-offset.mjs` (NEW, gating).** Loads the real GLB,
+runs the shipped `sizeHunterRig` + `heldItemBoneOffset`, POSES the rig into `Idle_Gun_Pointing`, and
+asserts on the OUTPUT: forward component >0 and ≈ forwardOffset (item in FRONT of the wrist, not
+behind), DOWN component in the requested 0.15–0.20 m band, grip on the hand side of the wrist
+(dot with the forearm→hand direction >0), total displacement hand-scale — AND that all of it still
+holds with the model YAWED (115°, −80°), the exact case a bind-pose/world-space bug fails. With the
+fix: forward 0.220 m, down 0.170 m, hand-dot 0.77, stable across all facings. The bind-pose version
+fails the down-band + hand-dot assertions, so a future refactor can't silently un-fix it a fourth
+time. `check-hunter-model.mjs` §5 updated: asserts the shared helper exists + scene POSES before
+offsetting (source-order check). STILL OWED: a live 2-client screenshot — headless can't render a
+remote hunter, and #190 claimed victory without one.
+
+## 2026-07-19 — HELD-ITEM DOWN NUDGE (#190, VRmike; follows #188 below) — SEE ABOVE: never landed (bind-pose bug)
 
 Follow-up to the forward offset. #188's forward-only push (`forwardOffset` 0.2) pulled the item out
 from BEHIND the hand but then read as floating ~0.15-0.2 m ABOVE the outstretched hand (grip hovering

@@ -11,7 +11,7 @@ import { isFixedBodyEntry, halfExtentsFor } from '/shared/physics.js';
 // (shared/hunter-sizing.js), so what ships is exactly what's verified. See the module
 // header + memory/notes/hunter-model.md for why measuring the skeleton (not the raw
 // 4 mm geometry) is the fix for the tiny/orbiting SWAT model.
-import { sizeHunterRig, measureRigBones, findBone } from '/shared/hunter-sizing.js';
+import { sizeHunterRig, measureRigBones, findBone, heldItemBoneOffset } from '/shared/hunter-sizing.js';
 // Collider bounds, the ONE shared source (see shared/bounds.js). Used ONLY by the ?debug=1
 // wireframe overlay below — the same function the headless misalignment guard reads, so
 // what you SEE in debug is exactly what the guard checks and the engine builds.
@@ -1390,6 +1390,32 @@ export class Scene3D {
     group.userData.baseY = 0; // feet on the ground; the caller adds jump-y
     group.userData.sizeChecked = false; // ?debug=1 tripwire fires once after the first frame
 
+    // ANIMATION MIXER + POSE-FIRST (2026-07-20 held-item offset redo). Build the mixer and the
+    // movement actions up-front and pose the rig into the shipped idle-AIM clip BEFORE anchoring
+    // the held item below. WHY THIS ORDER: the held-item offset is baked as a FIXED bone-local
+    // vector (so it rides the arm), but that vector must be derived from the wrist's orientation in
+    // the pose the model actually RENDERS — arm raised, aiming forward — NOT the bind (A-)pose the
+    // GLB loads in. The wrist rotates ~90° between the two, so a down+forward vector computed in the
+    // bind pose lands as up/sideways once the arm raises: the exact reason builds #188/#190 never
+    // showed in-game (proven headless in tools/_probe_posed_offset.mjs + tools/check-held-item-
+    // offset.mjs). Posing first makes forward+down land as forward+down in the live view.
+    const mixer = new THREE.AnimationMixer(inner);
+    const clips = body.animations || [];
+    const map = cm.clips || {};
+    const actions = {};
+    for (const stateName of ['idle', 'forward', 'backward', 'left', 'right']) {
+      const clip = this._resolveClip(clips, map[stateName]);
+      if (clip) actions[stateName] = mixer.clipAction(clip);
+    }
+    // Build the look-pitch rig HERE, while the rig is still in the BIND pose — its nod axes are
+    // derived exactly as before this change (unchanged behaviour). Only the held-item offset below
+    // needs the aim pose, so pose the rig AFTER this.
+    const pitchRig = this._buildPitchRig(cm.pitch, inner, group);
+    // Pose into the idle aim clip. All shipped gun/aim clips share one wrist orientation family
+    // (see character-models.json _clipsComment), so the idle-derived offset is correct across them.
+    if (actions.idle) { actions.idle.play(); mixer.update(0.2); }
+    group.updateMatrixWorld(true);
+
     // HELD TOOLS (B7): the rifle + the grenade + the prop-finder, all parented to the named
     // wrist bone. A remote hunter's model shows WHICH tool they've selected (host-synced `tool`)
     // — _applyHeldTool toggles which of the three is visible per snapshot. Before B7 only the
@@ -1434,27 +1460,17 @@ export class Scene3D {
         bone.add(root);
         heldTools[toolId] = root;
       }
-      // HELD-ITEM DOWN + FORWARD OFFSET (2026-07-19, VRmike; #190 follows #188). #188 pushed the
-      // held item FORWARD (weapon.forwardOffset) to pull it out from behind the hand, but it then
-      // read as floating ~0.15-0.2 m ABOVE the outstretched hand (grip hovering over the fingers).
-      // #190 adds a DOWN component (weapon.downOffset) so the grip drops INTO the hand, keeping the
-      // forward nudge (a touch more). Both are expressed in the GROUP frame (character-local: -Z =
-      // facing/forward, -Y = model-vertical down) and converted to the wrist bone's LOCAL frame, so
-      // they ride the arm as it tilts with look pitch (see _applyLookPitch) and stay yaw-correct as
-      // the hunter turns. Metres in world space; scene.js divides by the bone world scale. Applies
-      // equally to rifle/grenade/finder (shared wrist grip anchor). Hot-tunable via config; 0 each
-      // disables that axis. Anchored to the rig: rest-pose wrist ~1.03 m up, forearm ~0.23 m, so a
-      // ~0.17 m drop is a real hand-scale correction (tools/_probe_hand_offset.mjs).
-      const fwdMeters = wcfg.forwardOffset;
-      const downMeters = wcfg.downOffset;
-      const invBoneScale = 1 / this._boneWorldScale(bone, group);
-      const off = new THREE.Vector3();
-      if (Number.isFinite(fwdMeters) && fwdMeters !== 0) {
-        off.add(this._boneLocalDir(bone, group, 0, 0, -1).multiplyScalar(fwdMeters * invBoneScale));
-      }
-      if (Number.isFinite(downMeters) && downMeters !== 0) {
-        off.add(this._boneLocalDir(bone, group, 0, -1, 0).multiplyScalar(downMeters * invBoneScale));
-      }
+      // HELD-ITEM DOWN + FORWARD OFFSET (2026-07-19 #188/#190; REDONE 2026-07-20). #188 pushed the
+      // held item FORWARD (weapon.forwardOffset) and #190 added a DOWN component (weapon.downOffset)
+      // so the grip drops INTO the hand — but both were computed above the mixer, i.e. in the bind
+      // (A-)pose, so once the arm raised into the aim pose the "down" tipped to UP and the correction
+      // never landed live. FIX: the rig is now POSED into the aim clip just above, so heldItemBone
+      // Offset reads the wrist's RENDERED orientation. The offset is forward (group -Z) + down (group
+      // -Y) in world metres, converted to the wrist's LOCAL frame so it rides the arm as it tilts with
+      // look pitch and stays yaw-correct as the hunter turns. Shared with tools/check-held-item-
+      // offset.mjs (same code — no copy-paste drift). Applies equally to rifle/grenade/finder (shared
+      // wrist anchor). Hot-tunable via config; 0 on an axis disables it. See memory notes.
+      const off = heldItemBoneOffset(THREE, bone, group, wcfg);
       if (off.lengthSq() > 0) {
         for (const toolId of ['rifle', 'finder', 'grenade']) {
           const m = heldTools[toolId];
@@ -1465,16 +1481,9 @@ export class Scene3D {
       console.warn('[scene] hunter weapon bone not found:', wcfg.attachBone);
     }
 
-    // AnimationMixer + the movement actions, clips matched by SUFFIX so the file's
-    // 'CharacterArmature|' prefix is handled (see _resolveClip).
-    const mixer = new THREE.AnimationMixer(inner);
-    const clips = body.animations || [];
-    const map = cm.clips || {};
-    const actions = {};
-    for (const stateName of ['idle', 'forward', 'backward', 'left', 'right']) {
-      const clip = this._resolveClip(clips, map[stateName]);
-      if (clip) actions[stateName] = mixer.clipAction(clip);
-    }
+    // Mixer + movement actions were built up-front and the rig posed above (pose-first, so the
+    // held-item offset was derived in the rendered aim frame — see that block). Clips are matched
+    // by SUFFIX so the file's 'CharacterArmature|' prefix is handled (see _resolveClip).
     const a = cm.anim || {};
     const ctl = {
       mixer,
@@ -1490,7 +1499,8 @@ export class Scene3D {
       fade: a.crossfadeSeconds >= 0 ? a.crossfadeSeconds : 0.15,
       // LOOK PITCH (2026-07-19): tilt the head + right upper-arm to the networked look pitch each
       // frame (after the mixer poses the rig), so a remote hunter aims up/down instead of dead-level.
-      pitch: this._buildPitchRig(cm.pitch, inner, group),
+      // Built above from the BIND pose (unchanged from before the 2026-07-20 pose-first reorder).
+      pitch: pitchRig,
       targetPitch: 0, // last networked pitch (rad); set per snapshot in syncPlayers
       curPitch: 0,    // smoothed toward targetPitch in _applyLookPitch
     };
@@ -1634,16 +1644,6 @@ export class Scene3D {
     const nativeLen = Math.max(size.x, size.y, size.z) || 1;
     root.scale.setScalar(worldLen / (boneScale * nativeLen));
     root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-  }
-
-  // Mean world scale of a bone under the sized group (group scale × armature baked 100× × parent
-  // bones). Used to convert a WORLD-space length into the bone's LOCAL units. Same read as
-  // _scaleHeldToBone. Requires the group's matrices to be current (caller updates once).
-  _boneWorldScale(bone, group) {
-    group.updateMatrixWorld(true);
-    const bs = new THREE.Vector3();
-    bone.getWorldScale(bs);
-    return (Math.abs(bs.x) + Math.abs(bs.y) + Math.abs(bs.z)) / 3 || 1;
   }
 
   // Convert a direction given in the GROUP's frame (gx,gy,gz) into the bone's LOCAL frame, as a

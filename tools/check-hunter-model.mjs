@@ -170,11 +170,21 @@ if (hunter.pitch) {
 const refSrc2 = read('shared', 'referee.js');
 ok(/pitch:\s*p\.role\s*===\s*ROLE\.HUNTER/.test(refSrc2), 'referee broadcasts a hunter look `pitch` in each snapshot player entry');
 // Scene: the helpers exist, the forward offset is applied bone-local, and pitch is applied per frame.
-for (const m of ['_buildPitchRig', '_applyLookPitch', '_boneLocalDir', '_boneWorldScale']) {
+for (const m of ['_buildPitchRig', '_applyLookPitch', '_boneLocalDir']) {
   ok(defines(m), `js/scene.js defines ${m}()`);
 }
-ok(/forwardOffset/.test(sceneSrc), 'js/scene.js reads weapon.forwardOffset (held-item forward nudge)');
-ok(/_boneLocalDir\([^)]*0,\s*0,\s*-1\)/.test(sceneSrc), 'the held-item offset is expressed along the bone-LOCAL forward (rides the pitched arm), not a world/yaw offset');
+// Held-item offset (2026-07-20 redo): shared bone-local helper + POSE-FIRST. The offset math lives in
+// shared/hunter-sizing.js::heldItemBoneOffset (browser + check run the SAME code) and scene.js must
+// pose the rig into the aim clip (mixer.update) BEFORE computing it, else the bind-pose bug returns.
+// The OUTPUT (down 0.15-0.2 m, forward > 0, grip near hand, holds under yaw) is asserted headless in
+// tools/check-held-item-offset.mjs. See memory/notes/hunter-character-model.md.
+ok(/heldItemBoneOffset/.test(read('shared', 'hunter-sizing.js')), 'shared/hunter-sizing.js defines heldItemBoneOffset (shared held-item offset math)');
+ok(/heldItemBoneOffset\s*\(/.test(sceneSrc), 'js/scene.js applies the held item via the shared heldItemBoneOffset helper');
+// POSE-FIRST ordering: the rig must be posed (mixer.update) BEFORE the held-item offset is computed,
+// so the offset is derived in the rendered aim pose. Assert by SOURCE ORDER, not a brittle distance.
+const poseIdx = sceneSrc.search(/actions\.idle\.play\(\)\s*;\s*mixer\.update\(/);
+const offsetIdx = sceneSrc.indexOf('heldItemBoneOffset(');
+ok(poseIdx >= 0 && offsetIdx >= 0 && poseIdx < offsetIdx, 'scene.js POSES the rig (plays idle + mixer.update) BEFORE computing the held-item offset (derived in the rendered aim pose, not the bind pose)');
 ok(/mixer\.update\([^)]*\)\s*;?[\s\S]{0,400}_applyLookPitch/.test(sceneSrc), 'updateAnimations applies look pitch AFTER mixer.update (adds on top of the pose, no accumulation)');
 ok(/targetPitch\s*=\s*Number\.isFinite\(p\.pitch\)/.test(sceneSrc), 'syncPlayers stashes the networked pitch onto the hunter controller (targetPitch)');
 
