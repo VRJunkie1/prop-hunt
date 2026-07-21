@@ -43,6 +43,21 @@
           <button id="joinBtn">Join</button>
         </div>
         <p id="menuError" class="error"></p>
+        <!-- Hotspot help tip: shown ONLY when a join/connect actually fails (the
+             "failed to find lobby" screen). ui.menuError(msg, true) unhides it; every
+             other path (Connecting…, cleared errors, "enter a code") keeps it hidden. -->
+        <div id="hotspotTip" class="hotspot-tip hidden" role="note">
+          <p class="hotspot-tip-main">
+            <strong>On mobile data?</strong> Peer connections usually can&rsquo;t get through
+            carrier networks. Fix: have <strong>one</strong> player turn on their phone&rsquo;s
+            hotspot, everyone else joins that wifi, and the hotspot player hosts &mdash;
+            you&rsquo;ll all connect directly over the local network.
+          </p>
+          <p class="hotspot-tip-note">
+            Still not connecting? Some carriers block hotspot devices from talking to each
+            other (client isolation) &mdash; try a different phone&rsquo;s hotspot.
+          </p>
+        </div>
         <p class="hint">Players connect peer-to-peer &mdash; the room creator hosts the match.</p>
       </div>
     </div>

@@ -1038,8 +1038,11 @@ function handleStatus(kind, detail) {
   if (kind === 'connecting') {
     ui.menuError('Connecting…');
   } else if (kind === 'error') {
+    // A join/connect failure while on the menu = the "failed to find lobby" screen. Show the
+    // hotspot tip (carrier-NAT is the #1 cause on mobile data). If we're already in-game the
+    // error is a passing blip → route it to the feed, no menu tip.
     if (ui.el.menu.classList.contains('hidden')) ui.feed(detail || 'Connection error.');
-    else ui.menuError(detail || 'Connection error.');
+    else ui.menuError(detail || 'Connection error.', true);
   } else if (kind === 'link') {
     // Diagnostic label: how a peer connected (direct vs relayed through TURN).
     ui.setLink(detail.id, detail.relayed);

@@ -82,6 +82,37 @@ button.ghost { background: transparent; border: 1px solid #4d357f; }
 button.ghost:hover { background: #3d2a66; }
 .hint { font-size: 12px; opacity: 0.6; margin: 8px 0 0; }
 .error { color: #ff8a8a; font-size: 13px; min-height: 16px; margin: 6px 0 0; }
+
+/* ---- hotspot help tip (connection-failure screen) ----
+   Compact, phone-first help box under the failure message. It sits at the bottom of
+   the menu card (below the Create/Join controls), so it never crowds them. Toggled
+   from .hidden by ui.menuError(msg, true) only on a real join/connect failure. */
+.hotspot-tip {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #170e2c;
+  border: 1px solid #4d357f;
+  text-align: left;
+}
+.hotspot-tip-main {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hotspot-tip-main strong { color: var(--accent2); }
+.hotspot-tip-note {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  opacity: 0.7;
+}
+/* Let the menu scroll if a small phone runs short of height once the tip is shown, so
+   the Create/Join controls up top always stay reachable. margin:auto keeps the card
+   vertically centred when it fits, then collapses to 0 (top-aligned) when it overflows —
+   the flex-centring-clips-the-top fix. Scoped to #menu: never touches the game canvas. */
+#menu { overflow-y: auto; padding: 16px 0; }
+#menu > .menu-card { margin-block: auto; }
 .roomcode { font-size: 15px; }
 .roomcode span { color: var(--accent2); font-weight: bold; letter-spacing: 4px; }
 

@@ -12,6 +12,7 @@ export class UI {
       lobby: $('lobby'),
       game: $('game'),
       menuError: $('menuError'),
+      hotspotTip: $('hotspotTip'),
       name: $('name'),
       roomCode: $('roomCode'),
       lobbyCode: $('lobbyCode'),
@@ -237,8 +238,13 @@ export class UI {
     if (screen === 'menu') this.links.clear();
   }
 
-  menuError(msg) {
+  menuError(msg, showTip = false) {
     this.el.menuError.textContent = msg || '';
+    // The hotspot help tip rides ONLY on a genuine join/connect FAILURE (main.js passes
+    // showTip=true from the connection-error path). "Connecting…", a cleared error, and
+    // lobby validation ("enter a code") all leave showTip false → the tip stays hidden,
+    // so nobody sees troubleshooting advice before anything has actually failed.
+    if (this.el.hotspotTip) this.el.hotspotTip.classList.toggle('hidden', !showTip);
   }
 
   lobbyHint(msg) {
